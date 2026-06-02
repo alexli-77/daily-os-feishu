@@ -2,6 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import yaml from 'js-yaml';
 import { AppConfigSchema, type AppConfig, type WorkflowName } from '../config/schema.js';
 import { loadConfig } from '../config/load-config.js';
@@ -57,6 +58,7 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
     if (request.method === 'GET' && url.pathname === '/assets/app.css') return send(response, 200, CSS, 'text/css; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/assets/app.js') return send(response, 200, JS, 'application/javascript; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/api/state') return sendJson(response, await buildState(options));
+    if (request.method === 'GET' && url.pathname === '/api/env-secret') return sendJson(response, readSecret(options, url.searchParams.get('key') || ''));
     if (request.method === 'POST' && url.pathname === '/api/config') return sendJson(response, await saveConfig(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/env') return sendJson(response, await saveEnv(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/action') return sendJson(response, await runAction(options, await readJson(request)));
@@ -64,6 +66,12 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
   } catch (error) {
     sendJson(response, { ok: false, error: error instanceof Error ? error.message : String(error) }, 500);
   }
+}
+
+function readSecret(options: UiServerOptions, key: string): Record<string, unknown> {
+  if (!SECRET_ENV_KEYS.has(key)) return { ok: false, error: 'Secret key is not allowed' };
+  const env = readEnvFile(options.envPath);
+  return { ok: true, key, value: env[key] || process.env[key] || '' };
 }
 
 async function buildState(options: UiServerOptions): Promise<Record<string, unknown>> {
@@ -184,7 +192,7 @@ function discoverLinearTokenForUi(options: UiServerOptions, env: Record<string, 
     applyEnv(next);
     return `Linear API key found from ${linear.source} and saved locally.`;
   }
-  return 'Linear API key not found. Create one in Linear settings and paste LINEAR_API_KEY manually.';
+  return 'Linear API key not found. No usable local Linear CLI auth token was found. Create one in Linear settings and paste LINEAR_API_KEY manually.';
 }
 
 async function discoverGitHubToken(env: Record<string, string>): Promise<{ value?: string; source: string }> {
@@ -203,7 +211,57 @@ async function discoverGitHubToken(env: Record<string, string>): Promise<{ value
 function discoverEnvToken(key: string, env: Record<string, string>): { value?: string; source: string } {
   if (env[key]) return { value: env[key], source: 'configured .env' };
   if (process.env[key]) return { value: process.env[key], source: `process.env.${key}` };
+  if (key === 'LINEAR_API_KEY') return discoverLinearCliToken();
   return { source: `process.env.${key}` };
+}
+
+function discoverLinearCliToken(): { value?: string; source: string } {
+  const commands: Array<[string, string[]]> = [
+    ['linear', ['auth', 'token']],
+    ['linear', ['auth', 'status', '--json']],
+    ['linear', ['whoami', '--json']],
+    ['linear-cli', ['auth', 'token']],
+  ];
+
+  for (const [command, args] of commands) {
+    const result = runCommandSync(command, args);
+    if (!result) continue;
+    const token = extractToken(result);
+    if (token) return { value: token, source: `${command} ${args.join(' ')}` };
+  }
+
+  return { source: 'local env or Linear CLI auth' };
+}
+
+function runCommandSync(command: string, args: string[]): string | null {
+  const child = spawnSync(command, args, { encoding: 'utf8', timeout: 5000 });
+  if (child.error || child.status !== 0) return null;
+  return `${child.stdout || ''}\n${child.stderr || ''}`.trim();
+}
+
+function extractToken(text: string): string {
+  if (!text) return '';
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    const token = findTokenInObject(parsed);
+    if (token) return token;
+  } catch {
+    // Continue with text patterns.
+  }
+  const match = text.match(/lin_api_[A-Za-z0-9_-]+|[A-Za-z0-9_-]{40,}/);
+  return match?.[0] || '';
+}
+
+function findTokenInObject(value: unknown): string {
+  if (!value || typeof value !== 'object') return '';
+  if (Array.isArray(value)) return value.map(findTokenInObject).find(Boolean) || '';
+  const record = value as Record<string, unknown>;
+  for (const [key, raw] of Object.entries(record)) {
+    if (/token|apiKey|api_key|key/i.test(key) && typeof raw === 'string' && raw.length >= 20) return raw;
+    const nested = findTokenInObject(raw);
+    if (nested) return nested;
+  }
+  return '';
 }
 
 function ensureLocalFiles(configPath: string, envPath: string): void {
@@ -363,7 +421,10 @@ const HTML = String.raw`<!doctype html>
               <label>LLM provider<select id="llm-provider"><option>codex</option><option>openai</option></select></label>
               <label>Model<input id="llm-model" /></label>
               <label>Codex binary<input id="env-CODEX_BIN" /></label>
-              <label>OpenAI API key<input id="secret-OPENAI_API_KEY" type="password" autocomplete="new-password" /></label>
+              <div class="form-field">
+                <label for="secret-OPENAI_API_KEY">OpenAI API key</label>
+                <div class="secret-control"><input id="secret-OPENAI_API_KEY" type="password" autocomplete="new-password" /><button type="button" class="icon-button" data-toggle-secret="OPENAI_API_KEY" aria-label="Show OpenAI API key">&#128065;</button></div>
+              </div>
               <label>Feishu chat ID<input id="env-FEISHU_CHAT_ID" /></label>
               <label>Feishu send mode<select id="output-send-mode"><option>markdown</option><option>text</option></select></label>
               <label>Feedback prefix<input id="feedback-prefix" /></label>
@@ -387,7 +448,10 @@ const HTML = String.raw`<!doctype html>
                 <label>Provider<select id="vault-provider"><option>local</option><option>remote</option></select></label>
                 <label>Local path<input id="vault-local-path" /></label>
                 <label>Vault gate URL<input id="env-VAULT_GATE_URL" /></label>
-                <label>Vault gate token<input id="secret-VAULT_GATE_TOKEN" type="password" autocomplete="new-password" /></label>
+                <div class="form-field">
+                  <label for="secret-VAULT_GATE_TOKEN">Vault gate token</label>
+                  <div class="secret-control"><input id="secret-VAULT_GATE_TOKEN" type="password" autocomplete="new-password" /><button type="button" class="icon-button" data-toggle-secret="VAULT_GATE_TOKEN" aria-label="Show Vault gate token">&#128065;</button></div>
+                </div>
               </fieldset>
 
               <fieldset>
@@ -404,7 +468,10 @@ const HTML = String.raw`<!doctype html>
                     <label class="check-row"><input id="source-github" type="checkbox" /> GitHub</label>
                     <button type="button" class="secondary compact" data-action="discover_github_token">Find GitHub token</button>
                   </div>
-                  <label>GitHub token<input id="secret-GITHUB_TOKEN" type="password" autocomplete="new-password" /></label>
+                  <div class="form-field">
+                    <label for="secret-GITHUB_TOKEN">GitHub token</label>
+                    <div class="secret-control"><input id="secret-GITHUB_TOKEN" type="password" autocomplete="new-password" /><button type="button" class="icon-button" data-toggle-secret="GITHUB_TOKEN" aria-label="Show GitHub token">&#128065;</button></div>
+                  </div>
                   <p class="hint status-line" id="github-token-status"></p>
                 </div>
                 <div class="source-block">
@@ -412,7 +479,10 @@ const HTML = String.raw`<!doctype html>
                     <label class="check-row"><input id="source-linear" type="checkbox" /> Linear</label>
                     <button type="button" class="secondary compact" data-action="discover_linear_token">Find Linear key</button>
                   </div>
-                  <label>Linear API key<input id="secret-LINEAR_API_KEY" type="password" autocomplete="new-password" /></label>
+                  <div class="form-field">
+                    <label for="secret-LINEAR_API_KEY">Linear API key</label>
+                    <div class="secret-control"><input id="secret-LINEAR_API_KEY" type="password" autocomplete="new-password" /><button type="button" class="icon-button" data-toggle-secret="LINEAR_API_KEY" aria-label="Show Linear API key">&#128065;</button></div>
+                  </div>
                   <p class="hint status-line" id="linear-token-status"></p>
                 </div>
                 <label><input id="source-chrome" type="checkbox" /> Chrome snapshot</label>
@@ -581,6 +651,13 @@ label {
   font-size: .85rem;
 }
 
+.form-field {
+  display: grid;
+  gap: .35rem;
+  color: var(--muted);
+  font-size: .85rem;
+}
+
 .inline, .toggles label, label:has(> input[type="checkbox"]), .check-row {
   display: flex;
   align-items: center;
@@ -631,6 +708,22 @@ button:disabled {
   cursor: progress;
 }
 
+.secret-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 2.5rem;
+  align-items: stretch;
+}
+.secret-control input {
+  border-radius: .45rem 0 0 .45rem;
+}
+.icon-button {
+  min-height: 2.5rem;
+  padding: 0;
+  border-radius: 0 .45rem .45rem 0;
+  background: white;
+  color: var(--accent);
+}
+
 fieldset {
   border: 1px solid var(--border);
   border-radius: .5rem;
@@ -653,19 +746,29 @@ legend {
 .profile {
   border: 1px solid var(--border);
   border-radius: .5rem;
-  padding: .75rem;
-  display: grid;
-  gap: .65rem;
   background: #fbfcfb;
 }
-.profile-head {
+.profile-summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: .75rem;
+  padding: .75rem;
+  cursor: pointer;
 }
 .profile-title {
   font-weight: 700;
+}
+.profile-meta {
+  color: var(--muted);
+  font-size: .8rem;
+  text-align: right;
+}
+.profile-body {
+  border-top: 1px solid var(--border);
+  padding: .75rem;
+  display: grid;
+  gap: .65rem;
 }
 .profile-options {
   display: grid;
@@ -768,6 +871,16 @@ document.querySelectorAll('[data-action]').forEach((button) => {
   button.addEventListener('click', () => runAction(button.dataset.action));
 });
 
+document.querySelectorAll('[data-toggle-secret]').forEach((button) => {
+  button.addEventListener('click', () => toggleSecret(button.dataset.toggleSecret));
+});
+
+document.querySelectorAll('[id^="secret-"]').forEach((input) => {
+  input.addEventListener('input', () => {
+    input.dataset.masked = 'false';
+  });
+});
+
 $('add-feishu-profile').addEventListener('click', () => {
   const profiles = getFeishuProfilesForUi(state.config);
   profiles.push(defaultFeishuProfile(profiles.length + 1));
@@ -830,11 +943,7 @@ function render() {
   set('workflow-weekly-weekday', config.workflows.weekly_review.weekday);
   set('workflow-weekly-time', config.workflows.weekly_review.time);
 
-  for (const key of ['OPENAI_API_KEY', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'VAULT_GATE_TOKEN']) {
-    const input = $('secret-' + key);
-    input.value = '';
-    input.placeholder = state.env[key + '_present'] ? 'Saved locally' : '';
-  }
+  for (const key of ['OPENAI_API_KEY', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'VAULT_GATE_TOKEN']) renderSecret(key);
 
   renderChecks(state.doctor);
   $('output').textContent = state.doctorText || '';
@@ -896,15 +1005,52 @@ async function saveAll() {
     CODEX_BIN: value('env-CODEX_BIN'),
     FEISHU_CHAT_ID: value('env-FEISHU_CHAT_ID'),
     VAULT_GATE_URL: value('env-VAULT_GATE_URL'),
-    OPENAI_API_KEY: value('secret-OPENAI_API_KEY'),
-    GITHUB_TOKEN: value('secret-GITHUB_TOKEN'),
-    LINEAR_API_KEY: value('secret-LINEAR_API_KEY'),
-    VAULT_GATE_TOKEN: value('secret-VAULT_GATE_TOKEN'),
+    OPENAI_API_KEY: secretValue('OPENAI_API_KEY'),
+    GITHUB_TOKEN: secretValue('GITHUB_TOKEN'),
+    LINEAR_API_KEY: secretValue('LINEAR_API_KEY'),
+    VAULT_GATE_TOKEN: secretValue('VAULT_GATE_TOKEN'),
   };
   const result = await post('/api/env', { values: envValues });
   state = result.state;
   render();
   $('output').textContent = 'Saved local configuration.';
+}
+
+function renderSecret(key) {
+  const input = $('secret-' + key);
+  const button = document.querySelector('[data-toggle-secret="' + key + '"]');
+  const present = Boolean(state.env[key + '_present']);
+  input.type = 'password';
+  input.value = present ? '********' : '';
+  input.placeholder = present ? '' : 'Not configured';
+  input.dataset.masked = present ? 'true' : 'false';
+  if (button) button.setAttribute('aria-label', 'Show ' + key);
+}
+
+async function toggleSecret(key) {
+  const input = $('secret-' + key);
+  const button = document.querySelector('[data-toggle-secret="' + key + '"]');
+  if (!input) return;
+
+  if (input.dataset.masked === 'true') {
+    const result = await fetch('/api/env-secret?key=' + encodeURIComponent(key)).then((response) => response.json());
+    if (!result.ok) throw new Error(result.error || 'Failed to read secret');
+    input.type = 'text';
+    input.value = result.value || '';
+    input.dataset.masked = 'false';
+    if (button) button.setAttribute('aria-label', 'Hide ' + key);
+  } else {
+    input.type = 'password';
+    input.value = state.env[key + '_present'] ? '********' : '';
+    input.dataset.masked = state.env[key + '_present'] ? 'true' : 'false';
+    if (button) button.setAttribute('aria-label', 'Show ' + key);
+  }
+}
+
+function secretValue(key) {
+  const input = $('secret-' + key);
+  if (!input || input.dataset.masked === 'true') return '';
+  return input.value;
 }
 
 async function runAction(action) {
@@ -978,9 +1124,10 @@ function defaultFeishuProfile(index) {
 }
 
 function renderFeishuProfiles(profiles) {
-  $('feishu-profiles').innerHTML = profiles.map((profile, index) => '<div class="profile" data-profile-index="' + index + '">' +
-    '<div class="profile-head"><span class="profile-title">' + escapeHtml(profile.label || profile.id || ('Feishu ' + (index + 1))) + '</span>' +
-    '<button type="button" class="secondary" data-remove-feishu-profile="' + index + '">Remove</button></div>' +
+  $('feishu-profiles').innerHTML = profiles.map((profile, index) => '<details class="profile" data-profile-index="' + index + '">' +
+    '<summary class="profile-summary"><span class="profile-title">' + escapeHtml(profile.label || profile.id || ('Feishu ' + (index + 1))) + '</span>' +
+    '<span class="profile-meta">' + escapeHtml(profileMeta(profile)) + '</span></summary>' +
+    '<div class="profile-body">' +
     '<div class="grid">' +
     labelInput('ID', profileFieldId(index, 'id'), profile.id) +
     labelInput('Label', profileFieldId(index, 'label'), profile.label) +
@@ -999,7 +1146,8 @@ function renderFeishuProfiles(profiles) {
     labelNumber('Task pages', profileFieldId(index, 'task-pages'), profile.tasks.page_limit, 1, 20) +
     labelNumber('IM limit', profileFieldId(index, 'im-limit'), profile.im_history.limit, 1, 100) +
     '</div>' +
-    '</div>').join('');
+    '<button type="button" class="secondary" data-remove-feishu-profile="' + index + '">Remove profile</button>' +
+    '</div></details>').join('');
 
   document.querySelectorAll('[data-remove-feishu-profile]').forEach((button) => {
     button.addEventListener('click', () => {
@@ -1009,6 +1157,17 @@ function renderFeishuProfiles(profiles) {
       renderFeishuProfiles(next);
     });
   });
+}
+
+function profileMeta(profile) {
+  const parts = [profile.identity || 'user'];
+  const enabled = [];
+  if (profile.calendar?.enabled) enabled.push('calendar');
+  if (profile.tasks?.enabled) enabled.push('tasks');
+  if (profile.docs?.enabled) enabled.push('docs');
+  if (profile.im_history?.enabled) enabled.push('im');
+  parts.push(enabled.length > 0 ? enabled.join(', ') : 'no sources');
+  return parts.join(' / ');
 }
 
 function readFeishuProfiles() {

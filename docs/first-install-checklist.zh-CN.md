@@ -38,8 +38,9 @@ npm run ui
 本地 UI 可以直接编辑常用配置和 `.env` 值。密钥字段只会保存在本地，
 页面不会回显原文。
 
-在 Sources -> Feishu 可以添加一个或多个飞书 profile。在 Sources -> Other
+在 Sources -> Feishu 可以添加一个或多个默认折叠的飞书 profile。在 Sources -> Other
 sources 里可以分别点击 GitHub 或 Linear 的本地查找按钮，从本地标准位置导入凭证。
+密钥字段默认用星号遮住，可以用眼睛按钮显示原文。
 
 ## 3. 必填本地配置
 
