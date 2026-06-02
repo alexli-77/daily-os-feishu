@@ -116,7 +116,13 @@ export const AppConfigSchema = z.object({
       }),
     }),
     github: enabled,
-    linear: enabled.extend({ query: z.string().default("assignee = me and state.type != 'completed'") }),
+    linear: enabled.extend({
+      query: z.string().default("assignee = me and state.type != 'completed'"),
+      projects_allowlist: z.array(z.string()).default([]),
+      projects_blocklist: z.array(z.string()).default([]),
+      teams_allowlist: z.array(z.string()).default([]),
+      teams_blocklist: z.array(z.string()).default([]),
+    }),
     local_files: enabled.extend({
       files: z.array(z.object({ name: z.string(), path: z.string() })).default([]),
     }),

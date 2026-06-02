@@ -133,6 +133,20 @@ local Codex CLI to use the Codex account's connected Linear app as a fallback.
 That fallback is non-blocking: missing API key shows as a warning in Checks, not
 a failure.
 
+Use Linear project filters to keep unrelated work out of the plan. `Allowed
+projects` is an exact project-name allowlist; when it is empty, all projects are
+allowed unless they appear in `Blocked projects`. These filters are applied after
+both direct Linear API collection and the Codex Linear fallback.
+
+If your Linear work is organized by team rather than project, use `Allowed teams`
+or `Blocked teams` instead. Team filters accept either the team name or the team
+key, and matching ignores case, spaces, hyphens, and underscores.
+
+When no Linear allowlist is configured, the app collects open issues assigned to
+you. When `Allowed projects` or `Allowed teams` is configured, the app collects
+open issues in those scopes even if they are unassigned, then applies local
+allow/block filters.
+
 The Service buttons only manage the macOS scheduler. `Install` creates the
 `launchd` job that runs the workflow on schedule; `Uninstall` removes that job.
 They do not install or remove the project itself.

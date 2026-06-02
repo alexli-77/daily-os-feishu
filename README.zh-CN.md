@@ -121,6 +121,18 @@ Linear 推荐填写 `LINEAR_API_KEY`，这样会稳定直连 Linear API。若启
 但 key 为空，应用会调用本机 Codex CLI，尝试使用 Codex 账号已经关联的 Linear
 作为 fallback。这个 fallback 不阻塞执行：Checks 里会显示 warning，而不是失败。
 
+可以用 Linear project filters 避免无关项目进入计划。`Allowed projects` 是精确项目名
+白名单；为空时表示不限制项目，但会排除 `Blocked projects` 里的项目名。这个过滤会同时作用于
+Linear API 直连和 Codex Linear fallback。
+
+如果你的 Linear 事项按 team 管，而不是按 project 管，请用 `Allowed teams` 或
+`Blocked teams`。Team 过滤可以填 team name 或 team key，匹配时会忽略大小写、空格、
+连字符和下划线。
+
+没有配置 Linear allowlist 时，应用默认抓取“分配给我”的未完成 issue。配置了
+`Allowed projects` 或 `Allowed teams` 后，应用会抓这些范围下的未完成 issue，
+即使它们尚未分配 assignee，然后再执行本地 allow/block 过滤。
+
 Service 里的按钮只管理 macOS 定时任务。`Install` 是创建 `launchd` 后台定时任务；
 `Uninstall` 是删除这个定时任务。它们不是安装或卸载整个项目。
 

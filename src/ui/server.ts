@@ -597,6 +597,12 @@ const HTML = String.raw`<!doctype html>
                     <div class="secret-control"><input id="secret-LINEAR_API_KEY" type="password" autocomplete="new-password" /><button type="button" class="icon-button" data-toggle-secret="LINEAR_API_KEY" aria-label="Show Linear API key">&#128065;</button></div>
                   </div>
                   <p class="hint">Linear API key is preferred for direct collection. If it is empty, this app will try the local Codex Linear connection as a fallback.</p>
+                  <label>Linear query<input id="linear-query" /></label>
+                  <label>Allowed projects<textarea id="linear-projects-allowlist" rows="3" spellcheck="false" placeholder="One Linear project name per line"></textarea></label>
+                  <label>Blocked projects<textarea id="linear-projects-blocklist" rows="3" spellcheck="false" placeholder="One Linear project name per line"></textarea></label>
+                  <label>Allowed teams<textarea id="linear-teams-allowlist" rows="3" spellcheck="false" placeholder="One Linear team name or key per line"></textarea></label>
+                  <label>Blocked teams<textarea id="linear-teams-blocklist" rows="3" spellcheck="false" placeholder="One Linear team name or key per line"></textarea></label>
+                  <p class="hint">Project filters use Linear project names. Team filters use Linear team names or keys. Matching ignores case, spaces, hyphens, and underscores.</p>
                   <p class="hint status-line" id="linear-token-status"></p>
                 </div>
                 <label><input id="source-chrome" type="checkbox" /> Chrome snapshot</label>
@@ -1174,6 +1180,11 @@ function render() {
   renderFeishuProfiles(config.sources.feishu.profiles);
   checked('source-github', config.sources.github.enabled);
   checked('source-linear', config.sources.linear.enabled);
+  set('linear-query', config.sources.linear.query || '');
+  set('linear-projects-allowlist', (config.sources.linear.projects_allowlist || []).join('\n'));
+  set('linear-projects-blocklist', (config.sources.linear.projects_blocklist || []).join('\n'));
+  set('linear-teams-allowlist', (config.sources.linear.teams_allowlist || []).join('\n'));
+  set('linear-teams-blocklist', (config.sources.linear.teams_blocklist || []).join('\n'));
   checked('source-chrome', config.sources.chrome_snapshot.enabled);
   checked('source-apple-calendar', config.sources.apple_calendar_snapshot.enabled);
   checked('local-files-enabled', config.sources.local_files.enabled);
@@ -1256,6 +1267,11 @@ async function saveAll() {
   }
   next.sources.github.enabled = isChecked('source-github');
   next.sources.linear.enabled = isChecked('source-linear');
+  next.sources.linear.query = value('linear-query') || "assignee = me and state.type != 'completed'";
+  next.sources.linear.projects_allowlist = parseLines(value('linear-projects-allowlist'));
+  next.sources.linear.projects_blocklist = parseLines(value('linear-projects-blocklist'));
+  next.sources.linear.teams_allowlist = parseLines(value('linear-teams-allowlist'));
+  next.sources.linear.teams_blocklist = parseLines(value('linear-teams-blocklist'));
   next.sources.chrome_snapshot.enabled = isChecked('source-chrome');
   next.sources.apple_calendar_snapshot.enabled = isChecked('source-apple-calendar');
   next.sources.local_files.enabled = isChecked('local-files-enabled');
@@ -1431,6 +1447,10 @@ function parseFiles(text) {
     const [name, ...rest] = line.split('|').map((part) => part.trim());
     return { name, path: rest.join('|') };
   }).filter((file) => file.name && file.path);
+}
+
+function parseLines(text) {
+  return [...new Set(text.split('\n').map((line) => line.trim()).filter(Boolean))];
 }
 
 function getFeishuProfilesForUi(config) {
