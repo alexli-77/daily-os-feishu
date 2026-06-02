@@ -9,6 +9,7 @@ import { todayInTimezone } from './utils/date.js';
 import { ensureMemoryFiles } from './storage/memory.js';
 import { formatDoctor, runDoctor } from './cli/doctor.js';
 import { installLaunchAgent, runScheduler, uninstallLaunchAgent } from './service/launchd.js';
+import { pollFeishuFeedback } from './feedback/feishu-feedback.js';
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
@@ -51,6 +52,14 @@ async function main(): Promise<void> {
       } else if (subcommand === 'run') {
         console.log('daily-os-feishu scheduler started');
         await runScheduler(config);
+      } else {
+        usage(1);
+      }
+      break;
+    case 'feedback':
+      if (subcommand === 'poll') {
+        const result = await pollFeishuFeedback(config, { send: options.send });
+        console.log(JSON.stringify(result, null, 2));
       } else {
         usage(1);
       }
@@ -140,6 +149,7 @@ Commands:
   service install    Install macOS launchd scheduler
   service uninstall  Remove macOS launchd scheduler
   service run        Run scheduler in the foreground
+  feedback poll      Poll Feishu for daily-os commands and feedback
 
 Options:
   --config <path>    Use a config file other than config/config.yaml

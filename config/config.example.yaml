@@ -30,6 +30,16 @@ output:
     chat_id_env: "FEISHU_CHAT_ID"
     send_mode: "markdown" # markdown | text
 
+feedback:
+  feishu:
+    enabled: false
+    identity: "bot" # bot | user
+    chat_id_env: "FEISHU_CHAT_ID"
+    command_prefix: "daily-os"
+    poll_limit: 20
+    state_path: "./data/memory/feishu-feedback-state.json"
+    log_path: "./data/memory/feishu-feedback.md"
+
 sources:
   vault:
     enabled: false

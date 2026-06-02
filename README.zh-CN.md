@@ -51,6 +51,7 @@ npm run collect
 npm run plan -- --no-send
 npm run review
 npm run weekly
+npm run feedback:poll
 ```
 
 安装 macOS 定时服务：
@@ -107,6 +108,35 @@ FEISHU_CHAT_ID=
 ```
 
 可以用 `output.feishu.identity` 选择 `bot` 或 `user` 身份。
+
+## 飞书反馈命令
+
+Alpha 可以轮询一个配置好的飞书会话，处理轻量命令。先启用：
+
+```yaml
+feedback:
+  feishu:
+    enabled: true
+    command_prefix: "daily-os"
+```
+
+然后运行：
+
+```bash
+npm run feedback:poll
+```
+
+支持的消息：
+
+- `daily-os status`
+- `daily-os remember <text>`
+- `daily-os feedback <text>`
+- `daily-os plan`
+- `daily-os review`
+- `daily-os weekly`
+
+`remember` 会写入 long-term memory。`feedback` 会写入本地 feedback log。
+默认都在被忽略的 `data/` 路径下。
 
 ## 隐私边界
 

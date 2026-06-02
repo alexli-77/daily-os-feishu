@@ -59,6 +59,15 @@ npm run plan -- --no-send
 npm run plan
 ```
 
+可选的飞书反馈闭环：
+
+```bash
+npm run feedback:poll -- --no-send
+```
+
+然后启用 `feedback.feishu.enabled`，在配置好的群里发送 `daily-os status`，
+再运行 `npm run feedback:poll`，确认 bot 会回复。
+
 ## 5. 隐私检查
 
 发 PR 或发布前运行：
