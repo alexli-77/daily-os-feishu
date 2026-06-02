@@ -91,12 +91,15 @@ locally and are not echoed back in the UI.
 
 In the Sources tab, Feishu can be configured as multiple profiles. Each profile
 has its own `id`, `identity`, calendar/tasks/docs/IM switches, and IM chat env
-name. Profiles are shown as collapsed rows by default. The Other sources section
-has separate local discovery buttons for GitHub and Linear credentials: GitHub
-uses `.env`, process env, or `gh auth token`; Linear uses `.env`, process env,
-or available local `linear`/`linear-cli` auth commands. Found values are saved
-locally without printing the secret. Secret fields show `********` by default;
-use the eye button next to the field to reveal the local value.
+name. Profiles are shown as collapsed rows by default, with the profile `id`
+visible in the row metadata. Each profile can discover visible Feishu chats
+through `lark-cli`; if multiple chat IDs are found, the UI lists all candidates
+and saves only the one the user chooses. The Other sources section has separate
+local discovery buttons for GitHub and Linear credentials: GitHub uses `.env`,
+process env, or `gh auth token`; Linear uses `.env`, process env, or available
+local `linear`/`linear-cli` auth commands. Found values are saved locally
+without printing the secret. Secret fields show `********` by default; use the
+eye button next to the field to reveal the local value.
 
 For Linear, `LINEAR_API_KEY` is preferred because it gives deterministic direct
 API collection. If Linear is enabled and the key is empty, the app will ask the
