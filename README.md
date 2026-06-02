@@ -91,9 +91,10 @@ locally and are not echoed back in the UI.
 
 In the Sources tab, Feishu can be configured as multiple profiles. Each profile
 has its own `id`, `identity`, calendar/tasks/docs/IM switches, and IM chat env
-name. The Other sources section can look for local GitHub and Linear credentials:
-GitHub uses `.env`, process env, or `gh auth token`; Linear uses `.env` or
-process env. Found values are saved locally without printing the secret.
+name. The Other sources section has separate local discovery buttons for GitHub
+and Linear credentials: GitHub uses `.env`, process env, or `gh auth token`;
+Linear uses `.env` or process env. Found values are saved locally without
+printing the secret.
 
 The Service buttons only manage the macOS scheduler. `Install` creates the
 `launchd` job that runs the workflow on schedule; `Uninstall` removes that job.
