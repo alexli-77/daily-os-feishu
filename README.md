@@ -92,14 +92,27 @@ locally and are not echoed back in the UI.
 In the Sources tab, Feishu can be configured as multiple profiles. Each profile
 has its own `id`, `identity`, calendar/tasks/docs/IM switches, and IM chat env
 name. Profiles are shown as collapsed rows by default, with the profile `id`
-visible in the row metadata. Each profile can discover visible Feishu chats
-through `lark-cli`; if multiple chat IDs are found, the UI lists all candidates
-and saves only the one the user chooses. The Other sources section has separate
-local discovery buttons for GitHub and Linear credentials: GitHub uses `.env`,
-process env, or `gh auth token`; Linear uses `.env`, process env, or available
-local `linear`/`linear-cli` auth commands. Found values are saved locally
-without printing the secret. Secret fields show `********` by default; use the
-eye button next to the field to reveal the local value.
+visible in the row metadata. Feishu profile values are manual: configure the
+profile ID and identity in the UI, then put chat IDs in `.env` using the env var
+named by `IM chat env`, for example `FEISHU_CHAT_ID=oc_xxx`.
+
+Required Feishu values:
+
+- `LARK_APP_ID`: your Feishu app ID, from Feishu Developer Console app credentials.
+- `lark-cli` authentication: run `lark-cli doctor` and follow the auth prompts.
+- `FEISHU_CHAT_ID`: required for Feishu output, feedback, and any profile with IM history enabled.
+- Profile `identity`: choose `user` for user-authorized calendar/tasks/IM access, or `bot` when the bot is installed in the target chat and has the needed scopes.
+
+To find a chat ID manually, use a known chat from Feishu or inspect chats with
+`lark-cli im +chat-list --as user --types group,p2p --format json` outside the
+UI, then copy the desired `oc_xxx` value into `.env`.
+
+The Other sources section has separate local discovery buttons for GitHub and
+Linear credentials: GitHub uses `.env`, process env, or `gh auth token`; Linear
+uses `.env`, process env, or available local `linear`/`linear-cli` auth commands.
+Found values are saved locally without printing the secret. Secret fields show
+`********` by default; use the eye button next to the field to reveal the local
+value.
 
 For Linear, `LINEAR_API_KEY` is preferred because it gives deterministic direct
 API collection. If Linear is enabled and the key is empty, the app will ask the
