@@ -7,6 +7,7 @@ Daily OS Feishu 是一个优先支持 Mac、本地优先、只集成飞书的个
 ## 第一版范围
 
 - 在 macOS 上以 CLI 或 `launchd` 后台服务运行。
+- 提供本地浏览器 UI，用于配置、数据源开关、环境检查和手动触发。
 - 通过 `lark-cli` 发送飞书消息。
 - 默认使用本机已登录的 Codex CLI，也支持 OpenAI API 作为 fallback。
 - 支持可配置数据源：
@@ -31,12 +32,15 @@ Daily OS Feishu 是一个优先支持 Mac、本地优先、只集成飞书的个
 npm ci
 npm run alpha:smoke:ci
 npm run setup
+npm run ui
 ```
 
 然后编辑：
 
 - `.env`
 - `config/config.yaml`
+
+常用配置也可以直接在本地 UI 中填写；它只会写入被 git 忽略的本地文件。
 
 检查环境：
 
@@ -72,6 +76,14 @@ npm run service:uninstall
 把 `config/config.example.yaml` 复制成 `config/config.yaml`。示例配置中列出了所有支持的数据源和输出选项。
 
 密钥从 `.env` 读取，模板是 `.env.example`。
+
+本地 UI 启动方式：
+
+```bash
+npm run ui
+```
+
+它可以保存常用配置、保存 `.env` 值、运行 `doctor`、发送飞书测试消息、手动触发 plan/review/weekly、轮询飞书反馈，并安装或卸载本机 `launchd` 服务。密钥字段只保存在本地，页面不会回显原文。
 
 完整的第一台外部 Mac 安装验收清单见
 [`docs/first-install-checklist.zh-CN.md`](docs/first-install-checklist.zh-CN.md)。

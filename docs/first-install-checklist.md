@@ -28,6 +28,7 @@ Then create local config:
 
 ```bash
 npm run setup
+npm run ui
 ```
 
 Edit only local ignored files:
@@ -35,6 +36,9 @@ Edit only local ignored files:
 - `.env`
 - `config/config.yaml`
 - files under `data/`
+
+The local UI can edit the common config and `.env` values directly. Secret
+fields are saved locally and are not echoed back in the page.
 
 ## 3. Required Local Values
 
@@ -92,5 +96,5 @@ Do not commit:
 
 - Feishu is the only IM output in v0.
 - Remote vault-gate is intentionally not required in v0.
-- The Mac app shell is not required for the CLI alpha.
-- Feishu feedback commands are a follow-up task, not part of this alpha gate.
+- The current UI is a local browser dashboard, not a signed `.app` or DMG yet.
+- Feishu feedback commands are supported through polling, not webhooks.
