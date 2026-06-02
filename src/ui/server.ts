@@ -113,8 +113,12 @@ async function runAction(options: UiServerOptions, body: unknown): Promise<Recor
   const sendOutput = request.send !== false;
   const env = readEnvFile(options.envPath);
 
-  if (action === 'discover_tokens') {
-    return { ok: true, text: await discoverLocalTokens(options, env) };
+  if (action === 'discover_github_token') {
+    return { ok: true, text: await discoverGitHubTokenForUi(options, env) };
+  }
+
+  if (action === 'discover_linear_token') {
+    return { ok: true, text: discoverLinearTokenForUi(options, env) };
   }
 
   applyEnv(env);
@@ -159,29 +163,28 @@ async function runAction(options: UiServerOptions, body: unknown): Promise<Recor
   throw new Error(`Unknown action: ${action}`);
 }
 
-async function discoverLocalTokens(options: UiServerOptions, env: Record<string, string>): Promise<string> {
+async function discoverGitHubTokenForUi(options: UiServerOptions, env: Record<string, string>): Promise<string> {
   const next = { ...env };
-  const notes: string[] = [];
-
   const github = await discoverGitHubToken(env);
   if (github.value) {
     next.GITHUB_TOKEN = github.value;
-    notes.push(`GitHub token found from ${github.source} and saved to ${path.resolve(options.envPath)}.`);
-  } else {
-    notes.push('GitHub token not found. Run `gh auth login`, then try again, or paste GITHUB_TOKEN manually.');
+    writeEnvFile(options.envPath, next);
+    applyEnv(next);
+    return `GitHub token found from ${github.source} and saved locally.`;
   }
+  return 'GitHub token not found. Run `gh auth login`, then try again, or paste GITHUB_TOKEN manually.';
+}
 
+function discoverLinearTokenForUi(options: UiServerOptions, env: Record<string, string>): string {
+  const next = { ...env };
   const linear = discoverEnvToken('LINEAR_API_KEY', env);
   if (linear.value) {
     next.LINEAR_API_KEY = linear.value;
-    notes.push(`Linear API key found from ${linear.source} and saved to ${path.resolve(options.envPath)}.`);
-  } else {
-    notes.push('Linear API key not found. Create one in Linear settings and paste LINEAR_API_KEY manually.');
+    writeEnvFile(options.envPath, next);
+    applyEnv(next);
+    return `Linear API key found from ${linear.source} and saved locally.`;
   }
-
-  writeEnvFile(options.envPath, next);
-  applyEnv(next);
-  return notes.join('\n');
+  return 'Linear API key not found. Create one in Linear settings and paste LINEAR_API_KEY manually.';
 }
 
 async function discoverGitHubToken(env: Record<string, string>): Promise<{ value?: string; source: string }> {
@@ -396,11 +399,22 @@ const HTML = String.raw`<!doctype html>
 
               <fieldset>
                 <legend>Other sources</legend>
-                <button type="button" class="secondary" data-action="discover_tokens">Find local tokens</button>
-                <label><input id="source-github" type="checkbox" /> GitHub</label>
-                <label>GitHub token<input id="secret-GITHUB_TOKEN" type="password" autocomplete="new-password" /></label>
-                <label><input id="source-linear" type="checkbox" /> Linear</label>
-                <label>Linear API key<input id="secret-LINEAR_API_KEY" type="password" autocomplete="new-password" /></label>
+                <div class="source-block">
+                  <div class="source-row">
+                    <label class="check-row"><input id="source-github" type="checkbox" /> GitHub</label>
+                    <button type="button" class="secondary compact" data-action="discover_github_token">Find GitHub token</button>
+                  </div>
+                  <label>GitHub token<input id="secret-GITHUB_TOKEN" type="password" autocomplete="new-password" /></label>
+                  <p class="hint status-line" id="github-token-status"></p>
+                </div>
+                <div class="source-block">
+                  <div class="source-row">
+                    <label class="check-row"><input id="source-linear" type="checkbox" /> Linear</label>
+                    <button type="button" class="secondary compact" data-action="discover_linear_token">Find Linear key</button>
+                  </div>
+                  <label>Linear API key<input id="secret-LINEAR_API_KEY" type="password" autocomplete="new-password" /></label>
+                  <p class="hint status-line" id="linear-token-status"></p>
+                </div>
                 <label><input id="source-chrome" type="checkbox" /> Chrome snapshot</label>
                 <label><input id="source-apple-calendar" type="checkbox" /> Apple Calendar snapshot</label>
               </fieldset>
@@ -557,6 +571,7 @@ p, .hint { color: var(--muted); font-size: .85rem; }
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
   gap: .85rem;
+  align-items: start;
 }
 
 label {
@@ -566,7 +581,7 @@ label {
   font-size: .85rem;
 }
 
-.inline, .toggles label, fieldset > label:has(input[type="checkbox"]) {
+.inline, .toggles label, label:has(> input[type="checkbox"]), .check-row {
   display: flex;
   align-items: center;
   gap: .5rem;
@@ -579,6 +594,10 @@ input, select, textarea {
   background: #fff;
   color: var(--text);
   padding: .55rem .65rem;
+}
+
+input, select {
+  min-height: 2.5rem;
 }
 
 input[type="checkbox"] {
@@ -619,6 +638,8 @@ fieldset {
   display: grid;
   gap: .7rem;
   min-width: 0;
+  align-content: start;
+  grid-auto-rows: max-content;
 }
 legend {
   padding: 0 .35rem;
@@ -650,6 +671,28 @@ legend {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
   gap: .5rem;
+}
+
+.source-block {
+  display: grid;
+  gap: .6rem;
+  border: 1px solid var(--border);
+  border-radius: .5rem;
+  padding: .75rem;
+  background: #fbfcfb;
+}
+.source-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+}
+.compact {
+  min-height: 2rem;
+  padding: .3rem .6rem;
+}
+.status-line {
+  min-height: 1.1rem;
 }
 
 .toggles, .actions {
@@ -872,11 +915,19 @@ async function runAction(action) {
     const result = await post('/api/action', { action, send: isChecked('send-output') });
     await loadState();
     $('output').textContent = result.text || 'Done.';
+    setSourceStatus(action, result.text || 'Done.');
   } catch (error) {
     $('output').textContent = error.message;
+    setSourceStatus(action, error.message);
   } finally {
     buttons.forEach((button) => button.disabled = false);
   }
+}
+
+function setSourceStatus(action, text) {
+  const target = action === 'discover_github_token' ? $('github-token-status') :
+    action === 'discover_linear_token' ? $('linear-token-status') : null;
+  if (target) target.textContent = text;
 }
 
 async function post(url, body) {
