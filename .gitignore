@@ -9,7 +9,10 @@ data/**
 !data/snapshots/
 !data/snapshots/**/
 !data/snapshots/**/*.example
-logs/
+!data/logs/
+data/logs/*
+!data/logs/.gitkeep
+/logs/
 dist/
 node_modules/
 .DS_Store

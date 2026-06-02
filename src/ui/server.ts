@@ -14,6 +14,7 @@ import { pollFeishuFeedback } from '../feedback/feishu-feedback.js';
 import { sendFeishuMessage } from '../connectors/lark-cli.js';
 import { installLaunchAgent, uninstallLaunchAgent } from '../service/launchd.js';
 import { runCommand } from '../utils/command.js';
+import { appendUiLog, clearUiLogs, readUiLogs } from '../storage/ui-log.js';
 
 const SECRET_ENV_KEYS = new Set(['OPENAI_API_KEY', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'VAULT_GATE_TOKEN', 'LARK_APP_SECRET']);
 const PLAIN_ENV_KEYS = ['FEISHU_CHAT_ID', 'VAULT_GATE_URL', 'CODEX_BIN', 'CODEX_HOME', 'TZ', 'LARK_APP_ID'];
@@ -52,20 +53,49 @@ export async function startUiServer(options: UiServerOptions): Promise<void> {
 }
 
 async function handleRequest(request: http.IncomingMessage, response: http.ServerResponse, options: UiServerOptions): Promise<void> {
+  const started = Date.now();
   try {
     const url = new URL(request.url || '/', `http://${request.headers.host || '127.0.0.1'}`);
+    attachNetworkLog(request, response, url, started);
     if (request.method === 'GET' && url.pathname === '/') return send(response, 200, HTML, 'text/html; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/assets/app.css') return send(response, 200, CSS, 'text/css; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/assets/app.js') return send(response, 200, JS, 'application/javascript; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/api/state') return sendJson(response, await buildState(options));
+    if (request.method === 'GET' && url.pathname === '/api/logs') return sendJson(response, { ok: true, logs: readUiLogs() });
     if (request.method === 'GET' && url.pathname === '/api/env-secret') return sendJson(response, readSecret(options, url.searchParams.get('key') || ''));
     if (request.method === 'POST' && url.pathname === '/api/config') return sendJson(response, await saveConfig(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/env') return sendJson(response, await saveEnv(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/action') return sendJson(response, await runAction(options, await readJson(request)));
+    if (request.method === 'DELETE' && url.pathname === '/api/logs') {
+      clearUiLogs();
+      appendUiLog({ event: 'action', level: 'info', status: 'success', action: 'clear_logs', detail: 'UI logs cleared by user.' });
+      return sendJson(response, { ok: true, logs: readUiLogs() });
+    }
     return sendJson(response, { ok: false, error: 'Not found' }, 404);
   } catch (error) {
     sendJson(response, { ok: false, error: error instanceof Error ? error.message : String(error) }, 500);
   }
+}
+
+function attachNetworkLog(request: http.IncomingMessage, response: http.ServerResponse, url: URL, started: number): void {
+  if (!url.pathname.startsWith('/api/') || url.pathname === '/api/logs') return;
+  response.once('finish', () => {
+    const statusCode = response.statusCode;
+    appendUiLog({
+      event: 'network',
+      level: statusCode >= 500 ? 'error' : statusCode >= 400 ? 'warning' : 'info',
+      status: statusCode >= 400 ? 'error' : 'ok',
+      method: request.method || 'GET',
+      path: safeLogPath(url),
+      status_code: statusCode,
+      duration_ms: Date.now() - started,
+    });
+  });
+}
+
+function safeLogPath(url: URL): string {
+  if (url.pathname === '/api/env-secret') return '/api/env-secret';
+  return url.pathname;
 }
 
 function readSecret(options: UiServerOptions, key: string): Record<string, unknown> {
@@ -118,6 +148,33 @@ async function saveEnv(options: UiServerOptions, body: unknown): Promise<Record<
 async function runAction(options: UiServerOptions, body: unknown): Promise<Record<string, unknown>> {
   const request = readRecord(body);
   const action = String(request.action || '');
+  const started = Date.now();
+  appendUiLog({ event: 'action', level: 'info', status: 'started', action });
+  try {
+    const result = await runActionInner(options, request, action);
+    appendUiLog({
+      event: 'action',
+      level: 'info',
+      status: 'success',
+      action,
+      duration_ms: Date.now() - started,
+      detail: actionResultDetail(action),
+    });
+    return result;
+  } catch (error) {
+    appendUiLog({
+      event: 'action',
+      level: 'error',
+      status: 'error',
+      action,
+      duration_ms: Date.now() - started,
+      detail: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+}
+
+async function runActionInner(options: UiServerOptions, request: Record<string, unknown>, action: string): Promise<Record<string, unknown>> {
   const sendOutput = request.send !== false;
   const env = readEnvFile(options.envPath);
 
@@ -173,6 +230,14 @@ async function runAction(options: UiServerOptions, body: unknown): Promise<Recor
   }
 
   throw new Error(`Unknown action: ${action}`);
+}
+
+function actionResultDetail(action: string): string {
+  if (action === 'collect') return 'Evidence collection completed. Response body is not written to logs.';
+  if (['plan', 'review', 'weekly'].includes(action)) return 'Workflow completed. Generated content is not written to logs.';
+  if (action === 'feedback_poll') return 'Feishu feedback poll completed. Message bodies are not written to logs.';
+  if (action === 'feishu_test') return 'Feishu test message sent.';
+  return 'Action completed.';
 }
 
 async function chooseVaultFolder(): Promise<Record<string, unknown>> {
@@ -284,6 +349,7 @@ function ensureLocalFiles(configPath: string, envPath: string): void {
   copyIfMissing('.env.example', envPath);
   copyIfMissing('config/config.example.yaml', configPath);
   fs.mkdirSync(path.resolve('data/memory/daily'), { recursive: true });
+  fs.mkdirSync(path.resolve('data/logs'), { recursive: true });
   fs.mkdirSync(path.resolve('data/snapshots/chrome'), { recursive: true });
   fs.mkdirSync(path.resolve('data/snapshots/calendar'), { recursive: true });
 }
@@ -406,6 +472,7 @@ const HTML = String.raw`<!doctype html>
         <button class="nav-button" data-section="setup">Setup</button>
         <button class="nav-button" data-section="sources">Sources</button>
         <button class="nav-button" data-section="workflows">Workflows</button>
+        <button class="nav-button" data-section="logs">Logs</button>
       </nav>
 
       <section class="content">
@@ -552,6 +619,20 @@ const HTML = String.raw`<!doctype html>
                 <button type="button" class="secondary" data-action="service_uninstall">Uninstall</button>
               </fieldset>
             </div>
+          </section>
+
+          <section class="panel" id="section-logs">
+            <div class="panel-head">
+              <div>
+                <h2>Logs</h2>
+                <p class="hint">Local UI/API request status and action lifecycle. Retained for 7 days; secrets and response bodies are not logged.</p>
+              </div>
+              <div class="panel-actions">
+                <button type="button" class="secondary" id="refresh-logs">Refresh</button>
+                <button type="button" class="secondary" id="clear-logs">Clear logs</button>
+              </div>
+            </div>
+            <div class="log-list" id="logs" aria-live="polite"></div>
           </section>
         </form>
       </section>
@@ -869,6 +950,49 @@ legend {
 .check.warning strong { color: var(--warn); }
 .check.missing strong { color: var(--danger); }
 
+.log-list {
+  display: grid;
+  gap: .5rem;
+  max-height: 65vh;
+  overflow: auto;
+}
+
+.log-entry {
+  display: grid;
+  grid-template-columns: 10.5rem 5.5rem minmax(0, 1fr) 5rem;
+  gap: .75rem;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: .45rem;
+  padding: .55rem .65rem;
+  background: #fbfcfb;
+  font-size: .82rem;
+}
+
+.log-time, .log-meta, .log-duration {
+  color: var(--muted);
+}
+
+.log-target {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.log-badge {
+  display: inline-flex;
+  justify-content: center;
+  min-width: 4.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  padding: .15rem .45rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.log-badge.info { color: var(--ok); border-color: #98c8aa; background: #edf7ef; }
+.log-badge.warning { color: var(--warn); border-color: #dfc497; background: #fff7e8; }
+.log-badge.error { color: var(--danger); border-color: #d5a4a4; background: #fff0f0; }
+
 pre {
   margin: 1rem 0 0;
   min-height: 14rem;
@@ -893,6 +1017,7 @@ pre {
     border-bottom: 1px solid var(--border);
   }
   .nav-button { flex: 0 0 auto; width: auto; }
+  .log-entry { grid-template-columns: 1fr; gap: .35rem; }
 }`;
 
 const JS = String.raw`let state;
@@ -909,6 +1034,7 @@ document.querySelectorAll('.nav-button').forEach((button) => {
     document.querySelectorAll('.panel').forEach((item) => item.classList.remove('active'));
     button.classList.add('active');
     $('section-' + button.dataset.section).classList.add('active');
+    if (button.dataset.section === 'logs') void loadLogs();
   });
 });
 
@@ -937,6 +1063,9 @@ $('config-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   await saveAll();
 });
+
+$('refresh-logs').addEventListener('click', () => loadLogs());
+$('clear-logs').addEventListener('click', () => clearLogs());
 
 loadState();
 
@@ -1125,7 +1254,54 @@ async function runAction(action) {
     setSourceStatus(action, error.message);
   } finally {
     buttons.forEach((button) => button.disabled = false);
+    if (document.querySelector('.nav-button.active')?.dataset.section === 'logs') void loadLogs();
   }
+}
+
+async function loadLogs() {
+  const response = await fetch('/api/logs');
+  const data = await response.json();
+  if (!data.ok) throw new Error(data.error || 'Failed to load logs');
+  renderLogs(data.logs || []);
+}
+
+async function clearLogs() {
+  const response = await fetch('/api/logs', { method: 'DELETE' });
+  const data = await response.json();
+  if (!data.ok) throw new Error(data.error || 'Failed to clear logs');
+  renderLogs(data.logs || []);
+}
+
+function renderLogs(logs) {
+  if (!logs.length) {
+    $('logs').innerHTML = '<p class="hint">No logs yet.</p>';
+    return;
+  }
+  $('logs').innerHTML = logs.map((entry) => {
+    const target = entry.event === 'action'
+      ? 'Action: ' + (entry.action || 'unknown')
+      : (entry.method || 'GET') + ' ' + (entry.path || '');
+    const meta = entry.event === 'network'
+      ? 'HTTP ' + (entry.status_code || '')
+      : entry.status;
+    const detail = entry.detail ? '<div class="log-meta">' + escapeHtml(entry.detail) + '</div>' : '';
+    return '<div class="log-entry">' +
+      '<div class="log-time">' + escapeHtml(formatLogTime(entry.timestamp)) + '</div>' +
+      '<div><span class="log-badge ' + escapeHtml(entry.level || 'info') + '">' + escapeHtml(entry.status || 'ok') + '</span></div>' +
+      '<div class="log-target"><div>' + escapeHtml(target) + '</div><div class="log-meta">' + escapeHtml(meta) + '</div>' + detail + '</div>' +
+      '<div class="log-duration">' + escapeHtml(formatDuration(entry.duration_ms)) + '</div>' +
+      '</div>';
+  }).join('');
+}
+
+function formatLogTime(timestamp) {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return timestamp || '';
+  return date.toLocaleString();
+}
+
+function formatDuration(value) {
+  return typeof value === 'number' ? value + ' ms' : '';
 }
 
 function setSaveStatus(text) {

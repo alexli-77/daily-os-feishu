@@ -113,6 +113,10 @@ picker and writes the selected path into the local config. The top status shows
 local setup checks, for example `Checks 4/4 OK`; `Run Checks` reruns those local
 dependency and required-config checks.
 
+The `Logs` tab shows local UI/API request status and action lifecycle events.
+Logs are stored in `data/logs/ui-network.jsonl`, do not include request bodies,
+response bodies, or secrets, and are automatically pruned to the last 7 days.
+
 For the full first-install checklist, see
 [`docs/first-install-checklist.md`](docs/first-install-checklist.md).
 
