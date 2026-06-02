@@ -38,6 +38,9 @@ npm run ui
 本地 UI 可以直接编辑常用配置和 `.env` 值。密钥字段只会保存在本地，
 页面不会回显原文。
 
+在 Sources -> Feishu 可以添加一个或多个飞书 profile。在 Sources -> Other
+sources 点击 Find local tokens，可以从本地标准位置导入 GitHub 或 Linear 凭证。
+
 ## 3. 必填本地配置
 
 Feishu-only alpha 至少需要：

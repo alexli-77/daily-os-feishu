@@ -85,6 +85,14 @@ npm run ui
 
 它可以保存常用配置、保存 `.env` 值、运行 `doctor`、发送飞书测试消息、手动触发 plan/review/weekly、轮询飞书反馈，并安装或卸载本机 `launchd` 服务。密钥字段只保存在本地，页面不会回显原文。
 
+Sources 页里的 Feishu 支持配置多个 profile。每个 profile 都有自己的
+`id`、`identity`、日历/任务/文档/IM 开关，以及 IM chat env 名称。Other
+sources 可以查找本地 GitHub 和 Linear 凭证：GitHub 会查 `.env`、环境变量和
+`gh auth token`；Linear 会查 `.env` 和环境变量。找到后只保存到本地，不打印密钥。
+
+Service 里的按钮只管理 macOS 定时任务。`Install` 是创建 `launchd` 后台定时任务；
+`Uninstall` 是删除这个定时任务。它们不是安装或卸载整个项目。
+
 完整的第一台外部 Mac 安装验收清单见
 [`docs/first-install-checklist.zh-CN.md`](docs/first-install-checklist.zh-CN.md)。
 

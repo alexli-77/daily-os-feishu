@@ -40,6 +40,10 @@ Edit only local ignored files:
 The local UI can edit the common config and `.env` values directly. Secret
 fields are saved locally and are not echoed back in the page.
 
+Use Sources -> Feishu to add one or more Feishu profiles. Use Sources -> Other
+sources -> Find local tokens to import GitHub or Linear credentials from local
+standard locations when available.
+
 ## 3. Required Local Values
 
 For a Feishu-only alpha, configure:

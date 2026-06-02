@@ -36,6 +36,25 @@ export async function runDoctor(config: AppConfig, configPath = 'config/config.y
     }
   }
 
+  if (config.sources.feishu.enabled) {
+    const profiles = config.sources.feishu.profiles;
+    if (profiles.length > 0) {
+      for (const profile of profiles) {
+        if (profile.enabled && profile.im_history.enabled) {
+          checks.push({
+            name: `${profile.id}.im_history.${profile.im_history.chat_id_env}`,
+            ok: Boolean(process.env[profile.im_history.chat_id_env]),
+          });
+        }
+      }
+    } else if (config.sources.feishu.im_history.enabled) {
+      checks.push({
+        name: `feishu.im_history.${config.sources.feishu.im_history.chat_id_env}`,
+        ok: Boolean(process.env[config.sources.feishu.im_history.chat_id_env]),
+      });
+    }
+  }
+
   if (config.sources.github.enabled) checks.push({ name: 'GITHUB_TOKEN', ok: Boolean(process.env.GITHUB_TOKEN) });
   if (config.sources.linear.enabled) checks.push({ name: 'LINEAR_API_KEY', ok: Boolean(process.env.LINEAR_API_KEY) });
 
