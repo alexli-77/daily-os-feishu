@@ -1412,14 +1412,14 @@ function renderFeishuProfiles(profiles) {
     '<span class="profile-meta">' + escapeHtml(profileMeta(profile)) + '</span></summary>' +
     '<div class="profile-body">' +
     '<div class="grid">' +
-    labelInput('Profile ID', profileFieldId(index, 'id'), profile.id, 'Required') +
-    labelInput('Label', profileFieldId(index, 'label'), profile.label) +
-    labelSelect('Identity', profileFieldId(index, 'identity'), profile.identity, ['user', 'bot'], 'Required') +
-    labelInput('IM Chat ID env', profileFieldId(index, 'chat-env'), profile.im_history.chat_id_env, 'Required when IM history is enabled') +
+    labelInput('Local source key', profileFieldId(index, 'id'), profile.id) +
+    labelInput('Display name', profileFieldId(index, 'label'), profile.label) +
+    labelSelect('Access identity', profileFieldId(index, 'identity'), profile.identity, ['user', 'bot']) +
+    labelInput('Chat ID env var', profileFieldId(index, 'chat-env'), profile.im_history.chat_id_env) +
     '</div>' +
     '<div class="manual-help">' +
-    '<p class="hint"><strong>Required for this profile:</strong> Profile ID and Identity. Calendar and Tasks use the selected Identity. IM history also requires IM Chat ID env to point to a Chat ID such as FEISHU_CHAT_ID=oc_xxx in .env.</p>' +
-    '<p class="hint">Names mirror Feishu Developer Platform where applicable: App ID and App Secret are global app credentials; Chat ID is an IM conversation ID.</p>' +
+    '<p class="hint"><strong>Local source profile:</strong> these fields are local Daily OS settings, not Feishu Developer Platform credentials. Keep the defaults unless you are configuring multiple Feishu sources.</p>' +
+    '<p class="hint">Access identity maps to lark-cli --as user/bot. Chat ID env var is only used when IM history is enabled; it names the .env variable that contains a Feishu Chat ID such as FEISHU_CHAT_ID=oc_xxx.</p>' +
     '</div>' +
     '<div class="profile-options">' +
     labelCheck('Enabled', profileFieldId(index, 'enabled'), profile.enabled) +

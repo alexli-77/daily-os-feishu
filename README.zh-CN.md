@@ -99,13 +99,13 @@ Feishu 必填项：
 - `FEISHU_CHAT_ID`：当需要发送输出、轮询反馈，或某个 profile 启用 IM history 时必填。
 - Profile `identity`：日历/任务/IM 走用户授权时选 `user`；机器人已进目标群且具备权限时选 `bot`。
 
-Feishu source profile 包含：
+Feishu source profile 是 Daily OS 的本地设置，不是飞书开放平台凭证：
 
-- `Profile ID`（必填）：本地稳定 source ID，例如 `work` 或 `personal`。
-- `Label`：UI 中显示的本地名称。
-- `Identity`（必填）：`user` 或 `bot`，对应 lark-cli 调用时使用的身份。
-- `IM Chat ID env`（启用 IM history 时必填）：保存飞书 `Chat ID` 的环境变量名，例如 `FEISHU_CHAT_ID`。
-- `Calendar`、`Tasks`、`Docs`、`IM history`：数据源开关。`Calendar` 和 `Tasks` 使用所选 `Identity`；`IM history` 还需要 Chat ID env 对应的值。
+- `Local source key`：本地稳定 source ID，例如 `default`、`work` 或 `personal`。
+- `Display name`：UI 中显示的本地名称。
+- `Access identity`：`user` 或 `bot`，对应 lark-cli 调用时使用的 `--as` 身份。
+- `Chat ID env var`：保存飞书 `Chat ID` 的环境变量名，例如 `FEISHU_CHAT_ID`；仅启用 IM history 时使用。
+- `Calendar`、`Tasks`、`Docs`、`IM history`：数据源开关。`Calendar` 和 `Tasks` 使用所选 `Access identity`；`IM history` 还需要 Chat ID env 对应的值。
 
 手动查找 chat ID：可以从已知飞书会话复制，或在 UI 外运行
 `lark-cli im +chat-list --as user --types group,p2p --format json`，再把目标会话的

@@ -104,13 +104,14 @@ Required Feishu values:
 - `FEISHU_CHAT_ID`: required for Feishu output, feedback, and any profile with IM history enabled.
 - Profile `identity`: choose `user` for user-authorized calendar/tasks/IM access, or `bot` when the bot is installed in the target chat and has the needed scopes.
 
-Feishu source profile fields:
+Feishu source profile fields are local Daily OS settings, not Feishu Developer
+Platform credentials:
 
-- `Profile ID` (required): local stable source ID, such as `work` or `personal`.
-- `Label`: local display name in the UI.
-- `Identity` (required): `user` or `bot`, matching the lark-cli identity used for this source.
-- `IM Chat ID env` (required when IM history is enabled): the env var name that contains a Feishu `Chat ID`, for example `FEISHU_CHAT_ID`.
-- `Calendar`, `Tasks`, `Docs`, `IM history`: source switches. `Calendar` and `Tasks` use the selected `Identity`; `IM history` also needs the Chat ID env value.
+- `Local source key`: local stable source ID, such as `default`, `work`, or `personal`.
+- `Display name`: local display name in the UI.
+- `Access identity`: `user` or `bot`, matching the `lark-cli --as` identity used for this source.
+- `Chat ID env var`: the env var name that contains a Feishu `Chat ID`, for example `FEISHU_CHAT_ID`; only used when IM history is enabled.
+- `Calendar`, `Tasks`, `Docs`, `IM history`: source switches. `Calendar` and `Tasks` use the selected `Access identity`; `IM history` also needs the Chat ID env value.
 
 To find a chat ID manually, use a known chat from Feishu or inspect chats with
 `lark-cli im +chat-list --as user --types group,p2p --format json` outside the
