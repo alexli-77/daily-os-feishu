@@ -186,6 +186,14 @@ async function runActionInner(options: UiServerOptions, request: Record<string, 
     return { ok: true, text: discoverLinearTokenForUi(options, env) };
   }
 
+  if (action === 'discover_feishu_chats') {
+    return discoverFeishuChatsForUi(request);
+  }
+
+  if (action === 'save_feishu_chat_id') {
+    return saveFeishuChatIdForUi(options, env, request);
+  }
+
   if (action === 'choose_vault_folder') {
     return chooseVaultFolder();
   }
@@ -237,6 +245,8 @@ function actionResultDetail(action: string): string {
   if (['plan', 'review', 'weekly'].includes(action)) return 'Workflow completed. Generated content is not written to logs.';
   if (action === 'feedback_poll') return 'Feishu feedback poll completed. Message bodies are not written to logs.';
   if (action === 'feishu_test') return 'Feishu test message sent.';
+  if (action === 'discover_feishu_chats') return 'Feishu chat discovery completed. Candidate chat names and IDs are not written to logs.';
+  if (action === 'save_feishu_chat_id') return 'Selected Feishu chat ID saved locally.';
   return 'Action completed.';
 }
 
@@ -274,6 +284,102 @@ function discoverLinearTokenForUi(options: UiServerOptions, env: Record<string, 
     return `Linear API key found from ${linear.source} and saved locally.`;
   }
   return 'Linear API key not found. No usable local Linear CLI auth token was found. Create one in Linear settings and paste LINEAR_API_KEY manually.';
+}
+
+async function discoverFeishuChatsForUi(request: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const identity = String(request.identity || 'user') === 'bot' ? 'bot' : 'user';
+  const query = String(request.query || '').trim();
+  const args = query
+    ? ['im', '+chat-search', '--as', identity, '--query', query, '--page-size', '20', '--format', 'json']
+    : [
+        'im',
+        '+chat-list',
+        '--as',
+        identity,
+        '--page-size',
+        '20',
+        '--format',
+        'json',
+        ...(identity === 'user' ? ['--types', 'group,p2p'] : []),
+      ];
+  const result = await runCommand('lark-cli', args, { timeoutMs: 30000 });
+  if (!result.ok) {
+    throw new Error(`Failed to discover Feishu chats: ${(result.stderr || result.stdout).slice(0, 1000)}`);
+  }
+  const candidates = normalizeFeishuChatCandidates(result.stdout);
+  return {
+    ok: true,
+    text: candidates.length
+      ? `Found ${candidates.length} Feishu chat candidate${candidates.length === 1 ? '' : 's'}. Choose one to save.`
+      : 'No Feishu chats found. Try a different identity or search keyword.',
+    candidates,
+  };
+}
+
+function saveFeishuChatIdForUi(options: UiServerOptions, env: Record<string, string>, request: Record<string, unknown>): Record<string, unknown> {
+  const envKey = String(request.envKey || '').trim();
+  const chatId = String(request.chatId || '').trim();
+  if (!/^[A-Z][A-Z0-9_]*$/.test(envKey)) throw new Error('IM chat env must be an uppercase env var name.');
+  if (!/^oc_[A-Za-z0-9_-]+$/.test(chatId)) throw new Error('Selected Feishu chat ID must look like oc_xxx.');
+  const next = { ...env, [envKey]: chatId };
+  writeEnvFile(options.envPath, next);
+  applyEnv(next);
+  return { ok: true, text: `${envKey} saved locally.` };
+}
+
+interface FeishuChatCandidate {
+  chat_id: string;
+  name: string;
+  type?: string;
+  source?: string;
+}
+
+function normalizeFeishuChatCandidates(text: string): FeishuChatCandidate[] {
+  const parsed = JSON.parse(text) as unknown;
+  const rawItems = findFirstArray(parsed);
+  const seen = new Set<string>();
+  const candidates: FeishuChatCandidate[] = [];
+  for (const item of rawItems) {
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Record<string, unknown>;
+    const chatId = stringFromKeys(record, ['chat_id', 'chatId', 'open_chat_id', 'openChatId']);
+    if (!chatId || seen.has(chatId)) continue;
+    seen.add(chatId);
+    candidates.push({
+      chat_id: chatId,
+      name: stringFromKeys(record, ['name', 'chat_name', 'chatName', 'title']) || 'Unnamed chat',
+      type: stringFromKeys(record, ['chat_type', 'chatType', 'type']),
+      source: stringFromKeys(record, ['description', 'owner_id', 'ownerId']),
+    });
+  }
+  return candidates.slice(0, 20);
+}
+
+function findFirstArray(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (!value || typeof value !== 'object') return [];
+  const record = value as Record<string, unknown>;
+  for (const key of ['items', 'chats', 'data', 'result']) {
+    const nested = record[key];
+    if (Array.isArray(nested)) return nested;
+    const found = findFirstArray(nested);
+    if (found.length > 0) return found;
+  }
+  return [];
+}
+
+function stringFromKeys(record: Record<string, unknown>, keys: string[], depth = 0): string {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  if (depth >= 2) return '';
+  for (const value of Object.values(record)) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    const nested = stringFromKeys(value as Record<string, unknown>, keys, depth + 1);
+    if (nested) return nested;
+  }
+  return '';
 }
 
 async function discoverGitHubToken(env: Record<string, string>): Promise<{ value?: string; source: string }> {
@@ -390,11 +496,20 @@ function writeEnvFile(envPath: string, values: Record<string, string>): void {
       return `${key}=${quoteEnv(values[key])}`;
     });
 
-  for (const key of ENV_KEYS) {
+  for (const key of orderedEnvKeys(values)) {
     if (written.has(key) || !(key in values)) continue;
     lines.push(`${key}=${quoteEnv(values[key])}`);
   }
   fs.writeFileSync(absolute, `${lines.join('\n')}\n`, 'utf8');
+}
+
+function orderedEnvKeys(values: Record<string, string>): string[] {
+  const known = ENV_KEYS.filter((key) => key in values);
+  const custom = Object.keys(values)
+    .filter((key) => !ENV_KEYS.includes(key))
+    .filter((key) => /^[A-Z][A-Z0-9_]*$/.test(key))
+    .sort();
+  return [...known, ...custom];
 }
 
 function applyEnv(values: Record<string, string>): void {
@@ -923,6 +1038,51 @@ legend {
   min-height: 1.1rem;
 }
 
+.chat-discovery {
+  display: grid;
+  gap: .55rem;
+  border: 1px solid var(--border);
+  border-radius: .5rem;
+  padding: .65rem;
+  background: #fbfcfb;
+}
+
+.chat-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: .5rem;
+  align-items: end;
+}
+
+.chat-candidates {
+  display: grid;
+  gap: .45rem;
+}
+
+.chat-candidate {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: .5rem;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: .45rem;
+  padding: .5rem;
+  background: #fff;
+}
+
+.chat-candidate strong {
+  display: block;
+  font-size: .85rem;
+}
+
+.chat-candidate span {
+  display: block;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .75rem;
+  overflow-wrap: anywhere;
+}
+
 .toggles, .actions {
   display: flex;
   flex-wrap: wrap;
@@ -1018,6 +1178,7 @@ pre {
   }
   .nav-button { flex: 0 0 auto; width: auto; }
   .log-entry { grid-template-columns: 1fr; gap: .35rem; }
+  .chat-search-row, .chat-candidate { grid-template-columns: 1fr; }
 }`;
 
 const JS = String.raw`let state;
@@ -1323,6 +1484,60 @@ function setSourceStatus(action, text) {
   if (target) target.textContent = text;
 }
 
+async function discoverFeishuChats(index) {
+  const status = $(profileFieldId(index, 'chat-status'));
+  const results = $(profileFieldId(index, 'chat-results'));
+  const button = document.querySelector('[data-discover-feishu-chats="' + index + '"]');
+  const identity = value(profileFieldId(index, 'identity')) || 'user';
+  const query = value(profileFieldId(index, 'chat-query'));
+  const envKey = value(profileFieldId(index, 'chat-env')) || 'FEISHU_CHAT_ID';
+  if (button) button.disabled = true;
+  status.textContent = 'Searching Feishu chats...';
+  results.innerHTML = '';
+  try {
+    const result = await post('/api/action', { action: 'discover_feishu_chats', identity, query });
+    status.textContent = result.text || 'Choose a Feishu chat.';
+    renderFeishuChatCandidates(index, envKey, result.candidates || []);
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function renderFeishuChatCandidates(index, envKey, candidates) {
+  const results = $(profileFieldId(index, 'chat-results'));
+  if (!candidates.length) {
+    results.innerHTML = '';
+    return;
+  }
+  results.innerHTML = candidates.map((candidate, candidateIndex) =>
+    '<div class="chat-candidate">' +
+    '<div><strong>' + escapeHtml(candidate.name || 'Unnamed chat') + '</strong>' +
+    '<span>' + escapeHtml(candidate.chat_id || '') + '</span>' +
+    '<span>' + escapeHtml([candidate.type, candidate.source].filter(Boolean).join(' / ')) + '</span></div>' +
+    '<button type="button" class="secondary compact" data-use-feishu-chat="' + index + '" data-candidate-index="' + candidateIndex + '">Use</button>' +
+    '</div>').join('');
+
+  document.querySelectorAll('[data-use-feishu-chat="' + index + '"]').forEach((button) => {
+    button.addEventListener('click', () => saveFeishuChatCandidate(index, envKey, candidates[Number(button.dataset.candidateIndex)]));
+  });
+}
+
+async function saveFeishuChatCandidate(index, envKey, candidate) {
+  if (!candidate?.chat_id) return;
+  const status = $(profileFieldId(index, 'chat-status'));
+  status.textContent = 'Saving selected Feishu chat...';
+  try {
+    const result = await post('/api/action', { action: 'save_feishu_chat_id', envKey, chatId: candidate.chat_id });
+    if (envKey === 'FEISHU_CHAT_ID') set('env-FEISHU_CHAT_ID', candidate.chat_id);
+    status.textContent = result.text || 'Feishu chat ID saved locally.';
+    $('output').textContent = 'Saved ' + envKey + ' from Feishu chat: ' + (candidate.name || candidate.chat_id);
+  } catch (error) {
+    status.textContent = error.message;
+  }
+}
+
 async function post(url, body) {
   const response = await fetch(url, {
     method: 'POST',
@@ -1381,6 +1596,14 @@ function renderFeishuProfiles(profiles) {
     labelSelect('Identity', profileFieldId(index, 'identity'), profile.identity, ['user', 'bot']) +
     labelInput('IM chat env', profileFieldId(index, 'chat-env'), profile.im_history.chat_id_env) +
     '</div>' +
+    '<div class="chat-discovery">' +
+    '<div class="chat-search-row">' +
+    '<label>Find Feishu chat<input id="' + profileFieldId(index, 'chat-query') + '" placeholder="Optional chat name keyword" /></label>' +
+    '<button type="button" class="secondary compact" data-discover-feishu-chats="' + index + '">Find chat</button>' +
+    '</div>' +
+    '<p class="hint status-line" id="' + profileFieldId(index, 'chat-status') + '">Select one candidate to save its chat ID into the IM chat env above.</p>' +
+    '<div class="chat-candidates" id="' + profileFieldId(index, 'chat-results') + '"></div>' +
+    '</div>' +
     '<div class="profile-options">' +
     labelCheck('Enabled', profileFieldId(index, 'enabled'), profile.enabled) +
     labelCheck('Calendar', profileFieldId(index, 'calendar'), profile.calendar.enabled) +
@@ -1404,10 +1627,14 @@ function renderFeishuProfiles(profiles) {
       renderFeishuProfiles(next);
     });
   });
+
+  document.querySelectorAll('[data-discover-feishu-chats]').forEach((button) => {
+    button.addEventListener('click', () => discoverFeishuChats(Number(button.dataset.discoverFeishuChats)));
+  });
 }
 
 function profileMeta(profile) {
-  const parts = [profile.identity || 'user'];
+  const parts = ['id: ' + (profile.id || 'default'), profile.identity || 'user'];
   const enabled = [];
   if (profile.calendar?.enabled) enabled.push('calendar');
   if (profile.tasks?.enabled) enabled.push('tasks');

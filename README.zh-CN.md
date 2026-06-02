@@ -86,7 +86,9 @@ npm run ui
 它可以保存常用配置、保存 `.env` 值、运行 `doctor`、发送飞书测试消息、手动触发 plan/review/weekly、轮询飞书反馈，并安装或卸载本机 `launchd` 服务。密钥字段只保存在本地，页面不会回显原文。
 
 Sources 页里的 Feishu 支持配置多个 profile。每个 profile 都有自己的
-`id`、`identity`、日历/任务/文档/IM 开关，以及 IM chat env 名称。profile 默认折叠显示。
+`id`、`identity`、日历/任务/文档/IM 开关，以及 IM chat env 名称。profile 默认折叠显示，
+折叠摘要里会显示 profile `id`。每个 profile 都可以通过 `lark-cli` 查找当前身份可见的
+飞书 chat；如果发现多个 chat ID，UI 会全部列出，只有用户点击选择的那一个才会保存。
 Other sources 里 GitHub 和 Linear 各有独立的本地查找按钮：GitHub 会查 `.env`、
 环境变量和 `gh auth token`；Linear 会查 `.env`、环境变量，以及可用的本地 `linear`/`linear-cli`
 认证命令。找到后只保存到本地，不打印密钥。密钥字段默认显示 `********`，点击输入框旁边的眼睛按钮才显示本地原文。
