@@ -7,6 +7,13 @@ import { runWorkflow } from '../workflows/run-workflow.js';
 
 const LABEL = 'com.daily-os-feishu.agent';
 
+export interface LaunchAgentStatus {
+  label: string;
+  plistPath: string;
+  installed: boolean;
+  registered: boolean;
+}
+
 export async function installLaunchAgent(repoRoot = process.cwd()): Promise<string> {
   const plistPath = launchAgentPath();
   const logsDir = path.join(repoRoot, 'logs');
@@ -25,6 +32,17 @@ export async function uninstallLaunchAgent(): Promise<string> {
   await runCommand('launchctl', ['bootout', `gui/${process.getuid?.()}`, plistPath], { timeoutMs: 10000 });
   if (fs.existsSync(plistPath)) fs.unlinkSync(plistPath);
   return plistPath;
+}
+
+export async function getLaunchAgentStatus(): Promise<LaunchAgentStatus> {
+  const plistPath = launchAgentPath();
+  const result = await runCommand('launchctl', ['print', `gui/${process.getuid?.()}/${LABEL}`], { timeoutMs: 5000 });
+  return {
+    label: LABEL,
+    plistPath,
+    installed: fs.existsSync(plistPath),
+    registered: result.ok,
+  };
 }
 
 export async function runScheduler(config: AppConfig): Promise<void> {
