@@ -505,7 +505,7 @@ const HTML = String.raw`<!doctype html>
                     <label for="secret-LINEAR_API_KEY">Linear API key</label>
                     <div class="secret-control"><input id="secret-LINEAR_API_KEY" type="password" autocomplete="new-password" /><button type="button" class="icon-button" data-toggle-secret="LINEAR_API_KEY" aria-label="Show Linear API key">&#128065;</button></div>
                   </div>
-                  <p class="hint">Direct Linear source collection requires a Linear API key. A Codex Linear connection is not reused by this local app.</p>
+                  <p class="hint">Linear API key is preferred for direct collection. If it is empty, this app will try the local Codex Linear connection as a fallback.</p>
                   <p class="hint status-line" id="linear-token-status"></p>
                 </div>
                 <label><input id="source-chrome" type="checkbox" /> Chrome snapshot</label>
@@ -866,6 +866,7 @@ legend {
 .check strong { font-size: .9rem; }
 .check span { font-size: .8rem; color: var(--muted); }
 .check.ok strong { color: var(--ok); }
+.check.warning strong { color: var(--warn); }
 .check.missing strong { color: var(--danger); }
 
 pre {
@@ -994,13 +995,19 @@ function render() {
 }
 
 function renderChecks(checks) {
-  const ok = checks.filter((check) => check.ok).length;
-  $('summary-status').textContent = 'Checks ' + ok + '/' + checks.length + ' OK';
-  $('summary-status').className = 'status ' + (ok === checks.length ? 'ok' : 'warn');
+  const required = checks.filter((check) => check.level !== 'warning');
+  const requiredOk = required.filter((check) => check.ok).length;
+  const warnings = checks.filter((check) => check.level === 'warning').length;
+  $('summary-status').textContent = warnings > 0
+    ? 'Checks ' + requiredOk + '/' + required.length + ' OK, ' + warnings + ' warning'
+    : 'Checks ' + requiredOk + '/' + required.length + ' OK';
+  $('summary-status').className = 'status ' + (requiredOk === required.length ? (warnings > 0 ? 'warn' : 'ok') : 'warn');
   $('checks').innerHTML = checks.map((check) => {
     const detail = check.detail ? '<span>' + escapeHtml(check.detail) + '</span>' : '';
-    return '<div class="check ' + (check.ok ? 'ok' : 'missing') + '"><div><strong>' +
-      (check.ok ? 'OK' : 'MISSING') + '</strong><br><span>' + escapeHtml(check.name) + '</span></div>' + detail + '</div>';
+    const level = check.level || (check.ok ? 'ok' : 'missing');
+    const label = level === 'warning' ? 'WARNING' : (check.ok ? 'OK' : 'MISSING');
+    return '<div class="check ' + level + '"><div><strong>' +
+      label + '</strong><br><span>' + escapeHtml(check.name) + '</span></div>' + detail + '</div>';
   }).join('');
 }
 

@@ -6,6 +6,7 @@ import { checkLarkCli } from '../connectors/lark-cli.js';
 export interface DoctorCheck {
   name: string;
   ok: boolean;
+  level?: 'ok' | 'warning' | 'missing';
   detail?: string;
 }
 
@@ -56,7 +57,18 @@ export async function runDoctor(config: AppConfig, configPath = 'config/config.y
   }
 
   if (config.sources.github.enabled) checks.push({ name: 'GITHUB_TOKEN', ok: Boolean(process.env.GITHUB_TOKEN) });
-  if (config.sources.linear.enabled) checks.push({ name: 'LINEAR_API_KEY', ok: Boolean(process.env.LINEAR_API_KEY) });
+  if (config.sources.linear.enabled) {
+    checks.push(
+      process.env.LINEAR_API_KEY
+        ? { name: 'LINEAR_API_KEY', ok: true, level: 'ok' }
+        : {
+            name: 'LINEAR_API_KEY',
+            ok: true,
+            level: 'warning',
+            detail: 'not configured; Codex Linear fallback will be used',
+          },
+    );
+  }
 
   return checks;
 }
@@ -68,6 +80,11 @@ async function toCheck(name: string, checkPromise: Promise<{ state: string; deta
 
 export function formatDoctor(checks: DoctorCheck[]): string {
   return checks
-    .map((check) => `${check.ok ? 'OK' : 'MISSING'} ${check.name}${check.detail ? ` - ${check.detail}` : ''}`)
+    .map((check) => `${formatCheckLevel(check)} ${check.name}${check.detail ? ` - ${check.detail}` : ''}`)
     .join('\n');
+}
+
+function formatCheckLevel(check: DoctorCheck): string {
+  if (check.level === 'warning') return 'WARNING';
+  return check.ok ? 'OK' : 'MISSING';
 }

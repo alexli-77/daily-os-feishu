@@ -56,7 +56,7 @@ For a Feishu-only alpha, configure:
 - `FEISHU_CHAT_ID` in `.env`
 - Codex CLI signed in locally, or `OPENAI_API_KEY`
 - `output.feishu.identity` in `config/config.yaml`
-- any enabled source credentials, such as `GITHUB_TOKEN` or `LINEAR_API_KEY`
+- any enabled source credentials, such as `GITHUB_TOKEN`; `LINEAR_API_KEY` is preferred but optional when Codex Linear fallback is available
 
 Leave unsupported sources disabled for the first run.
 

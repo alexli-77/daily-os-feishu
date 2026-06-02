@@ -52,7 +52,7 @@ Feishu-only alpha 至少需要：
 - `.env` 中的 `FEISHU_CHAT_ID`
 - 本机已登录 Codex CLI，或配置 `OPENAI_API_KEY`
 - `config/config.yaml` 中的 `output.feishu.identity`
-- 已启用数据源所需的凭证，例如 `GITHUB_TOKEN` 或 `LINEAR_API_KEY`
+- 已启用数据源所需的凭证，例如 `GITHUB_TOKEN`；`LINEAR_API_KEY` 推荐填写，但如果可用 Codex Linear fallback，则不是必填
 
 第一次运行时，把暂不支持或暂未配置的数据源保持 disabled。
 

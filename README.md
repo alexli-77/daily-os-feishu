@@ -16,7 +16,7 @@ This repository is intentionally generic. It does not include personal tokens, v
   - Apple Calendar snapshots from exported local JSON.
   - Feishu calendar, tasks, docs, and IM history through `lark-cli`.
   - GitHub assigned issues through `GITHUB_TOKEN`.
-  - Linear assigned work through `LINEAR_API_KEY`.
+  - Linear assigned work through `LINEAR_API_KEY`, or Codex Linear fallback when the key is empty.
 
 ## Requirements
 
@@ -97,6 +97,12 @@ uses `.env`, process env, or `gh auth token`; Linear uses `.env`, process env,
 or available local `linear`/`linear-cli` auth commands. Found values are saved
 locally without printing the secret. Secret fields show `********` by default;
 use the eye button next to the field to reveal the local value.
+
+For Linear, `LINEAR_API_KEY` is preferred because it gives deterministic direct
+API collection. If Linear is enabled and the key is empty, the app will ask the
+local Codex CLI to use the Codex account's connected Linear app as a fallback.
+That fallback is non-blocking: missing API key shows as a warning in Checks, not
+a failure.
 
 The Service buttons only manage the macOS scheduler. `Install` creates the
 `launchd` job that runs the workflow on schedule; `Uninstall` removes that job.
