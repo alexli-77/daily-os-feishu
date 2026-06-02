@@ -7,9 +7,13 @@ export interface CommandResult {
   stderr: string;
 }
 
-export function runCommand(command: string, args: string[], options: { timeoutMs?: number; input?: string } = {}): Promise<CommandResult> {
+export function runCommand(
+  command: string,
+  args: string[],
+  options: { timeoutMs?: number; input?: string; env?: NodeJS.ProcessEnv } = {},
+): Promise<CommandResult> {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'], env: options.env });
     const timer = options.timeoutMs
       ? setTimeout(() => {
           child.kill('SIGTERM');
@@ -35,8 +39,11 @@ export function runCommand(command: string, args: string[], options: { timeoutMs
   });
 }
 
-export async function commandExists(command: string): Promise<boolean> {
-  const result = await runCommand('/usr/bin/env', ['which', command], { timeoutMs: 5000 });
+export async function commandExists(command: string, env?: NodeJS.ProcessEnv): Promise<boolean> {
+  if (command.includes('/')) {
+    const result = await runCommand(command, ['--version'], { timeoutMs: 5000, env });
+    return result.ok;
+  }
+  const result = await runCommand('/usr/bin/env', ['which', command], { timeoutMs: 5000, env });
   return result.ok;
 }
-

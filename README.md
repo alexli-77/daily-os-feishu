@@ -89,6 +89,21 @@ Feishu test message, trigger plan/review/weekly workflows, poll Feishu feedback,
 and install or uninstall the local `launchd` service. Secret fields are stored
 locally and are not echoed back in the UI.
 
+The Setup tab includes Codex configuration:
+
+- `Find Codex CLI`: searches the customer's local PATH and common install
+  locations, then saves `CODEX_BIN`.
+- `Choose CLI`: lets the user select the `codex` executable manually when PATH
+  discovery fails.
+- `Codex home`: optional. Use it when the customer keeps Codex credentials in a
+  non-default directory instead of `~/.codex`.
+- `Test Codex login`: runs `codex --version` and `codex login status` with the
+  configured values.
+
+If Codex is not authenticated, run `codex login` in Terminal for that same
+binary/home, then rerun Checks. The app does not store Codex credentials; it only
+points to the customer's local Codex installation.
+
 In the Sources tab, Feishu can be configured as multiple profiles. Each profile
 has its own `id`, `identity`, calendar/tasks/docs/IM switches, and IM chat env
 name. Profiles are shown as collapsed rows by default, with the profile `id`
