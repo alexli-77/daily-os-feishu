@@ -40,6 +40,7 @@ npm run ui
 
 在 Sources -> Feishu 可以添加一个或多个默认折叠的飞书 profile。Feishu 字段名会尽量和飞书开放平台一致：
 `App ID` 和 `App Secret` 来自应用凭证页；`Chat ID` 是 IM 会话 ID，例如 `oc_xxx`。
+当前版本中，多个 Feishu profile 共享同一套 App ID/App Secret。
 在 Sources -> Other sources 里可以分别点击 GitHub 或 Linear 的本地查找按钮，从本地标准位置导入凭证。
 密钥字段默认用星号遮住，可以用眼睛按钮显示原文。
 

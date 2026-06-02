@@ -107,11 +107,14 @@ Required Feishu values:
 Feishu source profile fields are local Daily OS settings, not Feishu Developer
 Platform credentials:
 
-- `Local source key`: local stable source ID, such as `default`, `work`, or `personal`.
 - `Display name`: local display name in the UI.
 - `Access identity`: `user` or `bot`, matching the `lark-cli --as` identity used for this source.
-- `Chat ID env var`: the env var name that contains a Feishu `Chat ID`, for example `FEISHU_CHAT_ID`; only used when IM history is enabled.
 - `Calendar`, `Tasks`, `Docs`, `IM history`: source switches. `Calendar` and `Tasks` use the selected `Access identity`; `IM history` also needs the Chat ID env value.
+- Advanced local settings: `Local source key` controls evidence names, and `Chat ID env var` names the `.env` variable containing a Feishu `Chat ID`. Most users can keep both defaults.
+
+Multiple Feishu source profiles share the same `App ID` and `App Secret` in this
+version. If you need different Feishu apps or tenants, run a separate local app
+config for now.
 
 To find a chat ID manually, use a known chat from Feishu or inspect chats with
 `lark-cli im +chat-list --as user --types group,p2p --format json` outside the
