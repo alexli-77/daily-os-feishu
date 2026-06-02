@@ -1,0 +1,46 @@
+{
+  "name": "daily-os-feishu",
+  "version": "0.1.0-alpha.0",
+  "description": "Feishu-first local Daily OS agent for Mac.",
+  "type": "module",
+  "bin": {
+    "daily-os-feishu": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "setup": "tsx src/index.ts setup",
+    "doctor": "tsx src/index.ts doctor",
+    "plan": "tsx src/index.ts plan",
+    "review": "tsx src/index.ts review",
+    "weekly": "tsx src/index.ts weekly",
+    "collect": "tsx src/index.ts collect",
+    "service:install": "tsx src/index.ts service install",
+    "service:uninstall": "tsx src/index.ts service uninstall",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "privacy:scan": "bash scripts/privacy-scan.sh",
+    "alpha:smoke": "bash scripts/alpha-smoke.sh",
+    "alpha:smoke:ci": "DAILY_OS_SKIP_AGENT_SMOKE=1 bash scripts/alpha-smoke.sh",
+    "verify": "npm run typecheck && npm run build && npm run privacy:scan"
+  },
+  "keywords": [
+    "daily-os",
+    "feishu",
+    "lark",
+    "codex",
+    "vault",
+    "personal-agent"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "js-yaml": "^4.1.0",
+    "openai": "^4.104.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.15.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0"
+  }
+}
