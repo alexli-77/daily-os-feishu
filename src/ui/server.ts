@@ -129,6 +129,10 @@ async function runAction(options: UiServerOptions, body: unknown): Promise<Recor
     return { ok: true, text: discoverLinearTokenForUi(options, env) };
   }
 
+  if (action === 'choose_vault_folder') {
+    return chooseVaultFolder();
+  }
+
   applyEnv(env);
   const config = loadConfig(options.configPath);
 
@@ -169,6 +173,18 @@ async function runAction(options: UiServerOptions, body: unknown): Promise<Recor
   }
 
   throw new Error(`Unknown action: ${action}`);
+}
+
+async function chooseVaultFolder(): Promise<Record<string, unknown>> {
+  const result = await runCommand(
+    'osascript',
+    ['-e', 'POSIX path of (choose folder with prompt "Select your vault knowledge base folder")'],
+    { timeoutMs: 30000 },
+  );
+  if (!result.ok) {
+    throw new Error('Folder selection was cancelled or unavailable.');
+  }
+  return { ok: true, path: result.stdout.trim(), text: 'Vault folder selected.' };
 }
 
 async function discoverGitHubTokenForUi(options: UiServerOptions, env: Record<string, string>): Promise<string> {
@@ -378,7 +394,10 @@ const HTML = String.raw`<!doctype html>
         <h1>Daily OS Feishu</h1>
         <p id="paths"></p>
       </div>
-      <div class="status" id="summary-status">Loading</div>
+      <div class="top-status">
+        <span class="save-status" aria-live="polite"></span>
+        <div class="status" id="summary-status" title="Local setup checks">Loading</div>
+      </div>
     </header>
 
     <main class="layout">
@@ -394,7 +413,7 @@ const HTML = String.raw`<!doctype html>
           <section class="panel active" id="section-overview">
             <div class="panel-head">
               <h2>Overview</h2>
-              <button type="button" class="secondary" data-action="doctor">Run Doctor</button>
+              <button type="button" class="secondary" data-action="doctor" title="Rerun local setup checks">Run Checks</button>
             </div>
             <div class="checks" id="checks"></div>
             <div class="actions">
@@ -412,7 +431,7 @@ const HTML = String.raw`<!doctype html>
           <section class="panel" id="section-setup">
             <div class="panel-head">
               <h2>Setup</h2>
-              <button type="submit">Save</button>
+              <div class="panel-actions"><span class="save-status" aria-live="polite"></span><button type="submit">Save</button></div>
             </div>
             <div class="grid">
               <label>Display name<input id="user-display-name" /></label>
@@ -439,14 +458,17 @@ const HTML = String.raw`<!doctype html>
           <section class="panel" id="section-sources">
             <div class="panel-head">
               <h2>Sources</h2>
-              <button type="submit">Save</button>
+              <div class="panel-actions"><span class="save-status" aria-live="polite"></span><button type="submit">Save</button></div>
             </div>
             <div class="source-list">
               <fieldset>
                 <legend>Vault</legend>
                 <label><input id="vault-enabled" type="checkbox" /> Enabled</label>
                 <label>Provider<select id="vault-provider"><option>local</option><option>remote</option></select></label>
-                <label>Local path<input id="vault-local-path" /></label>
+                <div class="form-field">
+                  <label for="vault-local-path">Local path</label>
+                  <div class="path-control"><input id="vault-local-path" /><button type="button" class="secondary compact" data-action="choose_vault_folder">Choose folder</button></div>
+                </div>
                 <label>Vault gate URL<input id="env-VAULT_GATE_URL" /></label>
                 <div class="form-field">
                   <label for="secret-VAULT_GATE_TOKEN">Vault gate token</label>
@@ -483,6 +505,7 @@ const HTML = String.raw`<!doctype html>
                     <label for="secret-LINEAR_API_KEY">Linear API key</label>
                     <div class="secret-control"><input id="secret-LINEAR_API_KEY" type="password" autocomplete="new-password" /><button type="button" class="icon-button" data-toggle-secret="LINEAR_API_KEY" aria-label="Show Linear API key">&#128065;</button></div>
                   </div>
+                  <p class="hint">Direct Linear source collection requires a Linear API key. A Codex Linear connection is not reused by this local app.</p>
                   <p class="hint status-line" id="linear-token-status"></p>
                 </div>
                 <label><input id="source-chrome" type="checkbox" /> Chrome snapshot</label>
@@ -500,7 +523,7 @@ const HTML = String.raw`<!doctype html>
           <section class="panel" id="section-workflows">
             <div class="panel-head">
               <h2>Workflows</h2>
-              <button type="submit">Save</button>
+              <div class="panel-actions"><span class="save-status" aria-live="polite"></span><button type="submit">Save</button></div>
             </div>
             <div class="workflow-grid">
               <fieldset>
@@ -570,6 +593,20 @@ body {
   padding: 1rem 1.25rem;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
+}
+
+.top-status, .panel-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: .75rem;
+}
+
+.save-status {
+  color: var(--ok);
+  font-size: .85rem;
+  min-width: 4.5rem;
+  text-align: right;
 }
 
 h1, h2, legend, p { margin: 0; }
@@ -722,6 +759,13 @@ button:disabled {
   border-radius: 0 .45rem .45rem 0;
   background: white;
   color: var(--accent);
+}
+
+.path-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: .5rem;
+  align-items: center;
 }
 
 fieldset {
@@ -951,7 +995,7 @@ function render() {
 
 function renderChecks(checks) {
   const ok = checks.filter((check) => check.ok).length;
-  $('summary-status').textContent = ok + '/' + checks.length + ' OK';
+  $('summary-status').textContent = 'Checks ' + ok + '/' + checks.length + ' OK';
   $('summary-status').className = 'status ' + (ok === checks.length ? 'ok' : 'warn');
   $('checks').innerHTML = checks.map((check) => {
     const detail = check.detail ? '<span>' + escapeHtml(check.detail) + '</span>' : '';
@@ -1014,6 +1058,7 @@ async function saveAll() {
   state = result.state;
   render();
   $('output').textContent = 'Saved local configuration.';
+  setSaveStatus('Saved');
 }
 
 function renderSecret(key) {
@@ -1059,6 +1104,12 @@ async function runAction(action) {
   $('output').textContent = 'Running ' + action + '...';
   try {
     const result = await post('/api/action', { action, send: isChecked('send-output') });
+    if (action === 'choose_vault_folder' && result.path) {
+      set('vault-local-path', result.path);
+      $('output').textContent = result.text || 'Vault folder selected.';
+      setSaveStatus('Folder selected');
+      return;
+    }
     await loadState();
     $('output').textContent = result.text || 'Done.';
     setSourceStatus(action, result.text || 'Done.');
@@ -1069,6 +1120,19 @@ async function runAction(action) {
     buttons.forEach((button) => button.disabled = false);
   }
 }
+
+function setSaveStatus(text) {
+  document.querySelectorAll('.save-status').forEach((item) => {
+    item.textContent = text;
+  });
+  window.clearTimeout(setSaveStatus.timer);
+  setSaveStatus.timer = window.setTimeout(() => {
+    document.querySelectorAll('.save-status').forEach((item) => {
+      item.textContent = '';
+    });
+  }, 3000);
+}
+setSaveStatus.timer = 0;
 
 function setSourceStatus(action, text) {
   const target = action === 'discover_github_token' ? $('github-token-status') :
