@@ -12,7 +12,7 @@ import { runWorkflow } from '../workflows/run-workflow.js';
 import { todayInTimezone } from '../utils/date.js';
 import { pollFeishuFeedback } from '../feedback/feishu-feedback.js';
 import { sendFeishuMessage } from '../connectors/lark-cli.js';
-import { installLaunchAgent, uninstallLaunchAgent } from '../service/launchd.js';
+import { getLaunchAgentStatus, installLaunchAgent, uninstallLaunchAgent } from '../service/launchd.js';
 import { runCommand } from '../utils/command.js';
 import { appendUiLog, clearUiLogs, readUiLogs } from '../storage/ui-log.js';
 
@@ -117,6 +117,7 @@ async function buildState(options: UiServerOptions): Promise<Record<string, unkn
     env: redactedEnv(env),
     doctor: checks,
     doctorText: formatDoctor(checks),
+    service: await getLaunchAgentStatus(),
   };
 }
 
@@ -213,11 +214,13 @@ async function runActionInner(options: UiServerOptions, request: Record<string, 
   }
 
   if (action === 'service_install') {
-    return { ok: true, text: `Installed launch agent: ${await installLaunchAgent()}` };
+    const plistPath = await installLaunchAgent();
+    return { ok: true, text: `Registered launch agent: ${plistPath}`, service: await getLaunchAgentStatus() };
   }
 
   if (action === 'service_uninstall') {
-    return { ok: true, text: `Removed launch agent: ${await uninstallLaunchAgent()}` };
+    const plistPath = await uninstallLaunchAgent();
+    return { ok: true, text: `Unregistered launch agent: ${plistPath}`, service: await getLaunchAgentStatus() };
   }
 
   const workflows: Record<string, WorkflowName> = {
@@ -625,8 +628,9 @@ const HTML = String.raw`<!doctype html>
               <fieldset>
                 <legend>Service</legend>
                 <p class="hint">Install creates the macOS launchd scheduler. Uninstall removes only that scheduler.</p>
-                <button type="button" data-action="service_install">Install</button>
-                <button type="button" class="secondary" data-action="service_uninstall">Uninstall</button>
+                <div class="service-status" id="service-status" aria-live="polite"></div>
+                <button type="button" id="service-install-button" data-action="service_install">Install</button>
+                <button type="button" id="service-uninstall-button" class="secondary" data-action="service_uninstall">Uninstall</button>
               </fieldset>
             </div>
           </section>
@@ -933,6 +937,21 @@ legend {
   min-height: 1.1rem;
 }
 
+.service-status {
+  border: 1px solid var(--border);
+  border-radius: .45rem;
+  padding: .55rem .65rem;
+  color: var(--muted);
+  background: #fbfcfb;
+  font-size: .85rem;
+}
+
+.service-status.registered {
+  color: var(--ok);
+  border-color: #98c8aa;
+  background: #edf7ef;
+}
+
 .manual-help {
   display: grid;
   gap: .55rem;
@@ -1140,7 +1159,26 @@ function render() {
   for (const key of ['OPENAI_API_KEY', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'VAULT_GATE_TOKEN']) renderSecret(key);
 
   renderChecks(state.doctor);
+  renderServiceStatus(state.service);
   $('output').textContent = state.doctorText || '';
+}
+
+function renderServiceStatus(service) {
+  const installButton = $('service-install-button');
+  const uninstallButton = $('service-uninstall-button');
+  const status = $('service-status');
+  if (!installButton || !uninstallButton || !status) return;
+
+  const registered = Boolean(service?.registered);
+  installButton.disabled = registered;
+  installButton.textContent = registered ? 'Registered' : 'Install';
+  uninstallButton.disabled = !registered && !service?.installed;
+  status.className = 'service-status ' + (registered ? 'registered' : '');
+  status.textContent = registered
+    ? 'Registered with macOS launchd. Scheduled workflows can run in the background.'
+    : service?.installed
+      ? 'Plist exists, but launchd is not registered. Click Install to register it again.'
+      : 'Not registered. Click Install to create and register the macOS scheduler.';
 }
 
 function renderChecks(checks) {
@@ -1275,6 +1313,7 @@ async function runAction(action) {
     setSourceStatus(action, error.message);
   } finally {
     buttons.forEach((button) => button.disabled = false);
+    renderServiceStatus(state?.service);
     if (document.querySelector('.nav-button.active')?.dataset.section === 'logs') void loadLogs();
   }
 }
