@@ -101,11 +101,13 @@ Feishu 必填项：
 
 Feishu source profile 是 Daily OS 的本地设置，不是飞书开放平台凭证：
 
-- `Local source key`：本地稳定 source ID，例如 `default`、`work` 或 `personal`。
 - `Display name`：UI 中显示的本地名称。
 - `Access identity`：`user` 或 `bot`，对应 lark-cli 调用时使用的 `--as` 身份。
-- `Chat ID env var`：保存飞书 `Chat ID` 的环境变量名，例如 `FEISHU_CHAT_ID`；仅启用 IM history 时使用。
 - `Calendar`、`Tasks`、`Docs`、`IM history`：数据源开关。`Calendar` 和 `Tasks` 使用所选 `Access identity`；`IM history` 还需要 Chat ID env 对应的值。
+- Advanced local settings：`Local source key` 控制证据名称，`Chat ID env var` 是保存飞书 `Chat ID` 的 `.env` 变量名。大多数用户保持默认即可。
+
+当前版本中，多个 Feishu source profile 共享同一套 `App ID` 和 `App Secret`。
+如果你需要接入不同飞书应用或不同租户，暂时用单独的本地 app config 运行。
 
 手动查找 chat ID：可以从已知飞书会话复制，或在 UI 外运行
 `lark-cli im +chat-list --as user --types group,p2p --format json`，再把目标会话的

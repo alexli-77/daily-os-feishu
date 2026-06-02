@@ -519,16 +519,10 @@ const HTML = String.raw`<!doctype html>
               <label>LLM provider<select id="llm-provider"><option>codex</option><option>openai</option></select></label>
               <label>Model<input id="llm-model" /></label>
               <label>Codex binary<input id="env-CODEX_BIN" /></label>
-              <label>Feishu App ID <span class="required">Required</span><input id="env-LARK_APP_ID" placeholder="cli_xxx" /></label>
-              <div class="form-field">
-                <label for="secret-LARK_APP_SECRET">Feishu App Secret <span class="required">Required</span></label>
-                <div class="secret-control"><input id="secret-LARK_APP_SECRET" type="password" autocomplete="new-password" /><button type="button" class="icon-button" data-toggle-secret="LARK_APP_SECRET" aria-label="Show Feishu App Secret">&#128065;</button></div>
-              </div>
               <div class="form-field">
                 <label for="secret-OPENAI_API_KEY">OpenAI API key</label>
                 <div class="secret-control"><input id="secret-OPENAI_API_KEY" type="password" autocomplete="new-password" /><button type="button" class="icon-button" data-toggle-secret="OPENAI_API_KEY" aria-label="Show OpenAI API key">&#128065;</button></div>
               </div>
-              <label>Feishu Chat ID <span class="required">Required when sending or reading IM</span><input id="env-FEISHU_CHAT_ID" placeholder="oc_xxx" /></label>
               <label>Feishu send mode<select id="output-send-mode"><option>markdown</option><option>text</option></select></label>
               <label>Feedback prefix<input id="feedback-prefix" /></label>
               <label>Feedback poll limit<input id="feedback-poll-limit" type="number" min="1" max="100" /></label>
@@ -563,9 +557,18 @@ const HTML = String.raw`<!doctype html>
               <fieldset>
                 <legend>Feishu</legend>
                 <label><input id="source-feishu-enabled" type="checkbox" /> Enabled</label>
+                <div class="source-block">
+                  <p class="hint"><strong>Feishu Developer Platform credentials.</strong> One App ID/App Secret pair is used for all Feishu source profiles in this app.</p>
+                  <label>Feishu App ID <span class="required">Required</span><input id="env-LARK_APP_ID" placeholder="cli_xxx" /></label>
+                  <div class="form-field">
+                    <label for="secret-LARK_APP_SECRET">Feishu App Secret <span class="required">Required</span></label>
+                    <div class="secret-control"><input id="secret-LARK_APP_SECRET" type="password" autocomplete="new-password" /><button type="button" class="icon-button" data-toggle-secret="LARK_APP_SECRET" aria-label="Show Feishu App Secret">&#128065;</button></div>
+                  </div>
+                  <label>Feishu Chat ID <span class="required">Required for output, feedback, or IM history</span><input id="env-FEISHU_CHAT_ID" placeholder="oc_xxx" /></label>
+                </div>
                 <div class="manual-help">
-                  <p class="hint"><strong>Required Feishu setup:</strong> App ID and App Secret from Feishu Developer Platform app credentials, plus lark-cli authentication. Chat ID is required only for output, feedback, or IM history.</p>
-                  <p class="hint">Find App ID and App Secret in Feishu Developer Platform: app details / credentials and basic info. Find Chat ID from a known chat or with lark-cli IM commands, then fill the chosen oc_xxx value in .env.</p>
+                  <p class="hint"><strong>How multiple Feishu sources work:</strong> add multiple profiles below when you want different calendars/tasks/docs/IM switches under the same Feishu app credentials.</p>
+                  <p class="hint">Different App ID/App Secret per profile is not supported in this version. For separate Feishu apps or tenants, run a separate app config.</p>
                 </div>
                 <div id="feishu-profiles" class="profile-list"></div>
                 <button type="button" class="secondary" id="add-feishu-profile">Add Feishu profile</button>
@@ -927,6 +930,20 @@ legend {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
   gap: .5rem;
+}
+.advanced-settings {
+  border: 1px dashed var(--border);
+  border-radius: .45rem;
+  padding: .55rem .65rem;
+}
+.advanced-settings summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: .85rem;
+  font-weight: 600;
+}
+.advanced-settings[open] summary {
+  margin-bottom: .65rem;
 }
 
 .source-block {
@@ -1451,14 +1468,8 @@ function renderFeishuProfiles(profiles) {
     '<span class="profile-meta">' + escapeHtml(profileMeta(profile)) + '</span></summary>' +
     '<div class="profile-body">' +
     '<div class="grid">' +
-    labelInput('Local source key', profileFieldId(index, 'id'), profile.id) +
     labelInput('Display name', profileFieldId(index, 'label'), profile.label) +
     labelSelect('Access identity', profileFieldId(index, 'identity'), profile.identity, ['user', 'bot']) +
-    labelInput('Chat ID env var', profileFieldId(index, 'chat-env'), profile.im_history.chat_id_env) +
-    '</div>' +
-    '<div class="manual-help">' +
-    '<p class="hint"><strong>Local source profile:</strong> these fields are local Daily OS settings, not Feishu Developer Platform credentials. Keep the defaults unless you are configuring multiple Feishu sources.</p>' +
-    '<p class="hint">Access identity maps to lark-cli --as user/bot. Chat ID env var is only used when IM history is enabled; it names the .env variable that contains a Feishu Chat ID such as FEISHU_CHAT_ID=oc_xxx.</p>' +
     '</div>' +
     '<div class="profile-options">' +
     labelCheck('Enabled', profileFieldId(index, 'enabled'), profile.enabled) +
@@ -1472,6 +1483,14 @@ function renderFeishuProfiles(profiles) {
     labelNumber('Task pages', profileFieldId(index, 'task-pages'), profile.tasks.page_limit, 1, 20) +
     labelNumber('IM limit', profileFieldId(index, 'im-limit'), profile.im_history.limit, 1, 100) +
     '</div>' +
+    '<details class="advanced-settings">' +
+    '<summary>Advanced local settings</summary>' +
+    '<div class="grid">' +
+    labelInput('Local source key', profileFieldId(index, 'id'), profile.id) +
+    labelInput('Chat ID env var', profileFieldId(index, 'chat-env'), profile.im_history.chat_id_env) +
+    '</div>' +
+    '<p class="hint">These are Daily OS local settings. Local source key controls evidence names. Chat ID env var names the .env variable containing a Feishu Chat ID, and is only used when IM history is enabled.</p>' +
+    '</details>' +
     '<button type="button" class="secondary" data-remove-feishu-profile="' + index + '">Remove profile</button>' +
     '</div></details>').join('');
 
@@ -1487,7 +1506,7 @@ function renderFeishuProfiles(profiles) {
 }
 
 function profileMeta(profile) {
-  const parts = ['id: ' + (profile.id || 'default'), profile.identity || 'user'];
+  const parts = [profile.identity || 'user'];
   const enabled = [];
   if (profile.calendar?.enabled) enabled.push('calendar');
   if (profile.tasks?.enabled) enabled.push('tasks');

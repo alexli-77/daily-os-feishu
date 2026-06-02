@@ -43,7 +43,8 @@ fields are saved locally and are not echoed back in the page.
 Use Sources -> Feishu to add one or more collapsed Feishu profiles. Feishu field
 names mirror Feishu Developer Platform where applicable: `App ID` and
 `App Secret` come from app credentials; `Chat ID` is an IM conversation ID such
-as `oc_xxx`. Use Sources -> Other sources to import GitHub or Linear
+as `oc_xxx`. Multiple Feishu profiles share the same App ID/App Secret in this
+version. Use Sources -> Other sources to import GitHub or Linear
 credentials from local standard locations with the per-source discovery buttons
 when available. Secret fields are masked by default and can be revealed with the
 eye button.
