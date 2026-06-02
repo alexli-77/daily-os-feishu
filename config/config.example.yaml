@@ -111,6 +111,10 @@ sources:
   linear:
     enabled: false
     query: "assignee = me and state.type != 'completed'"
+    projects_allowlist: []
+    projects_blocklist: []
+    teams_allowlist: []
+    teams_blocklist: []
 
   local_files:
     enabled: false
