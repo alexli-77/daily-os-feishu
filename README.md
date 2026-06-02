@@ -51,6 +51,7 @@ Run workflows manually. Use `--no-send` for the first generated result:
 npm run plan -- --no-send
 npm run review
 npm run weekly
+npm run feedback:poll
 ```
 
 Install the macOS scheduler:
@@ -107,6 +108,35 @@ FEISHU_CHAT_ID=
 ```
 
 Use `output.feishu.identity` to choose `bot` or `user`.
+
+## Feishu Feedback Commands
+
+The alpha can poll a configured Feishu chat for lightweight commands. Enable:
+
+```yaml
+feedback:
+  feishu:
+    enabled: true
+    command_prefix: "daily-os"
+```
+
+Then run:
+
+```bash
+npm run feedback:poll
+```
+
+Supported messages:
+
+- `daily-os status`
+- `daily-os remember <text>`
+- `daily-os feedback <text>`
+- `daily-os plan`
+- `daily-os review`
+- `daily-os weekly`
+
+`remember` appends to long-term memory. `feedback` appends to the local feedback
+log. Both files live under ignored `data/` paths by default.
 
 ## Privacy
 

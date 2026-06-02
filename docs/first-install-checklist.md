@@ -61,6 +61,15 @@ If the plan output looks correct, send one real message:
 npm run plan
 ```
 
+Optional Feishu feedback loop:
+
+```bash
+npm run feedback:poll -- --no-send
+```
+
+Then enable `feedback.feishu.enabled`, send `daily-os status` in the configured
+chat, and run `npm run feedback:poll` to verify that the bot replies.
+
 ## 5. Privacy Gate
 
 Before opening a PR or publishing:

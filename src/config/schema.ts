@@ -33,6 +33,28 @@ export const AppConfigSchema = z.object({
       send_mode: z.enum(['markdown', 'text']).default('markdown'),
     }),
   }),
+  feedback: z
+    .object({
+      feishu: enabled.extend({
+        chat_id_env: z.string().default('FEISHU_CHAT_ID'),
+        identity: z.enum(['bot', 'user']).default('bot'),
+        command_prefix: z.string().default('daily-os'),
+        poll_limit: z.number().int().positive().max(100).default(20),
+        state_path: z.string().default('./data/memory/feishu-feedback-state.json'),
+        log_path: z.string().default('./data/memory/feishu-feedback.md'),
+      }),
+    })
+    .default({
+      feishu: {
+        enabled: false,
+        chat_id_env: 'FEISHU_CHAT_ID',
+        identity: 'bot',
+        command_prefix: 'daily-os',
+        poll_limit: 20,
+        state_path: './data/memory/feishu-feedback-state.json',
+        log_path: './data/memory/feishu-feedback.md',
+      },
+    }),
   sources: z.object({
     vault: enabled.extend({
       provider: z.enum(['remote', 'local']).default('remote'),

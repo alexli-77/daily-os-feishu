@@ -4,17 +4,18 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-if ! command -v rg >/dev/null 2>&1; then
-  echo "privacy-scan requires ripgrep (rg)." >&2
-  exit 1
-fi
-
 FILES_FILE="$(mktemp)"
 trap 'rm -f "$FILES_FILE"' EXIT
 
-git ls-files --cached --others --exclude-standard |
-  rg -v '^(node_modules|dist|logs|data|\.git)/' |
-  rg -v '^scripts/privacy-scan\.sh$' >"$FILES_FILE" || true
+if command -v rg >/dev/null 2>&1; then
+  git ls-files --cached --others --exclude-standard |
+    rg -v '^(node_modules|dist|logs|data|\.git)/' |
+    rg -v '^scripts/privacy-scan\.sh$' >"$FILES_FILE" || true
+else
+  git ls-files --cached --others --exclude-standard |
+    grep -Ev '^(node_modules|dist|logs|data|\.git)/' |
+    grep -Ev '^scripts/privacy-scan\.sh$' >"$FILES_FILE" || true
+fi
 
 if [ ! -s "$FILES_FILE" ]; then
   echo "No files to scan."
@@ -33,7 +34,12 @@ patterns=(
 failed=0
 for pattern in "${patterns[@]}"; do
   while IFS= read -r file; do
-    if rg -n --hidden "$pattern" -- "$file"; then
+    if command -v rg >/dev/null 2>&1; then
+      scan_command=(rg -n --hidden "$pattern" -- "$file")
+    else
+      scan_command=(grep -nE "$pattern" "$file")
+    fi
+    if "${scan_command[@]}"; then
       failed=1
     fi
   done <"$FILES_FILE"
