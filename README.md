@@ -7,6 +7,7 @@ This repository is intentionally generic. It does not include personal tokens, v
 ## First Version Scope
 
 - Runs on macOS as a CLI or a `launchd` background service.
+- Includes a local browser UI for setup, source toggles, checks, and manual triggers.
 - Sends output to Feishu through `lark-cli`.
 - Uses local Codex CLI by default, with OpenAI API as an optional fallback.
 - Supports configurable sources:
@@ -31,12 +32,16 @@ This repository is intentionally generic. It does not include personal tokens, v
 npm ci
 npm run alpha:smoke:ci
 npm run setup
+npm run ui
 ```
 
 Edit:
 
 - `.env`
 - `config/config.yaml`
+
+You can also edit the common fields in the local UI. It writes only to ignored
+local files.
 
 Then check the installation:
 
@@ -72,6 +77,17 @@ npm run service:uninstall
 Copy `config/config.example.yaml` to `config/config.yaml`. The checked-in example shows every supported source and output option.
 
 Secrets are read from `.env`; use `.env.example` as the template.
+
+The local UI starts with:
+
+```bash
+npm run ui
+```
+
+It can save common config fields, save `.env` values, run `doctor`, send a
+Feishu test message, trigger plan/review/weekly workflows, poll Feishu feedback,
+and install or uninstall the local `launchd` service. Secret fields are stored
+locally and are not echoed back in the UI.
 
 For the full first-install checklist, see
 [`docs/first-install-checklist.md`](docs/first-install-checklist.md).

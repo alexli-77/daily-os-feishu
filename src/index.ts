@@ -10,6 +10,7 @@ import { ensureMemoryFiles } from './storage/memory.js';
 import { formatDoctor, runDoctor } from './cli/doctor.js';
 import { installLaunchAgent, runScheduler, uninstallLaunchAgent } from './service/launchd.js';
 import { pollFeishuFeedback } from './feedback/feishu-feedback.js';
+import { startUiServer } from './ui/server.js';
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
@@ -20,6 +21,17 @@ async function main(): Promise<void> {
     return;
   }
   if (command === 'help' || command === '--help' || command === '-h') usage(0);
+
+  if (command === 'ui') {
+    await startUiServer({
+      configPath: options.configPath,
+      envPath: options.envPath,
+      host: options.host,
+      port: options.port,
+      open: options.openUi,
+    });
+    return;
+  }
 
   loadDotEnv(options.envPath);
   const config = loadConfig(options.configPath);
@@ -75,6 +87,9 @@ interface CliOptions {
   configPath: string;
   envPath: string;
   send: boolean;
+  host: string;
+  port: number;
+  openUi: boolean;
 }
 
 function parseArgs(args: string[]): CliOptions {
@@ -82,11 +97,24 @@ function parseArgs(args: string[]): CliOptions {
   let configPath = process.env.DAILY_OS_CONFIG || 'config/config.yaml';
   let envPath = process.env.DAILY_OS_ENV || '.env';
   let send = true;
+  let host = process.env.DAILY_OS_UI_HOST || '127.0.0.1';
+  let port = Number(process.env.DAILY_OS_UI_PORT || 14573);
+  let openUi = true;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === '--no-send') {
       send = false;
+    } else if (arg === '--no-open') {
+      openUi = false;
+    } else if (arg === '--host') {
+      host = requireValue(args, ++index, '--host');
+    } else if (arg.startsWith('--host=')) {
+      host = arg.slice('--host='.length);
+    } else if (arg === '--port') {
+      port = Number(requireValue(args, ++index, '--port'));
+    } else if (arg.startsWith('--port=')) {
+      port = Number(arg.slice('--port='.length));
     } else if (arg === '--config') {
       configPath = requireValue(args, ++index, '--config');
     } else if (arg.startsWith('--config=')) {
@@ -100,12 +128,19 @@ function parseArgs(args: string[]): CliOptions {
     }
   }
 
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new Error(`Invalid --port value: ${port}`);
+  }
+
   return {
     command: positional[0] || 'help',
     subcommand: positional[1],
     configPath,
     envPath,
     send,
+    host,
+    port,
+    openUi,
   };
 }
 
@@ -143,6 +178,7 @@ Commands:
   setup              Create local config files and data directories
   doctor             Check local dependencies and required env vars
   collect            Print collected evidence as JSON
+  ui                 Open a local setup and trigger dashboard
   plan [--no-send]   Run daily planning workflow now
   review [--no-send] Run daily review workflow now
   weekly [--no-send] Run weekly review workflow now
@@ -154,6 +190,9 @@ Commands:
 Options:
   --config <path>    Use a config file other than config/config.yaml
   --env <path>       Load env vars from a file other than .env
+  --host <host>      Host for the local UI, default 127.0.0.1
+  --port <port>      Port for the local UI, default 14573
+  --no-open          Start the local UI without opening a browser
   --no-send          Generate workflow output without sending to Feishu
 `);
   process.exit(code);

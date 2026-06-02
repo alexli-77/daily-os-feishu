@@ -26,6 +26,7 @@ lark-cli --help
 
 ```bash
 npm run setup
+npm run ui
 ```
 
 只编辑这些被 git 忽略的本地文件：
@@ -33,6 +34,9 @@ npm run setup
 - `.env`
 - `config/config.yaml`
 - `data/` 下的文件
+
+本地 UI 可以直接编辑常用配置和 `.env` 值。密钥字段只会保存在本地，
+页面不会回显原文。
 
 ## 3. 必填本地配置
 
@@ -90,5 +94,5 @@ git status --short
 
 - v0 只支持飞书作为 IM 输出。
 - v0 不要求远程 vault-gate。
-- CLI alpha 不依赖 Mac app shell。
-- 飞书反馈命令是后续任务，不属于本次 alpha gate。
+- 当前 UI 是本地浏览器 dashboard，还不是已签名的 `.app` 或 DMG。
+- 飞书反馈命令通过轮询支持，还不是 webhook。

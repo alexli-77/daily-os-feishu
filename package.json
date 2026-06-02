@@ -9,6 +9,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/index.ts",
+    "ui": "tsx src/index.ts ui",
     "setup": "tsx src/index.ts setup",
     "doctor": "tsx src/index.ts doctor",
     "plan": "tsx src/index.ts plan",
