@@ -89,6 +89,16 @@ Feishu test message, trigger plan/review/weekly workflows, poll Feishu feedback,
 and install or uninstall the local `launchd` service. Secret fields are stored
 locally and are not echoed back in the UI.
 
+In the Sources tab, Feishu can be configured as multiple profiles. Each profile
+has its own `id`, `identity`, calendar/tasks/docs/IM switches, and IM chat env
+name. The Other sources section can look for local GitHub and Linear credentials:
+GitHub uses `.env`, process env, or `gh auth token`; Linear uses `.env` or
+process env. Found values are saved locally without printing the secret.
+
+The Service buttons only manage the macOS scheduler. `Install` creates the
+`launchd` job that runs the workflow on schedule; `Uninstall` removes that job.
+They do not install or remove the project itself.
+
 For the full first-install checklist, see
 [`docs/first-install-checklist.md`](docs/first-install-checklist.md).
 

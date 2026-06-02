@@ -15,55 +15,109 @@ export async function collectFeishu(config: AppConfig, date: string): Promise<Re
   if (!cfg.enabled) return { feishu: { state: 'disabled' } };
   const out: Record<string, EvidenceSource> = {};
 
-  if (cfg.calendar.enabled) {
-    const end = addDays(date, cfg.calendar.days);
-    out.feishu_calendar = await runLarkJson(['calendar', '+agenda', '--start', date, '--end', end, '--format', 'json', '--as', 'user']);
-  } else {
-    out.feishu_calendar = { state: 'disabled' };
+  if (cfg.profiles.length > 0) {
+    for (const profile of cfg.profiles) {
+      Object.assign(out, await collectFeishuProfile(profile, date));
+    }
+    return out;
   }
 
-  if (cfg.tasks.enabled) {
-    const args = ['task', '+get-my-tasks', '--page-limit', String(cfg.tasks.page_limit), '--format', 'json', '--as', 'user'];
-    if (!cfg.tasks.include_completed) args.push('--complete=false');
-    out.feishu_tasks = await runLarkJson(args);
-  } else {
-    out.feishu_tasks = { state: 'disabled' };
+  return collectFeishuProfile(
+    {
+      id: 'default',
+      label: 'Default',
+      enabled: true,
+      identity: 'user',
+      calendar: cfg.calendar,
+      tasks: cfg.tasks,
+      docs: cfg.docs,
+      im_history: cfg.im_history,
+    },
+    date,
+  );
+}
+
+type FeishuProfileConfig = AppConfig['sources']['feishu']['profiles'][number];
+
+async function collectFeishuProfile(profile: FeishuProfileConfig, date: string): Promise<Record<string, EvidenceSource>> {
+  const id = sanitizeSourceId(profile.id || profile.label || 'default');
+  const prefix = id === 'default' ? 'feishu' : `feishu_${id}`;
+  const out: Record<string, EvidenceSource> = {};
+
+  if (!profile.enabled) {
+    out[prefix] = { state: 'disabled' };
+    return out;
   }
 
-  if (cfg.docs.enabled) {
+  if (profile.calendar.enabled) {
+    const end = addDays(date, profile.calendar.days);
+    out[`${prefix}_calendar`] = await runLarkJson([
+      'calendar',
+      '+agenda',
+      '--start',
+      date,
+      '--end',
+      end,
+      '--format',
+      'json',
+      '--as',
+      profile.identity,
+    ]);
+  } else {
+    out[`${prefix}_calendar`] = { state: 'disabled' };
+  }
+
+  if (profile.tasks.enabled) {
+    const args = ['task', '+get-my-tasks', '--page-limit', String(profile.tasks.page_limit), '--format', 'json', '--as', profile.identity];
+    if (!profile.tasks.include_completed) args.push('--complete=false');
+    out[`${prefix}_tasks`] = await runLarkJson(args);
+  } else {
+    out[`${prefix}_tasks`] = { state: 'disabled' };
+  }
+
+  if (profile.docs.enabled) {
     const docs: Record<string, unknown> = {};
-    for (const doc of cfg.docs.documents) {
-      const result = await runLarkJson(['docs', '+fetch', '--doc', doc.token, '--as', 'user']);
+    for (const doc of profile.docs.documents) {
+      const result = await runLarkJson(['docs', '+fetch', '--doc', doc.token, '--as', profile.identity]);
       docs[doc.name] = result;
     }
-    out.feishu_docs = sourceFromResult(docs);
+    out[`${prefix}_docs`] = sourceFromResult(docs);
   } else {
-    out.feishu_docs = { state: 'disabled' };
+    out[`${prefix}_docs`] = { state: 'disabled' };
   }
 
-  if (cfg.im_history.enabled) {
-    const chatId = process.env[cfg.im_history.chat_id_env];
-    out.feishu_im_history = chatId
+  if (profile.im_history.enabled) {
+    const chatId = process.env[profile.im_history.chat_id_env];
+    out[`${prefix}_im_history`] = chatId
       ? await runLarkJson([
           'im',
           '+chat-messages-list',
           '--chat-id',
           chatId,
           '--page-size',
-          String(cfg.im_history.limit),
+          String(profile.im_history.limit),
           '--sort',
           'desc',
           '--format',
           'json',
           '--as',
-          'user',
+          profile.identity,
         ])
-      : { state: 'missing', detail: `${cfg.im_history.chat_id_env} is not configured` };
+      : { state: 'missing', detail: `${profile.im_history.chat_id_env} is not configured` };
   } else {
-    out.feishu_im_history = { state: 'disabled' };
+    out[`${prefix}_im_history`] = { state: 'disabled' };
   }
 
   return out;
+}
+
+function sanitizeSourceId(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 40) || 'default';
 }
 
 export interface FeishuMessage {

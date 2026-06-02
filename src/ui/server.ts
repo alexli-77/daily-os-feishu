@@ -1,5 +1,6 @@
 import http from 'node:http';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import { AppConfigSchema, type AppConfig, type WorkflowName } from '../config/schema.js';
@@ -111,6 +112,11 @@ async function runAction(options: UiServerOptions, body: unknown): Promise<Recor
   const action = String(request.action || '');
   const sendOutput = request.send !== false;
   const env = readEnvFile(options.envPath);
+
+  if (action === 'discover_tokens') {
+    return { ok: true, text: await discoverLocalTokens(options, env) };
+  }
+
   applyEnv(env);
   const config = loadConfig(options.configPath);
 
@@ -151,6 +157,50 @@ async function runAction(options: UiServerOptions, body: unknown): Promise<Recor
   }
 
   throw new Error(`Unknown action: ${action}`);
+}
+
+async function discoverLocalTokens(options: UiServerOptions, env: Record<string, string>): Promise<string> {
+  const next = { ...env };
+  const notes: string[] = [];
+
+  const github = await discoverGitHubToken(env);
+  if (github.value) {
+    next.GITHUB_TOKEN = github.value;
+    notes.push(`GitHub token found from ${github.source} and saved to ${path.resolve(options.envPath)}.`);
+  } else {
+    notes.push('GitHub token not found. Run `gh auth login`, then try again, or paste GITHUB_TOKEN manually.');
+  }
+
+  const linear = discoverEnvToken('LINEAR_API_KEY', env);
+  if (linear.value) {
+    next.LINEAR_API_KEY = linear.value;
+    notes.push(`Linear API key found from ${linear.source} and saved to ${path.resolve(options.envPath)}.`);
+  } else {
+    notes.push('Linear API key not found. Create one in Linear settings and paste LINEAR_API_KEY manually.');
+  }
+
+  writeEnvFile(options.envPath, next);
+  applyEnv(next);
+  return notes.join('\n');
+}
+
+async function discoverGitHubToken(env: Record<string, string>): Promise<{ value?: string; source: string }> {
+  const local = discoverEnvToken('GITHUB_TOKEN', env);
+  if (local.value) return local;
+
+  const result = await runCommand('gh', ['auth', 'token'], { timeoutMs: 10000 });
+  const token = result.ok ? result.stdout.trim() : '';
+  if (token) return { value: token, source: 'gh auth token' };
+
+  const hostsPath = path.join(os.homedir(), '.config', 'gh', 'hosts.yml');
+  if (fs.existsSync(hostsPath)) return { source: hostsPath };
+  return { source: 'local env or GitHub CLI' };
+}
+
+function discoverEnvToken(key: string, env: Record<string, string>): { value?: string; source: string } {
+  if (env[key]) return { value: env[key], source: 'configured .env' };
+  if (process.env[key]) return { value: process.env[key], source: `process.env.${key}` };
+  return { source: `process.env.${key}` };
 }
 
 function ensureLocalFiles(configPath: string, envPath: string): void {
@@ -340,13 +390,13 @@ const HTML = String.raw`<!doctype html>
               <fieldset>
                 <legend>Feishu</legend>
                 <label><input id="source-feishu-enabled" type="checkbox" /> Enabled</label>
-                <label><input id="source-feishu-calendar" type="checkbox" /> Calendar</label>
-                <label><input id="source-feishu-tasks" type="checkbox" /> Tasks</label>
-                <label><input id="source-feishu-im" type="checkbox" /> IM history</label>
+                <div id="feishu-profiles" class="profile-list"></div>
+                <button type="button" class="secondary" id="add-feishu-profile">Add Feishu profile</button>
               </fieldset>
 
               <fieldset>
                 <legend>Other sources</legend>
+                <button type="button" class="secondary" data-action="discover_tokens">Find local tokens</button>
                 <label><input id="source-github" type="checkbox" /> GitHub</label>
                 <label>GitHub token<input id="secret-GITHUB_TOKEN" type="password" autocomplete="new-password" /></label>
                 <label><input id="source-linear" type="checkbox" /> Linear</label>
@@ -390,6 +440,7 @@ const HTML = String.raw`<!doctype html>
               </fieldset>
               <fieldset>
                 <legend>Service</legend>
+                <p class="hint">Install creates the macOS launchd scheduler. Uninstall removes only that scheduler.</p>
                 <button type="button" data-action="service_install">Install</button>
                 <button type="button" class="secondary" data-action="service_uninstall">Uninstall</button>
               </fieldset>
@@ -530,6 +581,12 @@ input, select, textarea {
   padding: .55rem .65rem;
 }
 
+input[type="checkbox"] {
+  width: auto;
+  min-width: 1rem;
+  height: 1rem;
+}
+
 textarea {
   min-height: 8rem;
   resize: vertical;
@@ -566,6 +623,33 @@ fieldset {
 legend {
   padding: 0 .35rem;
   font-weight: 700;
+}
+
+.profile-list {
+  display: grid;
+  gap: .75rem;
+}
+.profile {
+  border: 1px solid var(--border);
+  border-radius: .5rem;
+  padding: .75rem;
+  display: grid;
+  gap: .65rem;
+  background: #fbfcfb;
+}
+.profile-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+}
+.profile-title {
+  font-weight: 700;
+}
+.profile-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: .5rem;
 }
 
 .toggles, .actions {
@@ -641,6 +725,13 @@ document.querySelectorAll('[data-action]').forEach((button) => {
   button.addEventListener('click', () => runAction(button.dataset.action));
 });
 
+$('add-feishu-profile').addEventListener('click', () => {
+  const profiles = getFeishuProfilesForUi(state.config);
+  profiles.push(defaultFeishuProfile(profiles.length + 1));
+  state.config.sources.feishu.profiles = profiles;
+  renderFeishuProfiles(profiles);
+});
+
 $('config-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   await saveAll();
@@ -679,9 +770,8 @@ function render() {
   set('env-VAULT_GATE_URL', state.env.VAULT_GATE_URL);
 
   checked('source-feishu-enabled', config.sources.feishu.enabled);
-  checked('source-feishu-calendar', config.sources.feishu.calendar.enabled);
-  checked('source-feishu-tasks', config.sources.feishu.tasks.enabled);
-  checked('source-feishu-im', config.sources.feishu.im_history.enabled);
+  config.sources.feishu.profiles = getFeishuProfilesForUi(config);
+  renderFeishuProfiles(config.sources.feishu.profiles);
   checked('source-github', config.sources.github.enabled);
   checked('source-linear', config.sources.linear.enabled);
   checked('source-chrome', config.sources.chrome_snapshot.enabled);
@@ -735,9 +825,14 @@ async function saveAll() {
   next.sources.vault.provider = value('vault-provider');
   next.sources.vault.local_path = value('vault-local-path');
   next.sources.feishu.enabled = isChecked('source-feishu-enabled');
-  next.sources.feishu.calendar.enabled = isChecked('source-feishu-calendar');
-  next.sources.feishu.tasks.enabled = isChecked('source-feishu-tasks');
-  next.sources.feishu.im_history.enabled = isChecked('source-feishu-im');
+  next.sources.feishu.profiles = readFeishuProfiles();
+  if (next.sources.feishu.profiles.length > 0) {
+    const first = next.sources.feishu.profiles[0];
+    next.sources.feishu.calendar = first.calendar;
+    next.sources.feishu.tasks = first.tasks;
+    next.sources.feishu.docs = first.docs;
+    next.sources.feishu.im_history = first.im_history;
+  }
   next.sources.github.enabled = isChecked('source-github');
   next.sources.linear.enabled = isChecked('source-linear');
   next.sources.chrome_snapshot.enabled = isChecked('source-chrome');
@@ -800,6 +895,125 @@ function parseFiles(text) {
     const [name, ...rest] = line.split('|').map((part) => part.trim());
     return { name, path: rest.join('|') };
   }).filter((file) => file.name && file.path);
+}
+
+function getFeishuProfilesForUi(config) {
+  if (Array.isArray(config.sources.feishu.profiles) && config.sources.feishu.profiles.length > 0) {
+    return structuredClone(config.sources.feishu.profiles);
+  }
+  return [{
+    id: 'default',
+    label: 'Default',
+    enabled: true,
+    identity: 'user',
+    calendar: structuredClone(config.sources.feishu.calendar),
+    tasks: structuredClone(config.sources.feishu.tasks),
+    docs: structuredClone(config.sources.feishu.docs),
+    im_history: structuredClone(config.sources.feishu.im_history),
+  }];
+}
+
+function defaultFeishuProfile(index) {
+  return {
+    id: 'feishu_' + index,
+    label: 'Feishu ' + index,
+    enabled: true,
+    identity: 'user',
+    calendar: { enabled: false, days: 1 },
+    tasks: { enabled: false, include_completed: false, page_limit: 5 },
+    docs: { enabled: false, documents: [] },
+    im_history: { enabled: false, chat_id_env: 'FEISHU_CHAT_ID', limit: 30 },
+  };
+}
+
+function renderFeishuProfiles(profiles) {
+  $('feishu-profiles').innerHTML = profiles.map((profile, index) => '<div class="profile" data-profile-index="' + index + '">' +
+    '<div class="profile-head"><span class="profile-title">' + escapeHtml(profile.label || profile.id || ('Feishu ' + (index + 1))) + '</span>' +
+    '<button type="button" class="secondary" data-remove-feishu-profile="' + index + '">Remove</button></div>' +
+    '<div class="grid">' +
+    labelInput('ID', profileFieldId(index, 'id'), profile.id) +
+    labelInput('Label', profileFieldId(index, 'label'), profile.label) +
+    labelSelect('Identity', profileFieldId(index, 'identity'), profile.identity, ['user', 'bot']) +
+    labelInput('IM chat env', profileFieldId(index, 'chat-env'), profile.im_history.chat_id_env) +
+    '</div>' +
+    '<div class="profile-options">' +
+    labelCheck('Enabled', profileFieldId(index, 'enabled'), profile.enabled) +
+    labelCheck('Calendar', profileFieldId(index, 'calendar'), profile.calendar.enabled) +
+    labelCheck('Tasks', profileFieldId(index, 'tasks'), profile.tasks.enabled) +
+    labelCheck('Docs', profileFieldId(index, 'docs'), profile.docs.enabled) +
+    labelCheck('IM history', profileFieldId(index, 'im'), profile.im_history.enabled) +
+    '</div>' +
+    '<div class="grid">' +
+    labelNumber('Calendar days', profileFieldId(index, 'calendar-days'), profile.calendar.days, 1, 30) +
+    labelNumber('Task pages', profileFieldId(index, 'task-pages'), profile.tasks.page_limit, 1, 20) +
+    labelNumber('IM limit', profileFieldId(index, 'im-limit'), profile.im_history.limit, 1, 100) +
+    '</div>' +
+    '</div>').join('');
+
+  document.querySelectorAll('[data-remove-feishu-profile]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const next = readFeishuProfiles();
+      next.splice(Number(button.dataset.removeFeishuProfile), 1);
+      state.config.sources.feishu.profiles = next;
+      renderFeishuProfiles(next);
+    });
+  });
+}
+
+function readFeishuProfiles() {
+  return [...document.querySelectorAll('[data-profile-index]')].map((card) => {
+    const index = Number(card.dataset.profileIndex);
+    const existing = state.config.sources.feishu.profiles?.[index] || {};
+    return {
+      id: value(profileFieldId(index, 'id')) || 'feishu_' + (index + 1),
+      label: value(profileFieldId(index, 'label')) || 'Feishu ' + (index + 1),
+      enabled: isChecked(profileFieldId(index, 'enabled')),
+      identity: value(profileFieldId(index, 'identity')) || 'user',
+      calendar: {
+        enabled: isChecked(profileFieldId(index, 'calendar')),
+        days: Number(value(profileFieldId(index, 'calendar-days')) || 1),
+      },
+      tasks: {
+        enabled: isChecked(profileFieldId(index, 'tasks')),
+        include_completed: Boolean(existing.tasks?.include_completed),
+        page_limit: Number(value(profileFieldId(index, 'task-pages')) || 5),
+      },
+      docs: {
+        enabled: isChecked(profileFieldId(index, 'docs')),
+        documents: existing.docs?.documents || [],
+      },
+      im_history: {
+        enabled: isChecked(profileFieldId(index, 'im')),
+        chat_id_env: value(profileFieldId(index, 'chat-env')) || 'FEISHU_CHAT_ID',
+        limit: Number(value(profileFieldId(index, 'im-limit')) || 30),
+      },
+    };
+  });
+}
+
+function profileFieldId(index, name) {
+  return 'feishu-profile-' + index + '-' + name;
+}
+
+function labelInput(label, id, currentValue) {
+  return '<label>' + escapeHtml(label) + '<input id="' + id + '" value="' + escapeAttr(currentValue || '') + '" /></label>';
+}
+
+function labelNumber(label, id, currentValue, min, max) {
+  return '<label>' + escapeHtml(label) + '<input id="' + id + '" type="number" min="' + min + '" max="' + max + '" value="' + escapeAttr(currentValue || '') + '" /></label>';
+}
+
+function labelSelect(label, id, currentValue, options) {
+  return '<label>' + escapeHtml(label) + '<select id="' + id + '">' + options.map((option) =>
+    '<option ' + (option === currentValue ? 'selected' : '') + '>' + escapeHtml(option) + '</option>').join('') + '</select></label>';
+}
+
+function labelCheck(label, id, currentValue) {
+  return '<label><input id="' + id + '" type="checkbox" ' + (currentValue ? 'checked' : '') + ' /> ' + escapeHtml(label) + '</label>';
+}
+
+function escapeAttr(text) {
+  return escapeHtml(text).replace(/\x60/g, '&#96;');
 }
 
 function escapeHtml(text) {

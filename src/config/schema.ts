@@ -2,6 +2,24 @@ import { z } from 'zod';
 
 const enabled = z.object({ enabled: z.boolean().default(false) });
 
+const feishuProfile = enabled.extend({
+  id: z.string().default('default'),
+  label: z.string().default('Default'),
+  identity: z.enum(['bot', 'user']).default('user'),
+  calendar: enabled.extend({ days: z.number().int().positive().default(1) }),
+  tasks: enabled.extend({
+    include_completed: z.boolean().default(false),
+    page_limit: z.number().int().positive().default(5),
+  }),
+  docs: enabled.extend({
+    documents: z.array(z.object({ name: z.string(), token: z.string() })).default([]),
+  }),
+  im_history: enabled.extend({
+    chat_id_env: z.string().default('FEISHU_CHAT_ID'),
+    limit: z.number().int().positive().default(30),
+  }),
+});
+
 export const AppConfigSchema = z.object({
   assistant: z.object({
     name: z.string().default('daily-os-feishu'),
@@ -83,6 +101,7 @@ export const AppConfigSchema = z.object({
       path: z.string().default('./data/snapshots/calendar/apple-today.json'),
     }),
     feishu: enabled.extend({
+      profiles: z.array(feishuProfile).default([]),
       calendar: enabled.extend({ days: z.number().int().positive().default(1) }),
       tasks: enabled.extend({
         include_completed: z.boolean().default(false),

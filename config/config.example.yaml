@@ -69,6 +69,25 @@ sources:
 
   feishu:
     enabled: true
+    profiles:
+      - id: "work"
+        label: "Work"
+        identity: "user" # user | bot
+        enabled: true
+        calendar:
+          enabled: true
+          days: 1
+        tasks:
+          enabled: true
+          include_completed: false
+          page_limit: 5
+        docs:
+          enabled: false
+          documents: []
+        im_history:
+          enabled: false
+          chat_id_env: "FEISHU_CHAT_ID"
+          limit: 30
     calendar:
       enabled: true
       days: 1
