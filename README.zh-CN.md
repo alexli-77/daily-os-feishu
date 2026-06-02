@@ -85,6 +85,16 @@ npm run ui
 
 它可以保存常用配置、保存 `.env` 值、运行 `doctor`、发送飞书测试消息、手动触发 plan/review/weekly、轮询飞书反馈，并安装或卸载本机 `launchd` 服务。密钥字段只保存在本地，页面不会回显原文。
 
+Setup 页提供 Codex 配置：
+
+- `Find Codex CLI`：从客户本机 PATH 和常见安装路径查找 Codex CLI，并保存 `CODEX_BIN`。
+- `Choose CLI`：当自动查找失败时，手动选择 `codex` 可执行文件。
+- `Codex home`：可选。客户如果没有使用默认 `~/.codex`，可以在这里指定 Codex 凭证目录。
+- `Test Codex login`：用当前配置运行 `codex --version` 和 `codex login status`。
+
+如果提示 Codex 未登录，请在 Terminal 中用同一个 binary/home 运行 `codex login`，再回 UI 里
+重新 Run Checks。应用不会保存 Codex 凭证，只会保存客户本机 Codex 安装位置和可选 home 路径。
+
 Sources 页里的 Feishu 支持配置多个 profile。每个 profile 都有自己的
 `id`、`identity`、日历/任务/文档/IM 开关，以及 IM chat env 名称。profile 默认折叠显示，
 折叠摘要里会显示 profile `id`。Feishu profile 采用手动配置：在 UI 里配置 profile

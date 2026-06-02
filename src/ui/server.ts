@@ -187,6 +187,22 @@ async function runActionInner(options: UiServerOptions, request: Record<string, 
     return { ok: true, text: discoverLinearTokenForUi(options, env) };
   }
 
+  if (action === 'discover_codex_binary') {
+    return { ok: true, text: await discoverCodexBinaryForUi(options, env), state: await buildState(options) };
+  }
+
+  if (action === 'choose_codex_binary') {
+    return chooseCodexBinary(options, env);
+  }
+
+  if (action === 'choose_codex_home') {
+    return chooseCodexHome(options, env);
+  }
+
+  if (action === 'codex_test') {
+    return { ok: true, text: await testCodexForUi(env) };
+  }
+
   if (action === 'choose_vault_folder') {
     return chooseVaultFolder();
   }
@@ -253,6 +269,88 @@ async function chooseVaultFolder(): Promise<Record<string, unknown>> {
     throw new Error('Folder selection was cancelled or unavailable.');
   }
   return { ok: true, path: result.stdout.trim(), text: 'Vault folder selected.' };
+}
+
+async function chooseCodexBinary(options: UiServerOptions, env: Record<string, string>): Promise<Record<string, unknown>> {
+  const result = await runCommand(
+    'osascript',
+    ['-e', 'POSIX path of (choose file with prompt "Select the Codex CLI executable")'],
+    { timeoutMs: 30000 },
+  );
+  if (!result.ok) throw new Error('Codex CLI selection was cancelled or unavailable.');
+  const codexPath = result.stdout.trim();
+  const next = { ...env, CODEX_BIN: codexPath };
+  writeEnvFile(options.envPath, next);
+  applyEnv(next);
+  return { ok: true, path: codexPath, text: `Codex CLI path saved: ${codexPath}`, state: await buildState(options) };
+}
+
+async function chooseCodexHome(options: UiServerOptions, env: Record<string, string>): Promise<Record<string, unknown>> {
+  const result = await runCommand(
+    'osascript',
+    ['-e', 'POSIX path of (choose folder with prompt "Select the Codex home folder, usually ~/.codex")'],
+    { timeoutMs: 30000 },
+  );
+  if (!result.ok) throw new Error('Codex home selection was cancelled or unavailable.');
+  const codexHome = result.stdout.trim();
+  const next = { ...env, CODEX_HOME: codexHome };
+  writeEnvFile(options.envPath, next);
+  applyEnv(next);
+  return { ok: true, path: codexHome, text: `Codex home saved: ${codexHome}`, state: await buildState(options) };
+}
+
+async function discoverCodexBinaryForUi(options: UiServerOptions, env: Record<string, string>): Promise<string> {
+  const found = await discoverCodexBinary(env);
+  if (!found.value) {
+    return 'Codex CLI not found. Install Codex CLI, or click Choose CLI and select the codex executable manually.';
+  }
+  const next = { ...env, CODEX_BIN: found.value };
+  writeEnvFile(options.envPath, next);
+  applyEnv(next);
+  return `Codex CLI found from ${found.source} and saved locally: ${found.value}`;
+}
+
+async function discoverCodexBinary(env: Record<string, string>): Promise<{ value?: string; source: string }> {
+  const candidates = [
+    { value: env.CODEX_BIN, source: 'configured .env' },
+    { value: process.env.CODEX_BIN, source: 'process.env.CODEX_BIN' },
+    { value: await whichCommand('codex'), source: 'PATH' },
+    { value: '/opt/homebrew/bin/codex', source: '/opt/homebrew/bin' },
+    { value: '/usr/local/bin/codex', source: '/usr/local/bin' },
+    { value: path.join(os.homedir(), '.local', 'bin', 'codex'), source: '~/.local/bin' },
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate.value) continue;
+    if (await isUsableCodex(candidate.value, env)) return { value: candidate.value, source: candidate.source };
+  }
+  return { source: 'local PATH or common install locations' };
+}
+
+async function whichCommand(command: string): Promise<string> {
+  const result = await runCommand('/usr/bin/env', ['which', command], { timeoutMs: 5000 });
+  return result.ok ? result.stdout.trim().split('\n')[0] || '' : '';
+}
+
+async function isUsableCodex(command: string, env: Record<string, string>): Promise<boolean> {
+  const result = await runCommand(command, ['--version'], { timeoutMs: 5000, env: codexEnv(env) });
+  return result.ok;
+}
+
+async function testCodexForUi(env: Record<string, string>): Promise<string> {
+  const codexBin = env.CODEX_BIN || process.env.CODEX_BIN || 'codex';
+  const version = await runCommand(codexBin, ['--version'], { timeoutMs: 10000, env: codexEnv(env) });
+  if (!version.ok) {
+    return `Codex CLI is not runnable from ${codexBin}. Click Find Codex CLI or Choose CLI, then try again.\n${version.stderr || version.stdout}`;
+  }
+  const login = await runCommand(codexBin, ['login', 'status'], { timeoutMs: 10000, env: codexEnv(env) });
+  const versionText = (version.stdout || version.stderr).trim();
+  if (login.ok) return `Codex CLI OK: ${versionText}\n${(login.stdout || login.stderr).trim() || 'Logged in.'}`;
+  return `Codex CLI OK: ${versionText}\nCodex is not logged in for this configuration. Run this in Terminal, then click Test Codex login again:\n${codexBin} login`;
+}
+
+function codexEnv(env: Record<string, string>): NodeJS.ProcessEnv {
+  return { ...process.env, ...env };
 }
 
 async function discoverGitHubTokenForUi(options: UiServerOptions, env: Record<string, string>): Promise<string> {
@@ -518,7 +616,6 @@ const HTML = String.raw`<!doctype html>
               <label>Language<input id="assistant-language" /></label>
               <label>LLM provider<select id="llm-provider"><option>codex</option><option>openai</option></select></label>
               <label>Model<input id="llm-model" /></label>
-              <label>Codex binary<input id="env-CODEX_BIN" /></label>
               <div class="form-field">
                 <label for="secret-OPENAI_API_KEY">OpenAI API key</label>
                 <div class="secret-control"><input id="secret-OPENAI_API_KEY" type="password" autocomplete="new-password" /><button type="button" class="icon-button" data-toggle-secret="OPENAI_API_KEY" aria-label="Show OpenAI API key">&#128065;</button></div>
@@ -527,6 +624,25 @@ const HTML = String.raw`<!doctype html>
               <label>Feedback prefix<input id="feedback-prefix" /></label>
               <label>Feedback poll limit<input id="feedback-poll-limit" type="number" min="1" max="100" /></label>
             </div>
+            <fieldset class="wide-fieldset">
+              <legend>Codex</legend>
+              <p class="hint">Use Codex CLI when LLM provider is set to codex. Configure the executable path here when the customer's shell PATH cannot find codex.</p>
+              <div class="source-row">
+                <button type="button" class="secondary compact" data-action="discover_codex_binary">Find Codex CLI</button>
+                <button type="button" class="secondary compact" data-action="choose_codex_binary">Choose CLI</button>
+                <button type="button" class="secondary compact" data-action="codex_test">Test Codex login</button>
+              </div>
+              <div class="form-field">
+                <label for="env-CODEX_BIN">Codex binary</label>
+                <div class="path-control"><input id="env-CODEX_BIN" placeholder="codex or /opt/homebrew/bin/codex" /><button type="button" class="secondary compact" data-action="choose_codex_binary">Choose CLI</button></div>
+              </div>
+              <div class="form-field">
+                <label for="env-CODEX_HOME">Codex home</label>
+                <div class="path-control"><input id="env-CODEX_HOME" placeholder="Optional, usually ~/.codex" /><button type="button" class="secondary compact" data-action="choose_codex_home">Choose folder</button></div>
+              </div>
+              <p class="hint">If Test Codex login says not logged in, run <code>codex login</code> in Terminal for the same Codex binary/home, then rerun checks.</p>
+              <p class="hint status-line" id="codex-status"></p>
+            </fieldset>
             <div class="toggles">
               <label><input id="output-feishu-enabled" type="checkbox" /> Feishu output</label>
               <label><input id="feedback-feishu-enabled" type="checkbox" /> Feishu feedback</label>
@@ -725,6 +841,10 @@ h1, h2, legend, p { margin: 0; }
 h1 { font-size: 1.25rem; font-weight: 700; }
 h2 { font-size: 1rem; }
 p, .hint { color: var(--muted); font-size: .85rem; }
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .82em;
+}
 
 .required {
   color: var(--warn);
@@ -895,6 +1015,9 @@ fieldset {
   min-width: 0;
   align-content: start;
   grid-auto-rows: max-content;
+}
+.wide-fieldset {
+  margin-top: .85rem;
 }
 legend {
   padding: 0 .35rem;
@@ -1162,6 +1285,7 @@ function render() {
   set('llm-provider', config.llm.provider);
   set('llm-model', config.llm.model);
   set('env-CODEX_BIN', state.env.CODEX_BIN || 'codex');
+  set('env-CODEX_HOME', state.env.CODEX_HOME || '');
   set('env-LARK_APP_ID', state.env.LARK_APP_ID);
   set('env-FEISHU_CHAT_ID', state.env.FEISHU_CHAT_ID);
   set('output-send-mode', config.output.feishu.send_mode);
@@ -1288,6 +1412,7 @@ async function saveAll() {
   await post('/api/config', { config: next });
   const envValues = {
     CODEX_BIN: value('env-CODEX_BIN'),
+    CODEX_HOME: value('env-CODEX_HOME'),
     LARK_APP_ID: value('env-LARK_APP_ID'),
     FEISHU_CHAT_ID: value('env-FEISHU_CHAT_ID'),
     VAULT_GATE_URL: value('env-VAULT_GATE_URL'),
@@ -1351,6 +1476,24 @@ async function runAction(action) {
       set('vault-local-path', result.path);
       $('output').textContent = result.text || 'Vault folder selected.';
       setSaveStatus('Folder selected');
+      return;
+    }
+    if (action === 'choose_codex_binary' && result.path) {
+      set('env-CODEX_BIN', result.path);
+      if (result.state) state = result.state;
+      await loadState();
+      $('output').textContent = result.text || 'Codex CLI selected.';
+      setSourceStatus(action, result.text || 'Codex CLI selected.');
+      setSaveStatus('Codex saved');
+      return;
+    }
+    if (action === 'choose_codex_home' && result.path) {
+      set('env-CODEX_HOME', result.path);
+      if (result.state) state = result.state;
+      await loadState();
+      $('output').textContent = result.text || 'Codex home selected.';
+      setSourceStatus(action, result.text || 'Codex home selected.');
+      setSaveStatus('Codex saved');
       return;
     }
     await loadState();
@@ -1427,7 +1570,8 @@ setSaveStatus.timer = 0;
 
 function setSourceStatus(action, text) {
   const target = action === 'discover_github_token' ? $('github-token-status') :
-    action === 'discover_linear_token' ? $('linear-token-status') : null;
+    action === 'discover_linear_token' ? $('linear-token-status') :
+    ['discover_codex_binary', 'choose_codex_binary', 'choose_codex_home', 'codex_test'].includes(action) ? $('codex-status') : null;
   if (target) target.textContent = text;
 }
 

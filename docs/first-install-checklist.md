@@ -21,6 +21,7 @@ Install and sign in to the local tools:
 
 ```bash
 codex --version
+codex login status
 lark-cli --help
 ```
 
@@ -39,6 +40,15 @@ Edit only local ignored files:
 
 The local UI can edit the common config and `.env` values directly. Secret
 fields are saved locally and are not echoed back in the page.
+
+Use Setup -> Codex to configure the customer's Codex installation:
+
+- Click `Find Codex CLI` first.
+- If it is not found, click `Choose CLI` and select the local `codex`
+  executable.
+- Set `Codex home` only when the customer's credentials are not in `~/.codex`.
+- Click `Test Codex login`. If it is not logged in, run `codex login` in
+  Terminal for the same binary/home, then rerun Checks.
 
 Use Sources -> Feishu to add one or more collapsed Feishu profiles. Feishu field
 names mirror Feishu Developer Platform where applicable: `App ID` and

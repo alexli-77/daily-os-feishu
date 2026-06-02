@@ -19,6 +19,7 @@ npm run alpha:smoke:ci
 
 ```bash
 codex --version
+codex login status
 lark-cli --help
 ```
 
@@ -37,6 +38,14 @@ npm run ui
 
 本地 UI 可以直接编辑常用配置和 `.env` 值。密钥字段只会保存在本地，
 页面不会回显原文。
+
+在 Setup -> Codex 配置客户电脑上的 Codex：
+
+- 先点击 `Find Codex CLI`。
+- 如果找不到，点击 `Choose CLI`，手动选择本机的 `codex` 可执行文件。
+- 只有当客户没有使用默认 `~/.codex` 凭证目录时，才需要填写 `Codex home`。
+- 点击 `Test Codex login`。如果未登录，请在 Terminal 中用同一套 binary/home 运行
+  `codex login`，然后回到 UI 重新 Run Checks。
 
 在 Sources -> Feishu 可以添加一个或多个默认折叠的飞书 profile。Feishu 字段名会尽量和飞书开放平台一致：
 `App ID` 和 `App Secret` 来自应用凭证页；`Chat ID` 是 IM 会话 ID，例如 `oc_xxx`。

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import type { AppConfig } from '../config/schema.js';
-import { commandExists } from '../utils/command.js';
+import { commandExists, runCommand } from '../utils/command.js';
 import { checkLarkCli } from '../connectors/lark-cli.js';
 
 export interface DoctorCheck {
@@ -18,7 +18,14 @@ export async function runDoctor(config: AppConfig, configPath = 'config/config.y
 
   if (config.llm.provider === 'codex') {
     const codexBin = process.env.CODEX_BIN || 'codex';
-    checks.push({ name: `Codex CLI (${codexBin})`, ok: await commandExists(codexBin) });
+    const codexEnv = codexProcessEnv();
+    const exists = await commandExists(codexBin, codexEnv);
+    checks.push({
+      name: `Codex CLI (${codexBin})`,
+      ok: exists,
+      detail: exists ? codexHomeDetail() : 'Set CODEX_BIN to the Codex CLI path, or install Codex CLI and make it available in PATH.',
+    });
+    if (exists) checks.push(await codexLoginCheck(codexBin, codexEnv));
   } else {
     checks.push({ name: 'OPENAI_API_KEY', ok: Boolean(process.env.OPENAI_API_KEY) });
   }
@@ -76,6 +83,30 @@ export async function runDoctor(config: AppConfig, configPath = 'config/config.y
   }
 
   return checks;
+}
+
+function codexProcessEnv(): NodeJS.ProcessEnv {
+  return { ...process.env };
+}
+
+function codexHomeDetail(): string {
+  return process.env.CODEX_HOME ? `CODEX_HOME=${process.env.CODEX_HOME}` : 'using default Codex home';
+}
+
+async function codexLoginCheck(codexBin: string, env: NodeJS.ProcessEnv): Promise<DoctorCheck> {
+  const result = await runCommand(codexBin, ['login', 'status'], { timeoutMs: 10000, env });
+  if (result.ok) {
+    return {
+      name: 'Codex login',
+      ok: true,
+      detail: (result.stdout || result.stderr).trim() || 'authenticated',
+    };
+  }
+  return {
+    name: 'Codex login',
+    ok: false,
+    detail: `Run \`${codexBin} login\` in Terminal, then rerun checks. ${(result.stderr || result.stdout).trim()}`.trim(),
+  };
 }
 
 function usesFeishu(config: AppConfig): boolean {
