@@ -87,8 +87,21 @@ npm run ui
 
 Sources 页里的 Feishu 支持配置多个 profile。每个 profile 都有自己的
 `id`、`identity`、日历/任务/文档/IM 开关，以及 IM chat env 名称。profile 默认折叠显示，
-折叠摘要里会显示 profile `id`。每个 profile 都可以通过 `lark-cli` 查找当前身份可见的
-飞书 chat；如果发现多个 chat ID，UI 会全部列出，只有用户点击选择的那一个才会保存。
+折叠摘要里会显示 profile `id`。Feishu profile 采用手动配置：在 UI 里配置 profile
+ID 和 identity，然后在 `.env` 中填写 `IM chat env` 指向的变量，例如
+`FEISHU_CHAT_ID=oc_xxx`。
+
+Feishu 必填项：
+
+- `LARK_APP_ID`：飞书应用 ID，在飞书开放平台 / Developer Console 的应用凭证页查看。
+- `lark-cli` 认证：运行 `lark-cli doctor`，按提示完成本机认证。
+- `FEISHU_CHAT_ID`：当需要发送输出、轮询反馈，或某个 profile 启用 IM history 时必填。
+- Profile `identity`：日历/任务/IM 走用户授权时选 `user`；机器人已进目标群且具备权限时选 `bot`。
+
+手动查找 chat ID：可以从已知飞书会话复制，或在 UI 外运行
+`lark-cli im +chat-list --as user --types group,p2p --format json`，再把目标会话的
+`oc_xxx` 填入 `.env`。
+
 Other sources 里 GitHub 和 Linear 各有独立的本地查找按钮：GitHub 会查 `.env`、
 环境变量和 `gh auth token`；Linear 会查 `.env`、环境变量，以及可用的本地 `linear`/`linear-cli`
 认证命令。找到后只保存到本地，不打印密钥。密钥字段默认显示 `********`，点击输入框旁边的眼睛按钮才显示本地原文。
