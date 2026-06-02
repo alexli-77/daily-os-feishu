@@ -45,6 +45,10 @@ Use Sources -> Feishu to add one or more collapsed Feishu profiles. Use Sources
 locations with the per-source discovery buttons when available. Secret fields
 are masked by default and can be revealed with the eye button.
 
+Use Sources -> Vault -> Choose folder to select the local vault path on macOS.
+`Checks n/n OK` summarizes local dependency/config checks; `Run Checks` reruns
+them.
+
 ## 3. Required Local Values
 
 For a Feishu-only alpha, configure:

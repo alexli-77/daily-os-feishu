@@ -42,6 +42,9 @@ npm run ui
 sources 里可以分别点击 GitHub 或 Linear 的本地查找按钮，从本地标准位置导入凭证。
 密钥字段默认用星号遮住，可以用眼睛按钮显示原文。
 
+在 Sources -> Vault -> Choose folder 可以用 macOS 文件夹选择器选择本地 vault 路径。
+`Checks n/n OK` 是本地依赖/配置检查摘要；`Run Checks` 会重新检查。
+
 ## 3. 必填本地配置
 
 Feishu-only alpha 至少需要：

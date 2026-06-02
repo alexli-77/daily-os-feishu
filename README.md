@@ -102,6 +102,11 @@ The Service buttons only manage the macOS scheduler. `Install` creates the
 `launchd` job that runs the workflow on schedule; `Uninstall` removes that job.
 They do not install or remove the project itself.
 
+Vault local mode has a `Choose folder` button that opens the macOS folder
+picker and writes the selected path into the local config. The top status shows
+local setup checks, for example `Checks 4/4 OK`; `Run Checks` reruns those local
+dependency and required-config checks.
+
 For the full first-install checklist, see
 [`docs/first-install-checklist.md`](docs/first-install-checklist.md).
 
