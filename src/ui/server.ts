@@ -516,12 +516,16 @@ const HTML = String.raw`<!doctype html>
               <label>LLM provider<select id="llm-provider"><option>codex</option><option>openai</option></select></label>
               <label>Model<input id="llm-model" /></label>
               <label>Codex binary<input id="env-CODEX_BIN" /></label>
-              <label>Feishu app ID<input id="env-LARK_APP_ID" placeholder="cli_xxx" /></label>
+              <label>Feishu App ID <span class="required">Required</span><input id="env-LARK_APP_ID" placeholder="cli_xxx" /></label>
+              <div class="form-field">
+                <label for="secret-LARK_APP_SECRET">Feishu App Secret <span class="required">Required</span></label>
+                <div class="secret-control"><input id="secret-LARK_APP_SECRET" type="password" autocomplete="new-password" /><button type="button" class="icon-button" data-toggle-secret="LARK_APP_SECRET" aria-label="Show Feishu App Secret">&#128065;</button></div>
+              </div>
               <div class="form-field">
                 <label for="secret-OPENAI_API_KEY">OpenAI API key</label>
                 <div class="secret-control"><input id="secret-OPENAI_API_KEY" type="password" autocomplete="new-password" /><button type="button" class="icon-button" data-toggle-secret="OPENAI_API_KEY" aria-label="Show OpenAI API key">&#128065;</button></div>
               </div>
-              <label>Feishu chat ID<input id="env-FEISHU_CHAT_ID" /></label>
+              <label>Feishu Chat ID <span class="required">Required when sending or reading IM</span><input id="env-FEISHU_CHAT_ID" placeholder="oc_xxx" /></label>
               <label>Feishu send mode<select id="output-send-mode"><option>markdown</option><option>text</option></select></label>
               <label>Feedback prefix<input id="feedback-prefix" /></label>
               <label>Feedback poll limit<input id="feedback-poll-limit" type="number" min="1" max="100" /></label>
@@ -556,6 +560,10 @@ const HTML = String.raw`<!doctype html>
               <fieldset>
                 <legend>Feishu</legend>
                 <label><input id="source-feishu-enabled" type="checkbox" /> Enabled</label>
+                <div class="manual-help">
+                  <p class="hint"><strong>Required Feishu setup:</strong> App ID and App Secret from Feishu Developer Platform app credentials, plus lark-cli authentication. Chat ID is required only for output, feedback, or IM history.</p>
+                  <p class="hint">Find App ID and App Secret in Feishu Developer Platform: app details / credentials and basic info. Find Chat ID from a known chat or with lark-cli IM commands, then fill the chosen oc_xxx value in .env.</p>
+                </div>
                 <div id="feishu-profiles" class="profile-list"></div>
                 <button type="button" class="secondary" id="add-feishu-profile">Add Feishu profile</button>
               </fieldset>
@@ -704,6 +712,12 @@ h1, h2, legend, p { margin: 0; }
 h1 { font-size: 1.25rem; font-weight: 700; }
 h2 { font-size: 1rem; }
 p, .hint { color: var(--muted); font-size: .85rem; }
+
+.required {
+  color: var(--warn);
+  font-size: .75rem;
+  font-weight: 700;
+}
 
 .status {
   min-width: 8rem;
@@ -1137,7 +1151,7 @@ function render() {
   set('workflow-weekly-weekday', config.workflows.weekly_review.weekday);
   set('workflow-weekly-time', config.workflows.weekly_review.time);
 
-  for (const key of ['OPENAI_API_KEY', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'VAULT_GATE_TOKEN']) renderSecret(key);
+  for (const key of ['OPENAI_API_KEY', 'LARK_APP_SECRET', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'VAULT_GATE_TOKEN']) renderSecret(key);
 
   renderChecks(state.doctor);
   $('output').textContent = state.doctorText || '';
@@ -1207,6 +1221,7 @@ async function saveAll() {
     FEISHU_CHAT_ID: value('env-FEISHU_CHAT_ID'),
     VAULT_GATE_URL: value('env-VAULT_GATE_URL'),
     OPENAI_API_KEY: secretValue('OPENAI_API_KEY'),
+    LARK_APP_SECRET: secretValue('LARK_APP_SECRET'),
     GITHUB_TOKEN: secretValue('GITHUB_TOKEN'),
     LINEAR_API_KEY: secretValue('LINEAR_API_KEY'),
     VAULT_GATE_TOKEN: secretValue('VAULT_GATE_TOKEN'),
@@ -1397,14 +1412,14 @@ function renderFeishuProfiles(profiles) {
     '<span class="profile-meta">' + escapeHtml(profileMeta(profile)) + '</span></summary>' +
     '<div class="profile-body">' +
     '<div class="grid">' +
-    labelInput('ID', profileFieldId(index, 'id'), profile.id) +
-    labelInput('Label', profileFieldId(index, 'label'), profile.label) +
-    labelSelect('Identity', profileFieldId(index, 'identity'), profile.identity, ['user', 'bot']) +
-    labelInput('IM chat env', profileFieldId(index, 'chat-env'), profile.im_history.chat_id_env) +
+    labelInput('Local source key', profileFieldId(index, 'id'), profile.id) +
+    labelInput('Display name', profileFieldId(index, 'label'), profile.label) +
+    labelSelect('Access identity', profileFieldId(index, 'identity'), profile.identity, ['user', 'bot']) +
+    labelInput('Chat ID env var', profileFieldId(index, 'chat-env'), profile.im_history.chat_id_env) +
     '</div>' +
     '<div class="manual-help">' +
-    '<p class="hint"><strong>Required for Feishu source:</strong> lark-cli must be authenticated. Calendar and Tasks use the profile identity. IM history also requires the profile IM chat env to point to a chat ID such as FEISHU_CHAT_ID=oc_xxx in .env.</p>' +
-    '<p class="hint">Find values manually: App ID is in Feishu Developer Console app credentials. Chat ID can be copied from a known chat, or inspected with lark-cli IM commands outside this UI.</p>' +
+    '<p class="hint"><strong>Local source profile:</strong> these fields are local Daily OS settings, not Feishu Developer Platform credentials. Keep the defaults unless you are configuring multiple Feishu sources.</p>' +
+    '<p class="hint">Access identity maps to lark-cli --as user/bot. Chat ID env var is only used when IM history is enabled; it names the .env variable that contains a Feishu Chat ID such as FEISHU_CHAT_ID=oc_xxx.</p>' +
     '</div>' +
     '<div class="profile-options">' +
     labelCheck('Enabled', profileFieldId(index, 'enabled'), profile.enabled) +
@@ -1478,21 +1493,25 @@ function profileFieldId(index, name) {
   return 'feishu-profile-' + index + '-' + name;
 }
 
-function labelInput(label, id, currentValue) {
-  return '<label>' + escapeHtml(label) + '<input id="' + id + '" value="' + escapeAttr(currentValue || '') + '" /></label>';
+function labelInput(label, id, currentValue, badge) {
+  return '<label>' + escapeHtml(label) + badgeHtml(badge) + '<input id="' + id + '" value="' + escapeAttr(currentValue || '') + '" /></label>';
 }
 
 function labelNumber(label, id, currentValue, min, max) {
   return '<label>' + escapeHtml(label) + '<input id="' + id + '" type="number" min="' + min + '" max="' + max + '" value="' + escapeAttr(currentValue || '') + '" /></label>';
 }
 
-function labelSelect(label, id, currentValue, options) {
-  return '<label>' + escapeHtml(label) + '<select id="' + id + '">' + options.map((option) =>
+function labelSelect(label, id, currentValue, options, badge) {
+  return '<label>' + escapeHtml(label) + badgeHtml(badge) + '<select id="' + id + '">' + options.map((option) =>
     '<option ' + (option === currentValue ? 'selected' : '') + '>' + escapeHtml(option) + '</option>').join('') + '</select></label>';
 }
 
 function labelCheck(label, id, currentValue) {
   return '<label><input id="' + id + '" type="checkbox" ' + (currentValue ? 'checked' : '') + ' /> ' + escapeHtml(label) + '</label>';
+}
+
+function badgeHtml(text) {
+  return text ? ' <span class="required">' + escapeHtml(text) + '</span>' : '';
 }
 
 function escapeAttr(text) {

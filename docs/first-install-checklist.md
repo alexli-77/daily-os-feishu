@@ -40,10 +40,13 @@ Edit only local ignored files:
 The local UI can edit the common config and `.env` values directly. Secret
 fields are saved locally and are not echoed back in the page.
 
-Use Sources -> Feishu to add one or more collapsed Feishu profiles. Use Sources
--> Other sources to import GitHub or Linear credentials from local standard
-locations with the per-source discovery buttons when available. Secret fields
-are masked by default and can be revealed with the eye button.
+Use Sources -> Feishu to add one or more collapsed Feishu profiles. Feishu field
+names mirror Feishu Developer Platform where applicable: `App ID` and
+`App Secret` come from app credentials; `Chat ID` is an IM conversation ID such
+as `oc_xxx`. Use Sources -> Other sources to import GitHub or Linear
+credentials from local standard locations with the per-source discovery buttons
+when available. Secret fields are masked by default and can be revealed with the
+eye button.
 
 Use Sources -> Vault -> Choose folder to select the local vault path on macOS.
 `Checks n/n OK` summarizes local dependency/config checks; `Run Checks` reruns
@@ -54,6 +57,8 @@ them.
 For a Feishu-only alpha, configure:
 
 - `FEISHU_CHAT_ID` in `.env`
+- `LARK_APP_ID` and `LARK_APP_SECRET` in `.env`
+- `lark-cli doctor` passing locally
 - Codex CLI signed in locally, or `OPENAI_API_KEY`
 - `output.feishu.identity` in `config/config.yaml`
 - any enabled source credentials, such as `GITHUB_TOKEN`; `LINEAR_API_KEY` is preferred but optional when Codex Linear fallback is available

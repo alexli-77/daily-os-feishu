@@ -23,6 +23,11 @@ export async function runDoctor(config: AppConfig, configPath = 'config/config.y
     checks.push({ name: 'OPENAI_API_KEY', ok: Boolean(process.env.OPENAI_API_KEY) });
   }
 
+  if (usesFeishu(config)) {
+    checks.push({ name: 'LARK_APP_ID', ok: Boolean(process.env.LARK_APP_ID), detail: 'Feishu Developer Platform App ID' });
+    checks.push({ name: 'LARK_APP_SECRET', ok: Boolean(process.env.LARK_APP_SECRET), detail: 'Feishu Developer Platform App Secret' });
+  }
+
   if (config.output.feishu.enabled) {
     checks.push({ name: config.output.feishu.chat_id_env, ok: Boolean(process.env[config.output.feishu.chat_id_env]) });
   }
@@ -71,6 +76,10 @@ export async function runDoctor(config: AppConfig, configPath = 'config/config.y
   }
 
   return checks;
+}
+
+function usesFeishu(config: AppConfig): boolean {
+  return Boolean(config.output.feishu.enabled || config.feedback.feishu.enabled || config.sources.feishu.enabled);
 }
 
 async function toCheck(name: string, checkPromise: Promise<{ state: string; detail?: string }>): Promise<Omit<DoctorCheck, 'name'>> {
