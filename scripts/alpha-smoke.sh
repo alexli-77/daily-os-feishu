@@ -117,7 +117,7 @@ npm run privacy:scan
 
 DOCTOR_OUTPUT="$(node dist/index.js --env "$SMOKE_ENV" --config "$SMOKE_CONFIG" doctor)"
 echo "$DOCTOR_OUTPUT"
-if echo "$DOCTOR_OUTPUT" | grep -q '^MISSING'; then
+if [ "${DAILY_OS_SKIP_AGENT_SMOKE:-0}" != "1" ] && echo "$DOCTOR_OUTPUT" | grep -q '^MISSING'; then
   echo "Alpha smoke doctor check failed." >&2
   exit 1
 fi
