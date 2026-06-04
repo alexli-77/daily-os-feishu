@@ -40,7 +40,17 @@ feedback:
     state_path: "./data/memory/feishu-feedback-state.json"
     log_path: "./data/memory/feishu-feedback.md"
 
+interaction:
+  feishu:
+    enabled: false
+    command_prefix: "daily-os"
+    require_mention_in_groups: true
+    debounce_ms: 600
+    reply_mode: "markdown" # markdown | text
+
 sources:
+  # User knowledge-base vault used as an evidence source.
+  # This is separate from memory.repository_path below.
   vault:
     enabled: false
     provider: "local" # local | remote
@@ -123,5 +133,10 @@ sources:
         path: "./data/snapshots/custom.txt"
 
 memory:
+  # Daily OS working memory repository.
+  # Empty means use the generic repository shipped at ./memory-vault/default.
+  # Set this to a private Daily OS memory vault folder when deploying for a real user.
+  # This is separate from sources.vault.local_path above.
+  repository_path: ""
   long_term_path: "./data/memory/long-term.md"
   daily_dir: "./data/memory/daily"

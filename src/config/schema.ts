@@ -73,6 +73,24 @@ export const AppConfigSchema = z.object({
         log_path: './data/memory/feishu-feedback.md',
       },
     }),
+  interaction: z
+    .object({
+      feishu: enabled.extend({
+        command_prefix: z.string().default('daily-os'),
+        require_mention_in_groups: z.boolean().default(true),
+        debounce_ms: z.number().int().nonnegative().default(600),
+        reply_mode: z.enum(['markdown', 'text']).default('markdown'),
+      }),
+    })
+    .default({
+      feishu: {
+        enabled: false,
+        command_prefix: 'daily-os',
+        require_mention_in_groups: true,
+        debounce_ms: 600,
+        reply_mode: 'markdown',
+      },
+    }),
   sources: z.object({
     vault: enabled.extend({
       provider: z.enum(['remote', 'local']).default('remote'),
@@ -128,6 +146,7 @@ export const AppConfigSchema = z.object({
     }),
   }),
   memory: z.object({
+    repository_path: z.string().default(''),
     long_term_path: z.string().default('./data/memory/long-term.md'),
     daily_dir: z.string().default('./data/memory/daily'),
   }),

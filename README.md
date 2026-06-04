@@ -2,13 +2,14 @@
 
 Daily OS Feishu is a Mac-first, Feishu-only personal workflow agent. It collects configurable local and remote signals, asks your local Codex CLI or OpenAI API to prepare a daily/weekly message, and sends the result to Feishu through `lark-cli`.
 
-This repository is intentionally generic. It does not include personal tokens, vault content, browser data, memory, or Feishu identifiers. All private values live in `.env`, `config/config.yaml`, and ignored `data/` files.
+This repository is intentionally generic. It does not include personal tokens, private vault content, browser data, personal memory, or Feishu identifiers. It ships only a generic memory vault template. All private values live in `.env`, `config/config.yaml`, and ignored `data/` files.
 
 ## First Version Scope
 
 - Runs on macOS as a CLI or a `launchd` background service.
 - Includes a local browser UI for setup, source toggles, checks, and manual triggers.
 - Sends output to Feishu through `lark-cli`.
+- Optional Feishu websocket interaction layer for direct chat commands and action cards.
 - Uses local Codex CLI by default, with OpenAI API as an optional fallback.
 - Supports configurable sources:
   - Vault knowledge base through local files. Remote vault-gate can be enabled later.
@@ -171,6 +172,19 @@ picker and writes the selected path into the local config. The top status shows
 local setup checks, for example `Checks 4/4 OK`; `Run Checks` reruns those local
 dependency and required-config checks.
 
+There are two separate vault-like concepts:
+
+- `sources.vault.local_path` is the user's existing knowledge-base vault used as
+  an evidence source.
+- `memory.repository_path` is Daily OS working memory. It stores durable goals,
+  projects, commitments, review notes, and proposed memory updates.
+
+The Memory repository section controls durable Daily OS memory. Leave
+`memory.repository_path` empty to use the generic built-in memory vault at
+`memory-vault/default`. For real use, choose or enter a private memory
+repository folder. Daily run logs and manual `remember` entries still default to
+ignored `data/memory` paths.
+
 The `Logs` tab shows local UI/API request status and action lifecycle events.
 Logs are stored in `data/logs/ui-network.jsonl`, do not include request bodies,
 response bodies, or secrets, and are automatically pruned to the last 7 days.
@@ -190,16 +204,33 @@ This calls your local Codex CLI and lets Codex choose the model supported by the
 
 ## Vault Integration
 
-The first version does not require vault-gate. By default, vault collection is disabled. To use a local vault, enable `sources.vault` and set `provider: "local"`.
+The first version does not require vault-gate. By default, knowledge-base vault collection is disabled. To use a local knowledge vault, enable `sources.vault`, set `provider: "local"`, and set `sources.vault.local_path`.
 
 Remote vault mode is optional for later versions. When enabled, it expects a vault-gate service:
 
 - `GET /scan`
 - `GET /read?path=...`
 
-Local vault mode reads configured markdown files directly from `local_path`.
+Local vault mode reads configured markdown files directly from `sources.vault.local_path`.
 
 The agent treats missing vault data as missing evidence. It does not write directly to your vault.
+
+## Memory Repository
+
+Daily OS reads long-term working memory from a Markdown repository before each
+workflow run. The checked-in default lives at `memory-vault/default` and only
+contains generic starter files for identity, preferences, OKRs, projects,
+commitments, reviews, and memory candidates.
+
+Configure a real user's private memory repository with:
+
+```yaml
+memory:
+  repository_path: "/path/to/private-daily-os-memory"
+```
+
+If `repository_path` is empty, the app uses the built-in template. The template
+is safe to publish; private memory should live outside the repo.
 
 ## Feishu Integration
 
@@ -214,6 +245,42 @@ FEISHU_CHAT_ID=
 Use the same `App ID` and `App Secret` names shown in Feishu Developer Platform app credentials.
 
 Use `output.feishu.identity` to choose `bot` or `user`.
+
+## Feishu Interaction Layer
+
+The interaction layer is optional and separate from the scheduled workflows. It
+keeps a local websocket connection to Feishu, receives chat events, batches
+messages per chat/topic scope, and routes supported commands into the existing
+Daily OS workflow core.
+
+Enable it with:
+
+```yaml
+interaction:
+  feishu:
+    enabled: true
+    command_prefix: "daily-os"
+    require_mention_in_groups: true
+    debounce_ms: 600
+    reply_mode: "markdown"
+```
+
+Then run:
+
+```bash
+npm run interaction:feishu
+```
+
+Supported messages are the same as feedback polling:
+
+- `daily-os status` returns an action card with Plan, Review, and Weekly buttons.
+- `daily-os remember <text>` appends to long-term memory.
+- `daily-os feedback <text>` appends to the local feedback log.
+- `daily-os plan`, `daily-os review`, and `daily-os weekly` run workflows and
+  reply in the same chat.
+
+This layer does not replace the knowledge vault or memory repository. It is only
+the Feishu-facing interaction surface.
 
 ## Feishu Feedback Commands
 
@@ -265,5 +332,5 @@ These paths are ignored by default.
 ## Design Notes
 
 The alpha is intentionally local-first: source connectors, personal memory,
-tokens, chat IDs, and vault paths stay in user-owned config files that are not
-committed to the repository.
+tokens, chat IDs, and vault paths stay in user-owned config files or private
+folders that are not committed to the repository.

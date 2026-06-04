@@ -17,6 +17,7 @@
     "weekly": "tsx src/index.ts weekly",
     "collect": "tsx src/index.ts collect",
     "feedback:poll": "tsx src/index.ts feedback poll",
+    "interaction:feishu": "tsx src/index.ts interaction feishu",
     "service:install": "tsx src/index.ts service install",
     "service:uninstall": "tsx src/index.ts service uninstall",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -29,12 +30,14 @@
     "daily-os",
     "feishu",
     "lark",
+    "interaction",
     "codex",
     "vault",
     "personal-agent"
   ],
   "license": "MIT",
   "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.66.1",
     "js-yaml": "^4.1.0",
     "openai": "^4.104.0",
     "zod": "^3.25.0"
