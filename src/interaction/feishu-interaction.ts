@@ -10,6 +10,7 @@ import type { AppConfig, WorkflowName } from '../config/schema.js';
 import { handleDailyOsCommand, parseDailyOsCommand } from './daily-os-command.js';
 import { PendingQueue } from './pending-queue.js';
 import { runWorkflow } from '../workflows/run-workflow.js';
+import { decideFeishuAccess } from './access-policy.js';
 
 interface FeishuInteractionControls {
   stop: () => Promise<void>;
@@ -102,6 +103,16 @@ async function intakeMessage(input: {
 }): Promise<void> {
   const mode = await resolveChatMode(input.channel, input.message.chatId, input.chatModes, input.message.chatType);
   const scope = scopeFor(input.message, mode);
+  const access = decideFeishuAccess(input.config, {
+    senderOpenId: input.message.senderId,
+    chatId: input.message.chatId,
+    chatType: input.message.chatType,
+  });
+  if (!access.ok) {
+    console.warn(`[interaction] denied ${scope}; sender=${input.message.senderId.slice(-6)}; reason=${access.reason}`);
+    if (input.message.chatType === 'p2p') await replyToMessage(input.channel, input.message, 'Daily OS is not enabled for this Feishu user.', 'text');
+    return;
+  }
 
   if (input.message.chatType !== 'p2p' && input.config.interaction.feishu.require_mention_in_groups && !input.message.mentionedBot) {
     return;
@@ -154,6 +165,15 @@ async function handleCardAction(input: {
 }): Promise<void> {
   const action = parseCardAction(input.event.action.value);
   if (!action) return;
+  const access = decideFeishuAccess(input.config, {
+    senderOpenId: input.event.operator.openId,
+    chatId: input.event.chatId,
+    chatType: 'group',
+  });
+  if (!access.ok) {
+    console.warn(`[interaction] denied card action ${input.event.chatId}; operator=${input.event.operator.openId.slice(-6)}; reason=${access.reason}`);
+    return;
+  }
 
   await input.channel.send(input.event.chatId, { text: `Running ${action.replaceAll('_', ' ')}...` }, { replyTo: input.event.messageId });
   const output = await runWorkflow(input.config, action, { send: false });

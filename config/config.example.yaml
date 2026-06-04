@@ -47,6 +47,14 @@ interaction:
     require_mention_in_groups: true
     debounce_ms: 600
     reply_mode: "markdown" # markdown | text
+    security:
+      # Safe default: interaction messages are denied until one owner/user/chat rule is configured.
+      owner_open_id_env: "FEISHU_OWNER_OPEN_ID"
+      admin_open_ids: []
+      allowed_user_open_ids: []
+      allowed_chat_ids: []
+      access_level: "read_only" # read_only | workspace | full
+      allowed_workspaces: []
 
 sources:
   # User knowledge-base vault used as an evidence source.
