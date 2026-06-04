@@ -1,0 +1,11 @@
+version: 1
+updated_at: null
+status: draft
+rules:
+  - id: confirm-before-durable-policy-change
+    description: Durable decision rules must be confirmed by the user before they are saved.
+    when:
+      event: policy_change_proposed
+    then:
+      require_confirmation: true
+      bucket: pending_policy_candidate

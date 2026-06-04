@@ -11,6 +11,7 @@ import { handleDailyOsCommand, parseDailyOsCommand } from './daily-os-command.js
 import { PendingQueue } from './pending-queue.js';
 import { runWorkflow } from '../workflows/run-workflow.js';
 import { decideFeishuAccess } from './access-policy.js';
+import { startDecisionOnboarding } from '../decision/onboarding.js';
 
 interface FeishuInteractionControls {
   stop: () => Promise<void>;
@@ -86,6 +87,14 @@ export async function startFeishuInteraction(config: AppConfig): Promise<FeishuI
 
   await channel.connect();
   console.log('daily-os-feishu Feishu interaction layer started.');
+  if (config.decision.onboarding.auto_create_on_setup) {
+    try {
+      const result = await startDecisionOnboarding(config, { channel });
+      console.log(`[interaction] decision calibration chat ${result.created ? 'created' : 'ready'}: ${result.chatId}`);
+    } catch (error) {
+      console.warn(`[interaction] decision onboarding skipped: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
 
   return {
     stop: async () => {
@@ -137,6 +146,24 @@ async function runBatch(input: {
   if (command.type === 'status') {
     await sendStatusCard(input.channel, last, input.config);
     console.log(`[interaction] handled ${input.scope}; command=status-card`);
+    return;
+  }
+  if (command.type === 'calibrate') {
+    const result = await startDecisionOnboarding(input.config, { channel: input.channel });
+    await replyToMessage(
+      input.channel,
+      last,
+      [
+        result.created ? 'Created the decision calibration chat.' : 'Decision calibration chat is ready.',
+        '',
+        `Chat: ${result.chatName}`,
+        `Chat ID: ${result.chatId}`,
+        '',
+        'Continue the policy calibration there so durable rules are easy to review.',
+      ].join('\n'),
+      input.config.interaction.feishu.reply_mode,
+    );
+    console.log(`[interaction] handled ${input.scope}; command=calibrate; chat=${result.chatId}`);
     return;
   }
 

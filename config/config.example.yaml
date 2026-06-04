@@ -56,6 +56,21 @@ interaction:
       access_level: "read_only" # read_only | workspace | full
       allowed_workspaces: []
 
+decision:
+  enabled: true
+  # Stored inside memory.repository_path, or the built-in memory vault when repository_path is empty.
+  policy_file: "decision-policy.yaml"
+  policy_notes_file: "decision-policy.md"
+  candidates_path: "./data/memory/decision-policy-candidates.md"
+  onboarding:
+    enabled: true
+    chat_name: "Daily OS - Decision Calibration"
+    chat_id_env: "DAILY_OS_DECISION_CHAT_ID"
+    owner_open_id_env: "FEISHU_OWNER_OPEN_ID"
+    state_path: "./data/memory/decision-onboarding.json"
+    # Keep false for safety: users should click Start onboarding or run the CLI command.
+    auto_create_on_setup: false
+
 sources:
   # User knowledge-base vault used as an evidence source.
   # This is separate from memory.repository_path below.

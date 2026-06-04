@@ -187,6 +187,11 @@ The Memory repository section controls durable Daily OS memory. Leave
 repository folder. Daily run logs and manual `remember` entries still default to
 ignored `data/memory` paths.
 
+Decision calibration also lives in the memory repository. The built-in template
+includes `decision-policy.yaml`, `decision-policy.md`, and
+`policy-skill/SKILL.md`. Users should refine these through conversation rather
+than editing weights on day one.
+
 The `Logs` tab shows local UI/API request status and action lifecycle events.
 Logs are stored in `data/logs/ui-network.jsonl`, do not include request bodies,
 response bodies, or secrets, and are automatically pruned to the last 7 days.
@@ -233,6 +238,41 @@ memory:
 
 If `repository_path` is empty, the app uses the built-in template. The template
 is safe to publish; private memory should live outside the repo.
+
+## Decision Calibration
+
+Daily OS supports a first-run decision calibration flow. It creates or reuses a
+private Feishu group where the user and the bot can discuss how priorities
+should be decided. Confirmed rules become durable policy; exploratory comments
+stay as calibration notes or pending candidates.
+
+Start it from the UI with **Start decision onboarding**, or from the CLI:
+
+```bash
+npm run dev -- onboarding start
+```
+
+The command:
+
+- ensures the decision policy files exist in the memory repository,
+- creates a private Feishu group named by `decision.onboarding.chat_name`,
+- invites the owner `open_id`,
+- saves the group id in `DAILY_OS_DECISION_CHAT_ID` and
+  `decision.onboarding.state_path`,
+- sends the first calibration prompt to that group.
+
+This uses the same Feishu group creation pattern as
+`lark-coding-agent-bridge`: the bot creates a private group with the user's
+`open_id`. The Feishu app needs `im:chat` and bot message-send permissions.
+
+In Feishu interaction mode, the user can also send:
+
+- `daily-os policy` to inspect the current policy files.
+- `daily-os calibrate` to create or reuse the calibration group and continue the
+  policy conversation there.
+
+Keep `decision.onboarding.auto_create_on_setup: false` for first installs unless
+the user explicitly wants startup to create the group automatically.
 
 ## Feishu Integration
 
@@ -286,6 +326,8 @@ Supported messages are the same as feedback polling:
 - `daily-os status` returns an action card with Plan, Review, and Weekly buttons.
 - `daily-os remember <text>` appends to long-term memory.
 - `daily-os feedback <text>` appends to the local feedback log.
+- `daily-os policy` shows the current decision policy and policy-skill paths.
+- `daily-os calibrate` creates or reuses the decision calibration group.
 - `daily-os plan`, `daily-os review`, and `daily-os weekly` run workflows and
   reply in the same chat.
 

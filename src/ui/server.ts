@@ -15,9 +15,19 @@ import { sendFeishuMessage } from '../connectors/lark-cli.js';
 import { getLaunchAgentStatus, installLaunchAgent, uninstallLaunchAgent } from '../service/launchd.js';
 import { runCommand } from '../utils/command.js';
 import { appendUiLog, clearUiLogs, readUiLogs } from '../storage/ui-log.js';
+import { startDecisionOnboarding } from '../decision/onboarding.js';
 
 const SECRET_ENV_KEYS = new Set(['OPENAI_API_KEY', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'VAULT_GATE_TOKEN', 'LARK_APP_SECRET']);
-const PLAIN_ENV_KEYS = ['FEISHU_CHAT_ID', 'FEISHU_OWNER_OPEN_ID', 'VAULT_GATE_URL', 'CODEX_BIN', 'CODEX_HOME', 'TZ', 'LARK_APP_ID'];
+const PLAIN_ENV_KEYS = [
+  'FEISHU_CHAT_ID',
+  'DAILY_OS_DECISION_CHAT_ID',
+  'FEISHU_OWNER_OPEN_ID',
+  'VAULT_GATE_URL',
+  'CODEX_BIN',
+  'CODEX_HOME',
+  'TZ',
+  'LARK_APP_ID',
+];
 const ENV_KEYS = [...PLAIN_ENV_KEYS, ...SECRET_ENV_KEYS];
 
 export interface UiServerOptions {
@@ -233,6 +243,21 @@ async function runActionInner(options: UiServerOptions, request: Record<string, 
     return { ok: true, text: 'Feishu test message sent.' };
   }
 
+  if (action === 'decision_onboarding_start') {
+    const result = await startDecisionOnboarding(config, { envPath: options.envPath });
+    return {
+      ok: true,
+      text: [
+        result.created ? 'Created decision calibration chat.' : 'Decision calibration chat is ready.',
+        `Name: ${result.chatName}`,
+        `Chat ID: ${result.chatId}`,
+        '',
+        'A welcome message was sent. Continue calibration in that Feishu chat.',
+      ].join('\n'),
+      state: await buildState(options),
+    };
+  }
+
   if (action === 'feedback_poll') {
     return { ok: true, text: JSON.stringify(await pollFeishuFeedback(config, { send: sendOutput }), null, 2) };
   }
@@ -264,6 +289,7 @@ function actionResultDetail(action: string): string {
   if (['plan', 'review', 'weekly'].includes(action)) return 'Workflow completed. Generated content is not written to logs.';
   if (action === 'feedback_poll') return 'Feishu feedback poll completed. Message bodies are not written to logs.';
   if (action === 'feishu_test') return 'Feishu test message sent.';
+  if (action === 'decision_onboarding_start') return 'Decision onboarding chat prepared.';
   return 'Action completed.';
 }
 
@@ -781,6 +807,17 @@ const HTML = String.raw`<!doctype html>
               <label>Feedback prefix<input id="feedback-prefix" /></label>
               <label>Feedback poll limit<input id="feedback-poll-limit" type="number" min="1" max="100" /></label>
             </div>
+            <fieldset class="wide-fieldset">
+              <legend>Decision onboarding</legend>
+              <p class="hint">Creates or reuses a private Feishu group for calibrating how Daily OS should make decisions. The Mac UI is for setup; the policy conversation happens in Feishu.</p>
+              <div class="source-row">
+                <button type="button" class="secondary compact" data-action="decision_onboarding_start">Start decision onboarding</button>
+                <label class="check-row"><input id="decision-auto-create" type="checkbox" /> Auto-create when Feishu interaction starts</label>
+              </div>
+              <label>Calibration chat name<input id="decision-chat-name" /></label>
+              <label>Decision chat ID<input id="env-DAILY_OS_DECISION_CHAT_ID" placeholder="Created automatically or paste oc_xxx" /></label>
+              <p class="hint">Auto-create is off by default so a new customer is not surprised by a group being created. Use it only after the Feishu app has the <code>im:chat</code> permission.</p>
+            </fieldset>
             <fieldset class="wide-fieldset">
               <legend>Codex</legend>
               <p class="hint">Use Codex CLI when LLM provider is set to codex. Configure the executable path here when the customer's shell PATH cannot find codex.</p>
@@ -1527,12 +1564,15 @@ function render() {
   set('env-CODEX_HOME', state.env.CODEX_HOME || '');
   set('env-LARK_APP_ID', state.env.LARK_APP_ID);
   set('env-FEISHU_CHAT_ID', state.env.FEISHU_CHAT_ID);
+  set('env-DAILY_OS_DECISION_CHAT_ID', state.env.DAILY_OS_DECISION_CHAT_ID);
   set('env-FEISHU_OWNER_OPEN_ID', state.env.FEISHU_OWNER_OPEN_ID);
   set('output-send-mode', config.output.feishu.send_mode);
   checked('output-feishu-enabled', config.output.feishu.enabled);
   checked('feedback-feishu-enabled', config.feedback.feishu.enabled);
   set('feedback-prefix', config.feedback.feishu.command_prefix);
   set('feedback-poll-limit', config.feedback.feishu.poll_limit);
+  set('decision-chat-name', config.decision.onboarding.chat_name);
+  checked('decision-auto-create', config.decision.onboarding.auto_create_on_setup);
 
   checked('vault-enabled', config.sources.vault.enabled);
   set('vault-provider', config.sources.vault.provider);
@@ -1630,6 +1670,12 @@ async function saveAll() {
   next.feedback.feishu.enabled = isChecked('feedback-feishu-enabled');
   next.feedback.feishu.command_prefix = value('feedback-prefix');
   next.feedback.feishu.poll_limit = Number(value('feedback-poll-limit') || 20);
+  next.decision.enabled = true;
+  next.decision.onboarding.enabled = true;
+  next.decision.onboarding.chat_name = value('decision-chat-name') || 'Daily OS - Decision Calibration';
+  next.decision.onboarding.chat_id_env = 'DAILY_OS_DECISION_CHAT_ID';
+  next.decision.onboarding.owner_open_id_env = 'FEISHU_OWNER_OPEN_ID';
+  next.decision.onboarding.auto_create_on_setup = isChecked('decision-auto-create');
 
   next.sources.vault.enabled = isChecked('vault-enabled');
   next.sources.vault.provider = value('vault-provider');
@@ -1683,6 +1729,7 @@ async function saveAll() {
     CODEX_HOME: value('env-CODEX_HOME'),
     LARK_APP_ID: value('env-LARK_APP_ID'),
     FEISHU_CHAT_ID: value('env-FEISHU_CHAT_ID'),
+    DAILY_OS_DECISION_CHAT_ID: value('env-DAILY_OS_DECISION_CHAT_ID'),
     FEISHU_OWNER_OPEN_ID: value('env-FEISHU_OWNER_OPEN_ID'),
     VAULT_GATE_URL: value('env-VAULT_GATE_URL'),
     OPENAI_API_KEY: secretValue('OPENAI_API_KEY'),
@@ -1694,11 +1741,13 @@ async function saveAll() {
   const result = await post('/api/env', { values: envValues });
   state = result.state;
   const savedChat = state.env.FEISHU_CHAT_ID || '';
+  const decisionChat = state.env.DAILY_OS_DECISION_CHAT_ID || '';
   const message = [
     'Saved local configuration.',
     'Config: ' + state.configPath,
     'Env: ' + state.envPath,
     'Active FEISHU_CHAT_ID: ' + maskClientValue(savedChat),
+    'Decision chat ID: ' + maskClientValue(decisionChat),
   ].join('\n');
   render();
   $('output').textContent = message;

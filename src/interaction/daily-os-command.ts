@@ -1,10 +1,13 @@
 import type { AppConfig, WorkflowName } from '../config/schema.js';
 import { appendFeedbackLog, appendLongTermMemory } from '../storage/memory.js';
 import { runWorkflow } from '../workflows/run-workflow.js';
+import { decisionCalibrationPrompt, decisionPolicyStatusText } from '../decision/policy.js';
 
 export type ParsedDailyOsCommand =
   | { type: 'ignore' }
   | { type: 'status' }
+  | { type: 'policy' }
+  | { type: 'calibrate' }
   | { type: 'remember'; text: string }
   | { type: 'feedback'; text: string }
   | { type: 'workflow'; workflow: WorkflowName };
@@ -47,6 +50,8 @@ export function parseDailyOsCommand(text: string, prefix: string): ParsedDailyOs
   }
 
   if (['help', 'status', '状态', '帮助'].includes(lower)) return { type: 'status' };
+  if (['policy', 'decision policy', '规则', '决策规则'].includes(lower)) return { type: 'policy' };
+  if (['calibrate', 'decision calibrate', '校准', '决策校准', '开始校准'].includes(lower)) return { type: 'calibrate' };
   if (/^(rerun\s+)?(plan|daily plan)$/.test(lower) || ['日计划', '今日计划', '重跑今日计划'].includes(normalized)) {
     return { type: 'workflow', workflow: 'daily_plan' };
   }
@@ -68,6 +73,8 @@ export function dailyOsStatusText(prefix: string): string {
     `- ${prefix} status`,
     `- ${prefix} remember <text>`,
     `- ${prefix} feedback <text>`,
+    `- ${prefix} policy`,
+    `- ${prefix} calibrate`,
     `- ${prefix} plan`,
     `- ${prefix} review`,
     `- ${prefix} weekly`,
@@ -78,6 +85,12 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
   switch (command.type) {
     case 'status':
       await context.reply(dailyOsStatusText(context.prefix));
+      return;
+    case 'policy':
+      await context.reply(decisionPolicyStatusText(context.config));
+      return;
+    case 'calibrate':
+      await context.reply(decisionCalibrationPrompt(context.config));
       return;
     case 'remember':
       if (!command.text) {
