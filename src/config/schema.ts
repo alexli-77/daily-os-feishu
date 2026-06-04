@@ -116,6 +116,44 @@ export const AppConfigSchema = z.object({
         },
       },
     }),
+  decision: z
+    .object({
+      enabled: z.boolean().default(true),
+      policy_file: z.string().default('decision-policy.yaml'),
+      policy_notes_file: z.string().default('decision-policy.md'),
+      candidates_path: z.string().default('./data/memory/decision-policy-candidates.md'),
+      onboarding: z
+        .object({
+          enabled: z.boolean().default(true),
+          chat_name: z.string().default('Daily OS - 决策校准'),
+          chat_id_env: z.string().default('DAILY_OS_DECISION_CHAT_ID'),
+          owner_open_id_env: z.string().default('FEISHU_OWNER_OPEN_ID'),
+          state_path: z.string().default('./data/memory/decision-onboarding.json'),
+          auto_create_on_setup: z.boolean().default(false),
+        })
+        .default({
+          enabled: true,
+          chat_name: 'Daily OS - 决策校准',
+          chat_id_env: 'DAILY_OS_DECISION_CHAT_ID',
+          owner_open_id_env: 'FEISHU_OWNER_OPEN_ID',
+          state_path: './data/memory/decision-onboarding.json',
+          auto_create_on_setup: false,
+        }),
+    })
+    .default({
+      enabled: true,
+      policy_file: 'decision-policy.yaml',
+      policy_notes_file: 'decision-policy.md',
+      candidates_path: './data/memory/decision-policy-candidates.md',
+      onboarding: {
+        enabled: true,
+        chat_name: 'Daily OS - 决策校准',
+        chat_id_env: 'DAILY_OS_DECISION_CHAT_ID',
+        owner_open_id_env: 'FEISHU_OWNER_OPEN_ID',
+        state_path: './data/memory/decision-onboarding.json',
+        auto_create_on_setup: false,
+      },
+    }),
   sources: z.object({
     vault: enabled.extend({
       provider: z.enum(['remote', 'local']).default('remote'),

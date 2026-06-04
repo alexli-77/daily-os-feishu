@@ -1,13 +1,17 @@
-Create today's plan.
+生成今天的计划。
 
-Required structure:
-1. Opening line with the date.
-2. MIT: at most one must-win item. It must be supported by OKR, deadline, calendar pressure, or explicit evidence.
-3. Main plan: up to five items, grouped by outcome.
-4. Feishu / calendar / vault / GitHub / Linear signals that matter today.
-5. Risks and follow-up: keep this short.
+必须包含以下结构：
+1. 开头写明日期。
+2. 今日重点：最多 1 个 MIT，以及最多 2 个辅助重点。
+3. 为什么是这些：用简短证据说明判断依据，并说明哪些决策规则影响了排序。
+4. Codex 可以做：列出助手可以直接执行或先准备的具体任务。
+5. 用户必须做：列出需要用户本人判断、批准、开会、沟通或处理的敏感事项。
+6. 等待 / 阻塞：列出今天有意不选的事项，并简短说明原因。
+7. 今日重要信号：只列出今天真正有用的飞书、日历、vault、GitHub、Linear 信号。
+8. 风险与 follow-up：保持简短。
 
-Rules:
-- Vault items can enter the main plan only when they match a clear priority or deadline.
-- Urgent but unmatched items go to follow-up.
-- Do not include empty source sections.
+规则：
+- 如果 memory 中存在决策规则文件，必须读取并应用已确认的规则。如果某个权衡无法由现有规则解决，提出一个简短校准问题，不要假装确定。
+- Vault 项只有匹配明确优先级或截止日期时，才能进入主计划。
+- 紧急但没有匹配目标/规则的事项，只能进入 follow-up。
+- 不要输出空的数据源章节。

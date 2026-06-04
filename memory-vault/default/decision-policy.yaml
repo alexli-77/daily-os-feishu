@@ -1,0 +1,11 @@
+version: 1
+updated_at: null
+status: draft
+rules:
+  - id: confirm-before-durable-policy-change
+    description: 长期决策规则必须先由用户确认，才能保存生效。
+    when:
+      event: policy_change_proposed
+    then:
+      require_confirmation: true
+      bucket: pending_policy_candidate

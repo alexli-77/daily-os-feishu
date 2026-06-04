@@ -4,6 +4,7 @@ import { commandExists, runCommand } from '../utils/command.js';
 import { checkLarkCli } from '../connectors/lark-cli.js';
 import { defaultMemoryRepositoryPath, resolveMemoryRepositoryPath } from '../storage/memory.js';
 import { hasAnyAccessRule, summarizeFeishuAccess } from '../interaction/access-policy.js';
+import { decisionPolicyFiles } from '../decision/policy.js';
 
 export interface DoctorCheck {
   name: string;
@@ -77,8 +78,27 @@ export async function runDoctor(config: AppConfig, configPath = 'config/config.y
     ok: fs.existsSync(memoryRepositoryPath),
     detail: config.memory.repository_path.trim()
       ? memoryRepositoryPath
-      : `using built-in template at ${defaultMemoryRepositoryPath()}`,
+      : `使用内置模板：${defaultMemoryRepositoryPath()}`,
   });
+
+  if (config.decision.enabled) {
+    const policy = decisionPolicyFiles(config);
+    checks.push({
+      name: 'decision policy files',
+      ok: fs.existsSync(policy.policyPath) && fs.existsSync(policy.notesPath),
+      level: fs.existsSync(policy.policyPath) && fs.existsSync(policy.notesPath) ? 'ok' : 'warning',
+      detail: `policy=${policy.policyPath}, notes=${policy.notesPath}`,
+    });
+    if (config.decision.onboarding.enabled) {
+      const statePath = config.decision.onboarding.state_path;
+      checks.push({
+        name: config.decision.onboarding.chat_id_env,
+        ok: Boolean(process.env[config.decision.onboarding.chat_id_env]) || fs.existsSync(statePath),
+        level: Boolean(process.env[config.decision.onboarding.chat_id_env]) || fs.existsSync(statePath) ? 'ok' : 'warning',
+        detail: '开始决策校准前不是必填项',
+      });
+    }
+  }
 
   if (config.sources.vault.enabled) {
     if (config.sources.vault.provider === 'remote') {
@@ -151,7 +171,7 @@ async function codexLoginCheck(codexBin: string, env: NodeJS.ProcessEnv): Promis
 }
 
 function usesLarkCliFeishu(config: AppConfig): boolean {
-  return Boolean(config.output.feishu.enabled || config.feedback.feishu.enabled || config.sources.feishu.enabled);
+  return Boolean(config.output.feishu.enabled || config.feedback.feishu.enabled || config.sources.feishu.enabled || config.decision.onboarding.enabled);
 }
 
 async function larkCliAuthCheck(): Promise<DoctorCheck> {
@@ -169,7 +189,7 @@ async function larkCliAuthCheck(): Promise<DoctorCheck> {
   return {
     name: 'lark-cli auth',
     ok: hasUser || hasBot,
-    detail: hasUser || hasBot ? `ready identities: ${[hasUser ? 'user' : '', hasBot ? 'bot' : ''].filter(Boolean).join(', ')}` : 'no ready user or bot identity',
+    detail: hasUser || hasBot ? `已登录身份：${[hasUser ? 'user' : '', hasBot ? 'bot' : ''].filter(Boolean).join(', ')}` : '没有可用的 user 或 bot 身份',
   };
 }
 

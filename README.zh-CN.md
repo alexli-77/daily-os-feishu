@@ -163,6 +163,10 @@ Memory repository 区域用于配置 Daily OS 的长期记忆库。`memory.repos
 用户自己的私有 memory repository 文件夹。每日运行日志和手动 `remember` 内容仍默认写到
 被 git 忽略的 `data/memory` 路径。
 
+决策校准也放在 memory repository 中。内置模板包含 `decision-policy.yaml`、
+`decision-policy.md` 和 `policy-skill/SKILL.md`。第一天不要要求用户填写复杂权重，
+而是通过对话逐步磨合规则。
+
 `Logs` 页会显示本地 UI/API 请求状态和 action 执行生命周期。日志保存在
 `data/logs/ui-network.jsonl`，不记录请求正文、响应正文或密钥，并自动只保留最近 7 天。
 
@@ -206,6 +210,41 @@ memory:
 ```
 
 如果 `repository_path` 为空，应用会使用内置模板。模板可以公开；私人记忆应该放在仓库外部。
+
+## 决策校准
+
+Daily OS 支持一个首次使用的决策校准流程。它会创建或复用一个飞书私有群，让用户和 bot
+像聊天一样讨论：什么任务更重要、哪些可以交给 Codex、哪些必须用户本人判断。确认过的规则
+会变成长期 policy；还没确认的想法只作为 calibration notes 或 pending candidates。
+
+可以在 UI 中点击 **Start decision onboarding**，也可以用 CLI：
+
+```bash
+npm run dev -- onboarding start
+```
+
+这个命令会：
+
+- 确保 memory repository 中存在决策 policy 文件；
+- 创建一个由 `decision.onboarding.chat_name` 命名的私有飞书群；
+- 邀请 owner `open_id`；
+- 把群 ID 保存到 `DAILY_OS_DECISION_CHAT_ID` 和 `decision.onboarding.state_path`；
+- 向该群发送第一条决策校准引导消息。
+
+底层方式参考 `lark-coding-agent-bridge`：由 bot 创建私有群，并用用户 `open_id` 邀请用户。
+飞书应用需要 `im:chat` 和 bot 发消息权限。
+
+在 Feishu interaction mode 中，也可以发送：
+
+- `daily-os policy`：查看当前决策 policy 文件。
+- `daily-os calibrate`：创建或复用决策校准群，并引导用户去那里继续磨合规则。
+
+决策校准群创建后，用户可以在该群里直接自然聊天，不需要每句话都带 `daily-os` 前缀，也不需要
+@bot。系统会用当前 `decision-policy.yaml`、`decision-policy.md` 和候选规则记录作为上下文，
+生成中文回复，并把本轮校准对话追加到 `decision.candidates_path`。第一版只记录候选和对话，
+不会静默改写长期规则。
+
+首次安装建议保持 `decision.onboarding.auto_create_on_setup: false`，避免工具一启动就意外拉群。
 
 ## 飞书集成
 
@@ -257,6 +296,8 @@ npm run interaction:feishu
 - `daily-os status`：返回带 Plan、Review、Weekly 按钮的操作卡片。
 - `daily-os remember <text>`：写入 long-term memory。
 - `daily-os feedback <text>`：写入本地 feedback log。
+- `daily-os policy`：查看当前决策 policy 和 policy-skill 路径。
+- `daily-os calibrate`：创建或复用决策校准群。
 - `daily-os plan`、`daily-os review`、`daily-os weekly`：运行 workflow，并在同一个聊天里回复。
 
 这一层不会替代知识库 vault 或 memory repository。它只是飞书侧的交互入口。

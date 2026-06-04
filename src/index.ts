@@ -12,6 +12,8 @@ import { installLaunchAgent, runScheduler, uninstallLaunchAgent } from './servic
 import { pollFeishuFeedback } from './feedback/feishu-feedback.js';
 import { startUiServer } from './ui/server.js';
 import { startFeishuInteraction } from './interaction/feishu-interaction.js';
+import { startDecisionOnboarding } from './decision/onboarding.js';
+import { ensureDecisionPolicyFiles } from './decision/policy.js';
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
@@ -83,6 +85,14 @@ async function main(): Promise<void> {
         await waitForShutdown(async () => {
           await controls.stop();
         });
+      } else {
+        usage(1);
+      }
+      break;
+    case 'onboarding':
+      if (subcommand === 'start') {
+        const result = await startDecisionOnboarding(config, { envPath: options.envPath });
+        console.log(JSON.stringify(result, null, 2));
       } else {
         usage(1);
       }
@@ -180,9 +190,10 @@ function setup(): void {
   copyIfMissing('config/config.example.yaml', 'config/config.yaml');
   const config = loadConfig('config/config.yaml');
   ensureMemoryFiles(config);
+  ensureDecisionPolicyFiles(config);
   fs.mkdirSync(path.resolve('data/snapshots/chrome'), { recursive: true });
   fs.mkdirSync(path.resolve('data/snapshots/calendar'), { recursive: true });
-  console.log('Created local .env, config/config.yaml, and data directories. Edit them before running doctor.');
+  console.log('已创建本地 .env、config/config.yaml 和 data 目录。请先编辑配置，再运行 doctor。');
 }
 
 function copyIfMissing(from: string, to: string): void {
@@ -207,6 +218,7 @@ Commands:
   service run        Run scheduler in the foreground
   feedback poll      Poll Feishu for daily-os commands and feedback
   interaction feishu Run the Feishu websocket interaction layer
+  onboarding start   Create or reuse the Feishu decision calibration chat
 
 Options:
   --config <path>    Use a config file other than config/config.yaml
