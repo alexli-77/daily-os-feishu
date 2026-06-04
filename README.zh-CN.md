@@ -104,7 +104,7 @@ Feishu 配置现在按能力需要才填写：
 
 - `lark-cli` 认证：飞书采集、lark-cli 发送和轮询都需要。若自动配置找不到，请运行 `lark-cli config init` 和 `lark-cli auth login`。
 - `FEISHU_CHAT_ID`：只有需要发送输出、轮询反馈，或某个 profile 启用 IM history 时才需要。
-- Docs URL/token：只有启用 Docs 的 profile 需要。在 profile 中按行填写 `名称 | 文档 URL 或 token`。
+- Docs URL/token：只有启用 Docs 的 profile 需要。在 profile 中按行填写 `名称 | 文档 URL 或 token`。Docs 采集默认走 `lark-cli docs +fetch --api-version v2 --as user`，也就是复用本机已登录用户对文档的访问权限；读取文档不使用 Chat ID。
 - `LARK_APP_ID` 和 `LARK_APP_SECRET`：只有启用可选的 Feishu websocket interaction layer 时才需要。App ID 通常可从 lark-cli 自动发现；App Secret 不能从 lark-cli/keychain 读回，所以只有启用 interaction 时才手动粘贴。
 - Profile `identity`：日历/任务/文档/IM 走用户授权时选 `user`；机器人已进目标群且具备权限时选 `bot`。
 

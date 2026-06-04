@@ -76,12 +76,16 @@ async function collectFeishuProfile(profile: FeishuProfileConfig, date: string):
   }
 
   if (profile.docs.enabled) {
-    const docs: Record<string, unknown> = {};
+    const docs: Record<string, EvidenceSource> = {};
     for (const doc of profile.docs.documents) {
-      const result = await runLarkJson(['docs', '+fetch', '--doc', doc.token, '--as', profile.identity]);
-      docs[doc.name] = result;
+      const name = doc.name.trim() || 'document';
+      if (!isConfiguredDocumentToken(doc.token)) {
+        docs[name] = { state: 'missing', detail: 'Document URL/token is not configured' };
+        continue;
+      }
+      docs[name] = await runLarkJson(['docs', '+fetch', '--api-version', 'v2', '--doc', doc.token, '--as', profile.identity]);
     }
-    out[`${prefix}_docs`] = sourceFromResult(docs);
+    out[`${prefix}_docs`] = sourceFromDocuments(docs);
   } else {
     out[`${prefix}_docs`] = { state: 'disabled' };
   }
@@ -119,6 +123,21 @@ function sanitizeSourceId(value: string): string {
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '')
     .slice(0, 40) || 'default';
+}
+
+function isConfiguredDocumentToken(value: string): boolean {
+  const token = value.trim();
+  return token.length > 0 && !/^YOUR_/i.test(token);
+}
+
+function sourceFromDocuments(docs: Record<string, EvidenceSource>): EvidenceSource {
+  const values = Object.values(docs);
+  if (values.length === 0) return { state: 'missing', detail: 'No Feishu document URLs/tokens are configured' };
+  if (values.some((source) => source.state === 'available')) return { state: 'available', data: docs };
+  if (values.some((source) => source.state === 'error')) return { state: 'error', data: docs };
+  if (values.some((source) => source.state === 'missing')) return { state: 'missing', data: docs };
+  if (values.every((source) => source.state === 'disabled')) return { state: 'disabled', data: docs };
+  return { state: 'empty', data: docs };
 }
 
 export interface FeishuMessage {
