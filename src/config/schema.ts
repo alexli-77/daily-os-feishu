@@ -80,6 +80,23 @@ export const AppConfigSchema = z.object({
         require_mention_in_groups: z.boolean().default(true),
         debounce_ms: z.number().int().nonnegative().default(600),
         reply_mode: z.enum(['markdown', 'text']).default('markdown'),
+        security: z
+          .object({
+            owner_open_id_env: z.string().default('FEISHU_OWNER_OPEN_ID'),
+            admin_open_ids: z.array(z.string()).default([]),
+            allowed_user_open_ids: z.array(z.string()).default([]),
+            allowed_chat_ids: z.array(z.string()).default([]),
+            access_level: z.enum(['read_only', 'workspace', 'full']).default('read_only'),
+            allowed_workspaces: z.array(z.string()).default([]),
+          })
+          .default({
+            owner_open_id_env: 'FEISHU_OWNER_OPEN_ID',
+            admin_open_ids: [],
+            allowed_user_open_ids: [],
+            allowed_chat_ids: [],
+            access_level: 'read_only',
+            allowed_workspaces: [],
+          }),
       }),
     })
     .default({
@@ -89,6 +106,14 @@ export const AppConfigSchema = z.object({
         require_mention_in_groups: true,
         debounce_ms: 600,
         reply_mode: 'markdown',
+        security: {
+          owner_open_id_env: 'FEISHU_OWNER_OPEN_ID',
+          admin_open_ids: [],
+          allowed_user_open_ids: [],
+          allowed_chat_ids: [],
+          access_level: 'read_only',
+          allowed_workspaces: [],
+        },
       },
     }),
   sources: z.object({

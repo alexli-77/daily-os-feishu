@@ -263,6 +263,13 @@ interaction:
     require_mention_in_groups: true
     debounce_ms: 600
     reply_mode: "markdown"
+    security:
+      owner_open_id_env: "FEISHU_OWNER_OPEN_ID"
+      admin_open_ids: []
+      allowed_user_open_ids: []
+      allowed_chat_ids: []
+      access_level: "read_only"
+      allowed_workspaces: []
 ```
 
 Then run:
@@ -281,6 +288,30 @@ Supported messages are the same as feedback polling:
 
 This layer does not replace the knowledge vault or memory repository. It is only
 the Feishu-facing interaction surface.
+
+### Interaction Access Policy
+
+The interaction layer is deny-by-default. When enabled, it will not process
+remote Feishu messages until at least one of these is configured:
+
+- `FEISHU_OWNER_OPEN_ID` in `.env`
+- `interaction.feishu.security.allowed_user_open_ids`
+- `interaction.feishu.security.allowed_chat_ids`
+
+Access checks run before message batching, workflow triggers, and card button
+callbacks. In groups, keep `require_mention_in_groups: true` unless you are
+testing in a private bot-only group.
+
+Access levels:
+
+- `read_only`: safest default. Use for workflow triggering and future
+  read-only agent mode.
+- `workspace`: future agent mode may write only inside configured
+  `allowed_workspaces`.
+- `full`: trusted private deployments only. Doctor reports this as a warning.
+
+Use Feishu/Lark `open_id` values for users/admins and `chat_id` values for
+allowed chats.
 
 ## Feishu Feedback Commands
 

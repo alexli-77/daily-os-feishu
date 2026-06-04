@@ -236,6 +236,13 @@ interaction:
     require_mention_in_groups: true
     debounce_ms: 600
     reply_mode: "markdown"
+    security:
+      owner_open_id_env: "FEISHU_OWNER_OPEN_ID"
+      admin_open_ids: []
+      allowed_user_open_ids: []
+      allowed_chat_ids: []
+      access_level: "read_only"
+      allowed_workspaces: []
 ```
 
 启动：
@@ -252,6 +259,25 @@ npm run interaction:feishu
 - `daily-os plan`、`daily-os review`、`daily-os weekly`：运行 workflow，并在同一个聊天里回复。
 
 这一层不会替代知识库 vault 或 memory repository。它只是飞书侧的交互入口。
+
+### Interaction Access Policy
+
+Interaction layer 默认拒绝远程消息。启用后，必须至少配置下面任意一项，才会处理飞书消息：
+
+- `.env` 里的 `FEISHU_OWNER_OPEN_ID`
+- `interaction.feishu.security.allowed_user_open_ids`
+- `interaction.feishu.security.allowed_chat_ids`
+
+权限检查会发生在消息入队、workflow 触发和卡片按钮回调之前。群聊里建议保持
+`require_mention_in_groups: true`，除非你是在私有测试群里调试。
+
+Access level 含义：
+
+- `read_only`：最安全默认值。适合 workflow 触发和未来只读 agent mode。
+- `workspace`：未来 agent mode 只能写入配置的 `allowed_workspaces`。
+- `full`：只建议在可信的私人部署中使用。Doctor 会把它显示为 warning。
+
+用户/admin 使用飞书/Lark `open_id`，群聊使用 `chat_id`。
 
 ## 飞书反馈命令
 

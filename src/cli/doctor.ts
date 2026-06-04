@@ -3,6 +3,7 @@ import type { AppConfig } from '../config/schema.js';
 import { commandExists, runCommand } from '../utils/command.js';
 import { checkLarkCli } from '../connectors/lark-cli.js';
 import { defaultMemoryRepositoryPath, resolveMemoryRepositoryPath } from '../storage/memory.js';
+import { hasAnyAccessRule, summarizeFeishuAccess } from '../interaction/access-policy.js';
 
 export interface DoctorCheck {
   name: string;
@@ -42,6 +43,24 @@ export async function runDoctor(config: AppConfig, configPath = 'config/config.y
       ok: true,
       detail: `prefix=${config.interaction.feishu.command_prefix}, debounce=${config.interaction.feishu.debounce_ms}ms`,
     });
+    checks.push(
+      hasAnyAccessRule(config)
+        ? {
+            name: 'Feishu interaction access policy',
+            ok: true,
+            level: config.interaction.feishu.security.access_level === 'full' ? 'warning' : 'ok',
+            detail:
+              config.interaction.feishu.security.access_level === 'full'
+                ? `${summarizeFeishuAccess(config)}; full access should only be used for trusted private deployments`
+                : summarizeFeishuAccess(config),
+          }
+        : {
+            name: 'Feishu interaction access policy',
+            ok: false,
+            level: 'missing',
+            detail: `configure ${config.interaction.feishu.security.owner_open_id_env}, allowed_user_open_ids, or allowed_chat_ids before remote control will process messages`,
+          },
+    );
   }
 
   if (config.output.feishu.enabled) {

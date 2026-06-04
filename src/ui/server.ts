@@ -709,6 +709,7 @@ const HTML = String.raw`<!doctype html>
                     <div class="secret-control"><input id="secret-LARK_APP_SECRET" type="password" autocomplete="new-password" /><button type="button" class="icon-button" data-toggle-secret="LARK_APP_SECRET" aria-label="Show Feishu App Secret">&#128065;</button></div>
                   </div>
                   <label>Feishu Chat ID <span class="required">Required for output, feedback, or IM history</span><input id="env-FEISHU_CHAT_ID" placeholder="oc_xxx" /></label>
+                  <label>Feishu owner open_id <span class="required">Required for secure interaction</span><input id="env-FEISHU_OWNER_OPEN_ID" placeholder="ou_xxx" /></label>
                 </div>
                 <div class="source-block">
                   <p class="hint"><strong>Interaction layer:</strong> optional Feishu websocket listener. It receives chat commands directly and replies in the same chat, while still using the Daily OS workflow core.</p>
@@ -717,6 +718,12 @@ const HTML = String.raw`<!doctype html>
                   <label>Reply mode<select id="interaction-feishu-reply-mode"><option>markdown</option><option>text</option></select></label>
                   <label>Debounce ms<input id="interaction-feishu-debounce" type="number" min="0" /></label>
                   <label><input id="interaction-feishu-require-mention" type="checkbox" /> Require @mention in groups</label>
+                  <label>Access level<select id="interaction-feishu-access-level"><option>read_only</option><option>workspace</option><option>full</option></select></label>
+                  <label>Admin open IDs<textarea id="interaction-feishu-admins" rows="3" spellcheck="false" placeholder="One Feishu open_id per line"></textarea></label>
+                  <label>Allowed user open IDs<textarea id="interaction-feishu-users" rows="3" spellcheck="false" placeholder="One Feishu open_id per line"></textarea></label>
+                  <label>Allowed chat IDs<textarea id="interaction-feishu-chats" rows="3" spellcheck="false" placeholder="One Feishu chat_id per line"></textarea></label>
+                  <label>Allowed workspaces<textarea id="interaction-feishu-workspaces" rows="3" spellcheck="false" placeholder="One local workspace path per line"></textarea></label>
+                  <p class="hint">Safe default: interaction messages are denied until owner open_id, allowed users, or allowed chats are configured. Use full access only for trusted private deployments.</p>
                 </div>
                 <div class="manual-help">
                   <p class="hint"><strong>How multiple Feishu sources work:</strong> add multiple profiles below when you want different calendars/tasks/docs/IM switches under the same Feishu app credentials.</p>
@@ -1324,6 +1331,7 @@ function render() {
   set('env-CODEX_HOME', state.env.CODEX_HOME || '');
   set('env-LARK_APP_ID', state.env.LARK_APP_ID);
   set('env-FEISHU_CHAT_ID', state.env.FEISHU_CHAT_ID);
+  set('env-FEISHU_OWNER_OPEN_ID', state.env.FEISHU_OWNER_OPEN_ID);
   set('output-send-mode', config.output.feishu.send_mode);
   checked('output-feishu-enabled', config.output.feishu.enabled);
   checked('feedback-feishu-enabled', config.feedback.feishu.enabled);
@@ -1344,6 +1352,11 @@ function render() {
   set('interaction-feishu-prefix', config.interaction.feishu.command_prefix);
   set('interaction-feishu-reply-mode', config.interaction.feishu.reply_mode);
   set('interaction-feishu-debounce', config.interaction.feishu.debounce_ms);
+  set('interaction-feishu-access-level', config.interaction.feishu.security.access_level);
+  set('interaction-feishu-admins', (config.interaction.feishu.security.admin_open_ids || []).join('\n'));
+  set('interaction-feishu-users', (config.interaction.feishu.security.allowed_user_open_ids || []).join('\n'));
+  set('interaction-feishu-chats', (config.interaction.feishu.security.allowed_chat_ids || []).join('\n'));
+  set('interaction-feishu-workspaces', (config.interaction.feishu.security.allowed_workspaces || []).join('\n'));
   config.sources.feishu.profiles = getFeishuProfilesForUi(config);
   renderFeishuProfiles(config.sources.feishu.profiles);
   checked('source-github', config.sources.github.enabled);
@@ -1429,6 +1442,12 @@ async function saveAll() {
   next.interaction.feishu.reply_mode = value('interaction-feishu-reply-mode');
   next.interaction.feishu.debounce_ms = Number(value('interaction-feishu-debounce') || 600);
   next.interaction.feishu.require_mention_in_groups = isChecked('interaction-feishu-require-mention');
+  next.interaction.feishu.security.owner_open_id_env = 'FEISHU_OWNER_OPEN_ID';
+  next.interaction.feishu.security.access_level = value('interaction-feishu-access-level');
+  next.interaction.feishu.security.admin_open_ids = parseLines(value('interaction-feishu-admins'));
+  next.interaction.feishu.security.allowed_user_open_ids = parseLines(value('interaction-feishu-users'));
+  next.interaction.feishu.security.allowed_chat_ids = parseLines(value('interaction-feishu-chats'));
+  next.interaction.feishu.security.allowed_workspaces = parseLines(value('interaction-feishu-workspaces'));
   next.sources.feishu.enabled = isChecked('source-feishu-enabled');
   next.sources.feishu.profiles = readFeishuProfiles();
   if (next.sources.feishu.profiles.length > 0) {
@@ -1467,6 +1486,7 @@ async function saveAll() {
     CODEX_HOME: value('env-CODEX_HOME'),
     LARK_APP_ID: value('env-LARK_APP_ID'),
     FEISHU_CHAT_ID: value('env-FEISHU_CHAT_ID'),
+    FEISHU_OWNER_OPEN_ID: value('env-FEISHU_OWNER_OPEN_ID'),
     VAULT_GATE_URL: value('env-VAULT_GATE_URL'),
     OPENAI_API_KEY: secretValue('OPENAI_API_KEY'),
     LARK_APP_SECRET: secretValue('LARK_APP_SECRET'),
