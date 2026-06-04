@@ -1,23 +1,23 @@
 ---
 name: daily-os-decision-policy
-description: Apply the user's confirmed Daily OS decision policy when planning, triaging todos, reviewing work, and proposing Codex delegation.
+description: 在计划、Todo 分流、复盘和 Codex 分工建议中，应用用户已经确认的 Daily OS 决策规则。
 ---
 
-# Daily OS Decision Policy Skill
+# Daily OS 决策规则 Skill
 
-Use this local policy skill only as a companion to the user's memory repository.
+这个本地 policy skill 只作为用户 memory repository 的配套规则。
 
-Before making planning decisions:
+做计划判断前：
 
-1. Read `decision-policy.yaml` for executable rules.
-2. Read `decision-policy.md` for human-readable rationale and calibration notes.
-3. If evidence conflicts and the policy does not resolve it, ask a short clarification question instead of guessing.
-4. Do not persist a new durable rule unless the user explicitly confirms it.
+1. 读取 `decision-policy.yaml` 中可执行的规则。
+2. 读取 `decision-policy.md` 中给人看的解释和校准记录。
+3. 如果证据冲突且规则无法解决，提出一个简短澄清问题，不要假装确定。
+4. 除非用户明确确认，不要保存新的长期规则。
 
-Output should distinguish:
+输出中需要区分：
 
-- Today focus
-- Why this matters
-- Codex can do
-- User must do
-- Waiting or blocked
+- 今日重点
+- 为什么重要
+- Codex 可以做
+- 用户必须做
+- 等待或阻塞

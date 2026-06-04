@@ -86,13 +86,13 @@ export async function startFeishuInteraction(config: AppConfig): Promise<FeishuI
   });
 
   await channel.connect();
-  console.log('daily-os-feishu Feishu interaction layer started.');
+    console.log('daily-os-feishu 飞书交互层已启动。');
   if (config.decision.onboarding.auto_create_on_setup) {
     try {
       const result = await startDecisionOnboarding(config, { channel });
-      console.log(`[interaction] decision calibration chat ${result.created ? 'created' : 'ready'}: ${result.chatId}`);
+      console.log(`[interaction] 决策校准群${result.created ? '已创建' : '已准备好'}：${result.chatId}`);
     } catch (error) {
-      console.warn(`[interaction] decision onboarding skipped: ${error instanceof Error ? error.message : String(error)}`);
+      console.warn(`[interaction] 跳过决策校准初始化：${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -154,12 +154,12 @@ async function runBatch(input: {
       input.channel,
       last,
       [
-        result.created ? 'Created the decision calibration chat.' : 'Decision calibration chat is ready.',
+        result.created ? '已创建决策校准群。' : '决策校准群已准备好。',
         '',
-        `Chat: ${result.chatName}`,
-        `Chat ID: ${result.chatId}`,
+        `群名称：${result.chatName}`,
+        `群 ID：${result.chatId}`,
         '',
-        'Continue the policy calibration there so durable rules are easy to review.',
+        '请到这个群里继续校准决策规则，方便之后查看和确认长期规则。',
       ].join('\n'),
       input.config.interaction.feishu.reply_mode,
     );

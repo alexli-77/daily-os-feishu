@@ -3,7 +3,7 @@ updated_at: null
 status: draft
 rules:
   - id: confirm-before-durable-policy-change
-    description: Durable decision rules must be confirmed by the user before they are saved.
+    description: 长期决策规则必须先由用户确认，才能保存生效。
     when:
       event: policy_change_proposed
     then:

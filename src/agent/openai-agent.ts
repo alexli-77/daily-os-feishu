@@ -34,8 +34,8 @@ export function buildUserPrompt(input: AgentInput): string {
     `# Date\n${input.date}`,
     `# Memory\n${JSON.stringify(input.memory, null, 2)}`,
     `# Evidence\n${JSON.stringify(input.evidence, null, 2)}`,
-    '# Output',
-    'Return the final Feishu-ready message only. Do not include tool calls or hidden reasoning.',
+    '# 输出',
+    '只返回最终可直接发送到飞书的消息。不要包含工具调用或隐藏推理过程。',
   ].join('\n\n');
 }
 

@@ -125,7 +125,7 @@ export const AppConfigSchema = z.object({
       onboarding: z
         .object({
           enabled: z.boolean().default(true),
-          chat_name: z.string().default('Daily OS - Decision Calibration'),
+          chat_name: z.string().default('Daily OS - 决策校准'),
           chat_id_env: z.string().default('DAILY_OS_DECISION_CHAT_ID'),
           owner_open_id_env: z.string().default('FEISHU_OWNER_OPEN_ID'),
           state_path: z.string().default('./data/memory/decision-onboarding.json'),
@@ -133,7 +133,7 @@ export const AppConfigSchema = z.object({
         })
         .default({
           enabled: true,
-          chat_name: 'Daily OS - Decision Calibration',
+          chat_name: 'Daily OS - 决策校准',
           chat_id_env: 'DAILY_OS_DECISION_CHAT_ID',
           owner_open_id_env: 'FEISHU_OWNER_OPEN_ID',
           state_path: './data/memory/decision-onboarding.json',
@@ -147,7 +147,7 @@ export const AppConfigSchema = z.object({
       candidates_path: './data/memory/decision-policy-candidates.md',
       onboarding: {
         enabled: true,
-        chat_name: 'Daily OS - Decision Calibration',
+        chat_name: 'Daily OS - 决策校准',
         chat_id_env: 'DAILY_OS_DECISION_CHAT_ID',
         owner_open_id_env: 'FEISHU_OWNER_OPEN_ID',
         state_path: './data/memory/decision-onboarding.json',

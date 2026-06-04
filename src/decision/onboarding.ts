@@ -76,9 +76,9 @@ export function onboardingWelcomeText(config: AppConfig): string {
     '',
     decisionCalibrationPrompt(config),
     '',
-    'Suggested reply:',
+    '建议回复：',
     '',
-    '> Let us start. Ask me the first calibration question.',
+    '> 我们开始吧。先问我第一个校准问题。',
   ].join('\n');
 }
 
@@ -86,7 +86,7 @@ async function createDecisionChatWithChannel(channel: LarkChannel, name: string,
   const result = await channel.rawClient.im.v1.chat.create({
     data: {
       name,
-      description: 'Daily OS decision calibration chat',
+      description: 'Daily OS 决策校准群',
       chat_mode: 'group',
       chat_type: 'private',
       user_id_list: [ownerOpenId],
@@ -109,7 +109,7 @@ async function createDecisionChatWithLarkCli(name: string, ownerOpenId: string):
       '--name',
       name,
       '--description',
-      'Daily OS decision calibration chat',
+      'Daily OS 决策校准群',
       '--chat-mode',
       'group',
       '--type',
@@ -128,7 +128,7 @@ async function createDecisionChatWithLarkCli(name: string, ownerOpenId: string):
     throw new Error(
       [
         'Failed to create Feishu decision calibration chat.',
-        'Check that lark-cli bot auth is ready and the Feishu app has im:chat permission.',
+        '请确认 lark-cli bot 身份已登录，并且飞书应用已开通 im:chat 权限。',
         (result.stderr || result.stdout).slice(0, 1000),
       ].join('\n'),
     );
@@ -151,7 +151,7 @@ async function sendWelcomeMessage(chatId: string, welcomeText: string, channel?:
     { timeoutMs: 30000 },
   );
   if (!result.ok) {
-    throw new Error(`Decision chat was prepared, but sending the welcome message failed: ${(result.stderr || result.stdout).slice(0, 1000)}`);
+    throw new Error(`决策校准群已准备好，但发送欢迎消息失败：${(result.stderr || result.stdout).slice(0, 1000)}`);
   }
 }
 
@@ -165,7 +165,7 @@ async function resolveOwnerOpenId(config: AppConfig): Promise<string> {
   const openId = findStringKey(parsed?.identities, 'openId') || findStringKey(parsed?.identities, 'open_id');
   if (openId) return openId;
 
-  throw new Error(`Owner open_id is required. Set ${envKey}, or run lark-cli auth login and Auto configure from lark-cli.`);
+  throw new Error(`需要 owner open_id。请设置 ${envKey}，或运行 lark-cli auth login 后在 UI 中执行 Auto configure from lark-cli。`);
 }
 
 function writeEnvValue(envPath: string, key: string, value: string): void {

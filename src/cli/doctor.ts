@@ -78,7 +78,7 @@ export async function runDoctor(config: AppConfig, configPath = 'config/config.y
     ok: fs.existsSync(memoryRepositoryPath),
     detail: config.memory.repository_path.trim()
       ? memoryRepositoryPath
-      : `using built-in template at ${defaultMemoryRepositoryPath()}`,
+      : `使用内置模板：${defaultMemoryRepositoryPath()}`,
   });
 
   if (config.decision.enabled) {
@@ -95,7 +95,7 @@ export async function runDoctor(config: AppConfig, configPath = 'config/config.y
         name: config.decision.onboarding.chat_id_env,
         ok: Boolean(process.env[config.decision.onboarding.chat_id_env]) || fs.existsSync(statePath),
         level: Boolean(process.env[config.decision.onboarding.chat_id_env]) || fs.existsSync(statePath) ? 'ok' : 'warning',
-        detail: 'not required until decision onboarding is started',
+        detail: '开始决策校准前不是必填项',
       });
     }
   }
@@ -189,7 +189,7 @@ async function larkCliAuthCheck(): Promise<DoctorCheck> {
   return {
     name: 'lark-cli auth',
     ok: hasUser || hasBot,
-    detail: hasUser || hasBot ? `ready identities: ${[hasUser ? 'user' : '', hasBot ? 'bot' : ''].filter(Boolean).join(', ')}` : 'no ready user or bot identity',
+    detail: hasUser || hasBot ? `已登录身份：${[hasUser ? 'user' : '', hasBot ? 'bot' : ''].filter(Boolean).join(', ')}` : '没有可用的 user 或 bot 身份',
   };
 }
 

@@ -193,7 +193,7 @@ function setup(): void {
   ensureDecisionPolicyFiles(config);
   fs.mkdirSync(path.resolve('data/snapshots/chrome'), { recursive: true });
   fs.mkdirSync(path.resolve('data/snapshots/calendar'), { recursive: true });
-  console.log('Created local .env, config/config.yaml, and data directories. Edit them before running doctor.');
+  console.log('已创建本地 .env、config/config.yaml 和 data 目录。请先编辑配置，再运行 doctor。');
 }
 
 function copyIfMissing(from: string, to: string): void {

@@ -64,7 +64,7 @@ decision:
   candidates_path: "./data/memory/decision-policy-candidates.md"
   onboarding:
     enabled: true
-    chat_name: "Daily OS - Decision Calibration"
+    chat_name: "Daily OS - 决策校准"
     chat_id_env: "DAILY_OS_DECISION_CHAT_ID"
     owner_open_id_env: "FEISHU_OWNER_OPEN_ID"
     state_path: "./data/memory/decision-onboarding.json"

@@ -67,9 +67,9 @@ export function parseDailyOsCommand(text: string, prefix: string): ParsedDailyOs
 
 export function dailyOsStatusText(prefix: string): string {
   return [
-    'Daily OS is running.',
+    'Daily OS 正在运行。',
     '',
-    'Commands:',
+    '可用命令：',
     `- ${prefix} status`,
     `- ${prefix} remember <text>`,
     `- ${prefix} feedback <text>`,

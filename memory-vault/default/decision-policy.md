@@ -1,22 +1,22 @@
-# Decision Policy
+# 决策规则
 
-This file explains how Daily OS should make planning decisions for this user.
+这个文件用来说明 Daily OS 应该如何为当前用户做计划和优先级判断。
 
-Daily OS should use this policy for:
+Daily OS 应在以下场景使用这套规则：
 
-- Daily plan
-- Todo triage
-- Daily review
-- Weekly review
-- Codex delegation suggestions
+- 日计划
+- Todo 分流
+- 日复盘
+- 周复盘
+- Codex 分工建议
 
-## Current Principles
+## 当前原则
 
-- Ask when tradeoffs are unclear.
-- Treat one-time preferences as temporary unless the user confirms a durable rule.
-- Do not silently save or modify durable decision rules.
-- Separate what Codex can do from what the user must personally decide or execute.
+- 权衡不清楚时先问用户。
+- 用户没有明确确认前，把偏好视为一次性偏好，不写成长期规则。
+- 不要静默保存或修改长期决策规则。
+- 区分 Codex 可以代做的事，以及必须由用户本人判断或执行的事。
 
-## Calibration Notes
+## 校准记录
 
-Use the Feishu decision calibration chat to refine these rules over time.
+通过飞书决策校准群逐步磨合和修订这些规则。

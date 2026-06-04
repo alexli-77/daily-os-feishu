@@ -248,11 +248,11 @@ async function runActionInner(options: UiServerOptions, request: Record<string, 
     return {
       ok: true,
       text: [
-        result.created ? 'Created decision calibration chat.' : 'Decision calibration chat is ready.',
-        `Name: ${result.chatName}`,
-        `Chat ID: ${result.chatId}`,
+        result.created ? '已创建决策校准群。' : '决策校准群已准备好。',
+        `名称：${result.chatName}`,
+        `群 ID：${result.chatId}`,
         '',
-        'A welcome message was sent. Continue calibration in that Feishu chat.',
+        '已发送欢迎消息。请到这个飞书群里继续校准决策规则。',
       ].join('\n'),
       state: await buildState(options),
     };
@@ -289,7 +289,7 @@ function actionResultDetail(action: string): string {
   if (['plan', 'review', 'weekly'].includes(action)) return 'Workflow completed. Generated content is not written to logs.';
   if (action === 'feedback_poll') return 'Feishu feedback poll completed. Message bodies are not written to logs.';
   if (action === 'feishu_test') return 'Feishu test message sent.';
-  if (action === 'decision_onboarding_start') return 'Decision onboarding chat prepared.';
+  if (action === 'decision_onboarding_start') return '决策校准群已准备好。';
   return 'Action completed.';
 }
 
@@ -391,8 +391,8 @@ async function testCodexForUi(env: Record<string, string>): Promise<string> {
   }
   const login = await runCommand(codexBin, ['login', 'status'], { timeoutMs: 10000, env: codexEnv(env) });
   const versionText = (version.stdout || version.stderr).trim();
-  if (login.ok) return `Codex CLI OK: ${versionText}\n${(login.stdout || login.stderr).trim() || 'Logged in.'}`;
-  return `Codex CLI OK: ${versionText}\nCodex is not logged in for this configuration. Run this in Terminal, then click Test Codex login again:\n${codexBin} login`;
+  if (login.ok) return `Codex CLI 正常：${versionText}\n${(login.stdout || login.stderr).trim() || '已登录。'}`;
+  return `Codex CLI 正常：${versionText}\n当前配置下 Codex 尚未登录。请在 Terminal 中运行以下命令，然后回到 UI 再点击 Test Codex login：\n${codexBin} login`;
 }
 
 function codexEnv(env: Record<string, string>): NodeJS.ProcessEnv {
@@ -407,45 +407,45 @@ async function discoverFeishuSetupForUi(options: UiServerOptions, env: Record<st
 
   if (!config.ok && !auth.ok) {
     return [
-      'lark-cli Feishu setup was not found.',
-      'Run `lark-cli config init`, then `lark-cli auth login`, and try Auto configure again.',
+      '没有找到 lark-cli 飞书配置。',
+      '请先运行 `lark-cli config init`，再运行 `lark-cli auth login`，然后重新点击自动配置。',
       compactCommandError(config.text || auth.text),
     ].filter(Boolean).join('\n');
   }
 
   if (config.appId && !next.LARK_APP_ID) {
     next.LARK_APP_ID = config.appId;
-    lines.push(`Saved Feishu App ID from lark-cli (${maskValue(config.appId)}).`);
+    lines.push(`已从 lark-cli 保存飞书 App ID（${maskValue(config.appId)}）。`);
   } else if (config.appId) {
-    lines.push(`Feishu App ID is available from lark-cli (${maskValue(config.appId)}).`);
+    lines.push(`lark-cli 中已存在飞书 App ID（${maskValue(config.appId)}）。`);
   }
 
   if (auth.ownerOpenId && !next.FEISHU_OWNER_OPEN_ID) {
     next.FEISHU_OWNER_OPEN_ID = auth.ownerOpenId;
-    lines.push(`Saved owner open_id from lark-cli user login (${maskValue(auth.ownerOpenId)}).`);
+    lines.push(`已从 lark-cli user 登录信息保存 owner open_id（${maskValue(auth.ownerOpenId)}）。`);
   } else if (auth.ownerOpenId) {
-    lines.push(`User open_id is available from lark-cli (${maskValue(auth.ownerOpenId)}).`);
+    lines.push(`lark-cli 中已存在 user open_id（${maskValue(auth.ownerOpenId)}）。`);
   }
 
   if (!next.FEISHU_CHAT_ID) {
-    lines.push('Feishu Chat ID was not auto-detected. Paste an `oc_...` chat ID only if you send output, poll feedback, or collect IM history.');
+    lines.push('未自动检测到 Feishu Chat ID。只有需要发送输出、轮询反馈或采集 IM 历史时，才需要粘贴 `oc_...`。');
   }
 
   if (!next.LARK_APP_SECRET) {
-    lines.push('App Secret cannot be read back from lark-cli/keychain. You only need to paste it when enabling the websocket interaction layer.');
+    lines.push('无法从 lark-cli/keychain 读回 App Secret。只有启用 websocket 交互层时，才需要手动粘贴。');
   }
 
-  lines.push(auth.userReady ? 'lark-cli user identity is ready.' : 'lark-cli user identity is not ready; run `lark-cli auth login` for calendar/tasks/docs as user.');
-  lines.push(auth.botReady ? 'lark-cli bot identity is ready.' : 'lark-cli bot identity is not ready; bot output may fail until the app bot is enabled.');
+  lines.push(auth.userReady ? 'lark-cli user 身份已就绪。' : 'lark-cli user 身份未就绪；如需用 user 读取日历/任务/文档，请运行 `lark-cli auth login`。');
+  lines.push(auth.botReady ? 'lark-cli bot 身份已就绪。' : 'lark-cli bot 身份未就绪；在飞书应用 bot 启用前，bot 输出可能失败。');
 
   const scopes = auth.scopes;
   if (scopes.length > 0) {
-    lines.push(scopeSummary('Calendar', scopes, ['calendar:calendar.event:read', 'calendar:calendar:readonly', 'calendar:calendar:read']));
-    lines.push(scopeSummary('Tasks', scopes, ['task:task:read', 'task:tasklist:read']));
-    lines.push(scopeSummary('Docs', scopes, ['docx:document:readonly', 'docs:doc:readonly', 'wiki:wiki:readonly']));
-    lines.push(scopeSummary('IM history', scopes, ['im:message:readonly', 'im:message.p2p_msg:get_as_user', 'im:message.group_msg:get_as_user']));
+    lines.push(scopeSummary('日历', scopes, ['calendar:calendar.event:read', 'calendar:calendar:readonly', 'calendar:calendar:read']));
+    lines.push(scopeSummary('任务', scopes, ['task:task:read', 'task:tasklist:read']));
+    lines.push(scopeSummary('文档', scopes, ['docx:document:readonly', 'docs:doc:readonly', 'wiki:wiki:readonly']));
+    lines.push(scopeSummary('IM 历史', scopes, ['im:message:readonly', 'im:message.p2p_msg:get_as_user', 'im:message.group_msg:get_as_user']));
   } else {
-    lines.push('Could not read granted scopes from lark-cli; use Run Checks or Collect to see the first missing permission.');
+    lines.push('无法从 lark-cli 读取已授权 scope；请用 Run Checks 或 Collect 查看第一个缺失权限。');
   }
 
   writeEnvFile(options.envPath, next);
@@ -523,7 +523,7 @@ function parseFirstJsonObject(text: string): Record<string, unknown> | null {
 
 function scopeSummary(label: string, granted: string[], accepted: string[]): string {
   const ok = accepted.some((scope) => granted.includes(scope));
-  return `${ok ? 'OK' : 'Needs permission'}: ${label}${ok ? '' : ` (${accepted.join(' or ')})`}`;
+  return `${ok ? 'OK' : '需要权限'}：${label}${ok ? '' : `（${accepted.join(' 或 ')}）`}`;
 }
 
 function maskValue(value: string): string {
@@ -544,7 +544,7 @@ async function discoverGitHubTokenForUi(options: UiServerOptions, env: Record<st
     applyEnv(next);
     return `GitHub token found from ${github.source} and saved locally.`;
   }
-  return 'GitHub token not found. Run `gh auth login`, then try again, or paste GITHUB_TOKEN manually.';
+  return '未找到 GitHub token。请先运行 `gh auth login` 后重试，或手动粘贴 GITHUB_TOKEN。';
 }
 
 function discoverLinearTokenForUi(options: UiServerOptions, env: Record<string, string>): string {
@@ -808,15 +808,15 @@ const HTML = String.raw`<!doctype html>
               <label>Feedback poll limit<input id="feedback-poll-limit" type="number" min="1" max="100" /></label>
             </div>
             <fieldset class="wide-fieldset">
-              <legend>Decision onboarding</legend>
-              <p class="hint">Creates or reuses a private Feishu group for calibrating how Daily OS should make decisions. The Mac UI is for setup; the policy conversation happens in Feishu.</p>
+              <legend>决策校准</legend>
+              <p class="hint">创建或复用一个飞书私有群，用来和用户一起磨合 Daily OS 的决策方式。Mac UI 只负责配置；规则沟通发生在飞书里。</p>
               <div class="source-row">
-                <button type="button" class="secondary compact" data-action="decision_onboarding_start">Start decision onboarding</button>
-                <label class="check-row"><input id="decision-auto-create" type="checkbox" /> Auto-create when Feishu interaction starts</label>
+                <button type="button" class="secondary compact" data-action="decision_onboarding_start">开始决策校准</button>
+                <label class="check-row"><input id="decision-auto-create" type="checkbox" /> 飞书交互层启动时自动创建</label>
               </div>
-              <label>Calibration chat name<input id="decision-chat-name" /></label>
-              <label>Decision chat ID<input id="env-DAILY_OS_DECISION_CHAT_ID" placeholder="Created automatically or paste oc_xxx" /></label>
-              <p class="hint">Auto-create is off by default so a new customer is not surprised by a group being created. Use it only after the Feishu app has the <code>im:chat</code> permission.</p>
+              <label>校准群名称<input id="decision-chat-name" /></label>
+              <label>决策校准群 ID<input id="env-DAILY_OS_DECISION_CHAT_ID" placeholder="自动创建，或手动粘贴 oc_xxx" /></label>
+              <p class="hint">默认不自动创建，避免客户刚启动工具就被突然拉群。只有确认飞书应用已开通 <code>im:chat</code> 权限后，再启用自动创建。</p>
             </fieldset>
             <fieldset class="wide-fieldset">
               <legend>Codex</legend>
@@ -834,7 +834,7 @@ const HTML = String.raw`<!doctype html>
                 <label for="env-CODEX_HOME">Codex home</label>
                 <div class="path-control"><input id="env-CODEX_HOME" placeholder="Optional, usually ~/.codex" /><button type="button" class="secondary compact" data-action="choose_codex_home">Choose folder</button></div>
               </div>
-              <p class="hint">If Test Codex login says not logged in, run <code>codex login</code> in Terminal for the same Codex binary/home, then rerun checks.</p>
+              <p class="hint">如果 Test Codex login 提示未登录，请在 Terminal 中用相同的 Codex binary/home 运行 <code>codex login</code>，然后重新 Run Checks。</p>
               <p class="hint status-line" id="codex-status"></p>
             </fieldset>
             <div class="toggles">
@@ -1672,7 +1672,7 @@ async function saveAll() {
   next.feedback.feishu.poll_limit = Number(value('feedback-poll-limit') || 20);
   next.decision.enabled = true;
   next.decision.onboarding.enabled = true;
-  next.decision.onboarding.chat_name = value('decision-chat-name') || 'Daily OS - Decision Calibration';
+  next.decision.onboarding.chat_name = value('decision-chat-name') || 'Daily OS - 决策校准';
   next.decision.onboarding.chat_id_env = 'DAILY_OS_DECISION_CHAT_ID';
   next.decision.onboarding.owner_open_id_env = 'FEISHU_OWNER_OPEN_ID';
   next.decision.onboarding.auto_create_on_setup = isChecked('decision-auto-create');
@@ -1747,7 +1747,7 @@ async function saveAll() {
     'Config: ' + state.configPath,
     'Env: ' + state.envPath,
     'Active FEISHU_CHAT_ID: ' + maskClientValue(savedChat),
-    'Decision chat ID: ' + maskClientValue(decisionChat),
+    '决策校准群 ID：' + maskClientValue(decisionChat),
   ].join('\n');
   render();
   $('output').textContent = message;
