@@ -25,7 +25,7 @@ This repository is intentionally generic. It does not include personal tokens, p
 - Node.js 22+
 - Codex CLI signed in locally, or `OPENAI_API_KEY`
 - `lark-cli` installed and authenticated
-- A Feishu chat ID configured in `.env`
+- A Feishu chat ID configured in `.env` when sending output, polling feedback, or collecting IM history
 
 ## Quick Start
 
@@ -105,20 +105,22 @@ If Codex is not authenticated, run `codex login` in Terminal for that same
 binary/home, then rerun Checks. The app does not store Codex credentials; it only
 points to the customer's local Codex installation.
 
-In the Sources tab, Feishu can be configured as multiple profiles. Each profile
-has its own `id`, `identity`, calendar/tasks/docs/IM switches, and IM chat env
-name. Profiles are shown as collapsed rows by default, with the profile `id`
-visible in the row metadata. Feishu profile values are manual: configure the
-profile ID and identity in the UI, then put chat IDs in `.env` using the env var
-named by `IM chat env`, for example `FEISHU_CHAT_ID=oc_xxx`.
+In the Sources tab, Feishu starts with **Auto configure from lark-cli**. Use
+that first. The app reads the local `lark-cli` app ID, user open_id, available
+identities, and granted scopes, then saves only safe local values to `.env`.
+Anything it cannot know reliably is reported as a remaining manual step.
 
-Required Feishu values:
+Feishu values are now required only when the enabled feature needs them:
 
-- `LARK_APP_ID`: `App ID` from Feishu Developer Platform app credentials.
-- `LARK_APP_SECRET`: `App Secret` from Feishu Developer Platform app credentials.
-- `lark-cli` authentication: run `lark-cli doctor` and follow the auth prompts.
-- `FEISHU_CHAT_ID`: required for Feishu output, feedback, and any profile with IM history enabled.
-- Profile `identity`: choose `user` for user-authorized calendar/tasks/IM access, or `bot` when the bot is installed in the target chat and has the needed scopes.
+- `lark-cli` authentication: required for Feishu collection and lark-cli-based send/poll commands. Run `lark-cli config init` and `lark-cli auth login` if auto configure cannot find it.
+- `FEISHU_CHAT_ID`: required only for Feishu output, feedback polling, or any profile with IM history enabled.
+- Docs URLs/tokens: required only for profiles with Docs enabled. Add one per line in the profile as `Name | document URL or token`.
+- `LARK_APP_ID` and `LARK_APP_SECRET`: required only for the optional Feishu websocket interaction layer. App ID is usually discovered from lark-cli; App Secret cannot be read back from lark-cli/keychain, so paste it only when enabling interaction.
+- Profile `identity`: choose `user` for user-authorized calendar/tasks/docs/IM access, or `bot` when the bot is installed in the target chat and has the needed scopes.
+
+Each Feishu profile has its own local display name, `identity`,
+calendar/tasks/docs/IM switches, document list, and IM chat env name. Profiles
+are collapsed by default to keep setup readable.
 
 Feishu source profile fields are local Daily OS settings, not Feishu Developer
 Platform credentials:
@@ -237,12 +239,13 @@ is safe to publish; private memory should live outside the repo.
 This project shells out to `lark-cli` for Feishu capabilities. Configure the target chat with:
 
 ```env
-LARK_APP_ID=
-LARK_APP_SECRET=
 FEISHU_CHAT_ID=
 ```
 
-Use the same `App ID` and `App Secret` names shown in Feishu Developer Platform app credentials.
+Run **Auto configure from lark-cli** in the UI first. For normal lark-cli-based
+collection and message sending, the app can use lark-cli's local auth state. Add
+`LARK_APP_ID` and `LARK_APP_SECRET` only when enabling the websocket interaction
+layer.
 
 Use `output.feishu.identity` to choose `bot` or `user`.
 

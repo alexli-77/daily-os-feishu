@@ -25,7 +25,7 @@ Daily OS Feishu 是一个优先支持 Mac、本地优先、只集成飞书的个
 - Node.js 22+
 - 本机已登录 Codex CLI，或配置 `OPENAI_API_KEY`
 - 已安装并登录 `lark-cli`
-- `.env` 中配置飞书 chat ID
+- 如果要发送飞书输出、轮询反馈或采集 IM history，需要在 `.env` 中配置飞书 chat ID
 
 ## 快速开始
 
@@ -96,19 +96,20 @@ Setup 页提供 Codex 配置：
 如果提示 Codex 未登录，请在 Terminal 中用同一个 binary/home 运行 `codex login`，再回 UI 里
 重新 Run Checks。应用不会保存 Codex 凭证，只会保存客户本机 Codex 安装位置和可选 home 路径。
 
-Sources 页里的 Feishu 支持配置多个 profile。每个 profile 都有自己的
-`id`、`identity`、日历/任务/文档/IM 开关，以及 IM chat env 名称。profile 默认折叠显示，
-折叠摘要里会显示 profile `id`。Feishu profile 采用手动配置：在 UI 里配置 profile
-ID 和 identity，然后在 `.env` 中填写 `IM chat env` 指向的变量，例如
-`FEISHU_CHAT_ID=oc_xxx`。
+Sources 页里的 Feishu 先点 **Auto configure from lark-cli**。应用会读取本机
+`lark-cli` 里的 App ID、用户 open_id、可用身份和已授权 scope，并把能安全保存的本地值写入
+`.env`。它无法可靠判断的内容，会作为剩余手动步骤提示出来。
 
-Feishu 必填项：
+Feishu 配置现在按能力需要才填写：
 
-- `LARK_APP_ID`：飞书开放平台应用凭证页里的 `App ID`。
-- `LARK_APP_SECRET`：飞书开放平台应用凭证页里的 `App Secret`。
-- `lark-cli` 认证：运行 `lark-cli doctor`，按提示完成本机认证。
-- `FEISHU_CHAT_ID`：当需要发送输出、轮询反馈，或某个 profile 启用 IM history 时必填。
-- Profile `identity`：日历/任务/IM 走用户授权时选 `user`；机器人已进目标群且具备权限时选 `bot`。
+- `lark-cli` 认证：飞书采集、lark-cli 发送和轮询都需要。若自动配置找不到，请运行 `lark-cli config init` 和 `lark-cli auth login`。
+- `FEISHU_CHAT_ID`：只有需要发送输出、轮询反馈，或某个 profile 启用 IM history 时才需要。
+- Docs URL/token：只有启用 Docs 的 profile 需要。在 profile 中按行填写 `名称 | 文档 URL 或 token`。
+- `LARK_APP_ID` 和 `LARK_APP_SECRET`：只有启用可选的 Feishu websocket interaction layer 时才需要。App ID 通常可从 lark-cli 自动发现；App Secret 不能从 lark-cli/keychain 读回，所以只有启用 interaction 时才手动粘贴。
+- Profile `identity`：日历/任务/文档/IM 走用户授权时选 `user`；机器人已进目标群且具备权限时选 `bot`。
+
+每个 Feishu profile 都有自己的本地显示名、`identity`、日历/任务/文档/IM 开关、文档列表和
+IM chat env 名称。profile 默认折叠显示，避免配置页太乱。
 
 Feishu source profile 是 Daily OS 的本地设置，不是飞书开放平台凭证：
 
@@ -211,12 +212,12 @@ memory:
 本项目通过 `lark-cli` 调用飞书能力。目标会话通过 `.env` 配置：
 
 ```env
-LARK_APP_ID=
-LARK_APP_SECRET=
 FEISHU_CHAT_ID=
 ```
 
-字段名对应飞书开放平台应用凭证页中的 `App ID` 和 `App Secret`。
+先在 UI 中运行 **Auto configure from lark-cli**。普通的 lark-cli 采集和消息发送可以复用
+lark-cli 本机认证状态。只有启用 websocket interaction layer 时，才需要额外配置
+`LARK_APP_ID` 和 `LARK_APP_SECRET`。
 
 可以用 `output.feishu.identity` 选择 `bot` 或 `user` 身份。
 
