@@ -11,7 +11,8 @@ import { handleDailyOsCommand, parseDailyOsCommand } from './daily-os-command.js
 import { PendingQueue } from './pending-queue.js';
 import { runWorkflow } from '../workflows/run-workflow.js';
 import { decideFeishuAccess } from './access-policy.js';
-import { startDecisionOnboarding } from '../decision/onboarding.js';
+import { isDecisionCalibrationChat, startDecisionOnboarding } from '../decision/onboarding.js';
+import { runDecisionCalibrationAgent } from '../decision/calibration-agent.js';
 
 interface FeishuInteractionControls {
   stop: () => Promise<void>;
@@ -59,7 +60,7 @@ export async function startFeishuInteraction(config: AppConfig): Promise<FeishuI
         const last = batch[batch.length - 1];
         const message = error instanceof Error ? error.message : String(error);
         console.error(`[interaction] ${scope} failed: ${message}`);
-        if (last) await replyToMessage(channel, last, `Daily OS failed: ${message}`, 'text');
+        if (last) await replyToMessage(channel, last, `Daily OS 执行失败：${message}`, 'text');
       })
       .finally(() => queue.unblock(scope));
   });
@@ -86,7 +87,7 @@ export async function startFeishuInteraction(config: AppConfig): Promise<FeishuI
   });
 
   await channel.connect();
-    console.log('daily-os-feishu 飞书交互层已启动。');
+  console.log('daily-os-feishu 飞书交互层已启动。');
   if (config.decision.onboarding.auto_create_on_setup) {
     try {
       const result = await startDecisionOnboarding(config, { channel });
@@ -117,13 +118,14 @@ async function intakeMessage(input: {
     chatId: input.message.chatId,
     chatType: input.message.chatType,
   });
-  if (!access.ok) {
+  const isCalibrationChat = isDecisionCalibrationChat(input.config, input.message.chatId);
+  if (!access.ok && !isCalibrationChat) {
     console.warn(`[interaction] denied ${scope}; sender=${input.message.senderId.slice(-6)}; reason=${access.reason}`);
-    if (input.message.chatType === 'p2p') await replyToMessage(input.channel, input.message, 'Daily OS is not enabled for this Feishu user.', 'text');
+    if (input.message.chatType === 'p2p') await replyToMessage(input.channel, input.message, '当前飞书用户尚未启用 Daily OS。', 'text');
     return;
   }
 
-  if (input.message.chatType !== 'p2p' && input.config.interaction.feishu.require_mention_in_groups && !input.message.mentionedBot) {
+  if (!isCalibrationChat && input.message.chatType !== 'p2p' && input.config.interaction.feishu.require_mention_in_groups && !input.message.mentionedBot) {
     return;
   }
 
@@ -167,6 +169,18 @@ async function runBatch(input: {
     return;
   }
 
+  if (isDecisionCalibrationChat(input.config, last.chatId)) {
+    const reply = await runDecisionCalibrationAgent(input.config, {
+      text,
+      chatId: last.chatId,
+      senderOpenId: last.senderId,
+      messageId: last.messageId,
+    });
+    await replyToMessage(input.channel, last, reply, input.config.interaction.feishu.reply_mode);
+    console.log(`[interaction] handled ${input.scope}; command=decision-calibration`);
+    return;
+  }
+
   const result = await handleDailyOsCommand({
     config: input.config,
     messageId: last.messageId,
@@ -202,7 +216,7 @@ async function handleCardAction(input: {
     return;
   }
 
-  await input.channel.send(input.event.chatId, { text: `Running ${action.replaceAll('_', ' ')}...` }, { replyTo: input.event.messageId });
+  await input.channel.send(input.event.chatId, { text: `正在运行 ${action.replaceAll('_', ' ')}...` }, { replyTo: input.event.messageId });
   const output = await runWorkflow(input.config, action, { send: false });
   await input.channel.send(input.event.chatId, toSendInput(output, input.config.interaction.feishu.reply_mode), { replyTo: input.event.messageId });
 }
@@ -221,10 +235,10 @@ async function sendStatusCard(channel: LarkChannel, message: NormalizedMessage, 
           {
             tag: 'markdown',
             content: [
-              '**Daily OS interaction layer is running.**',
+              '**Daily OS 飞书交互层正在运行。**',
               '',
-              `Command prefix: \`${config.interaction.feishu.command_prefix}\``,
-              'Use the buttons below or send a command in this chat.',
+              `命令前缀：\`${config.interaction.feishu.command_prefix}\``,
+              '你可以点击下面按钮，或直接在这个聊天里发送命令。',
             ].join('\n'),
           },
           {

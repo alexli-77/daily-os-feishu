@@ -239,6 +239,11 @@ npm run dev -- onboarding start
 - `daily-os policy`：查看当前决策 policy 文件。
 - `daily-os calibrate`：创建或复用决策校准群，并引导用户去那里继续磨合规则。
 
+决策校准群创建后，用户可以在该群里直接自然聊天，不需要每句话都带 `daily-os` 前缀，也不需要
+@bot。系统会用当前 `decision-policy.yaml`、`decision-policy.md` 和候选规则记录作为上下文，
+生成中文回复，并把本轮校准对话追加到 `decision.candidates_path`。第一版只记录候选和对话，
+不会静默改写长期规则。
+
 首次安装建议保持 `decision.onboarding.auto_create_on_setup: false`，避免工具一启动就意外拉群。
 
 ## 飞书集成

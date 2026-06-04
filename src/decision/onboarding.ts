@@ -24,7 +24,7 @@ export async function startDecisionOnboarding(
   ensureDecisionPolicyFiles(config);
 
   const chatEnv = config.decision.onboarding.chat_id_env;
-  const existingChatId = process.env[chatEnv]?.trim() || readOnboardingState(config).chatId;
+  const existingChatId = decisionOnboardingChatId(config);
   const ownerOpenId = await resolveOwnerOpenId(config);
   const chatName = config.decision.onboarding.chat_name;
   const welcomeText = onboardingWelcomeText(config);
@@ -46,6 +46,16 @@ export async function startDecisionOnboarding(
 
   await sendWelcomeMessage(chatId, welcomeText, options.channel);
   return { chatId, chatName, created: true, ownerOpenId, welcomeText };
+}
+
+export function decisionOnboardingChatId(config: AppConfig): string {
+  const chatEnv = config.decision.onboarding.chat_id_env;
+  return process.env[chatEnv]?.trim() || readOnboardingState(config).chatId || '';
+}
+
+export function isDecisionCalibrationChat(config: AppConfig, chatId: string): boolean {
+  const expected = decisionOnboardingChatId(config).trim().toLowerCase();
+  return Boolean(expected && expected === chatId.trim().toLowerCase());
 }
 
 function readOnboardingState(config: AppConfig): { chatId?: string } {

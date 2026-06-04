@@ -271,6 +271,13 @@ In Feishu interaction mode, the user can also send:
 - `daily-os calibrate` to create or reuse the calibration group and continue the
   policy conversation there.
 
+After the decision calibration group exists, users can chat naturally in that
+group without the `daily-os` prefix or @mention. Daily OS uses the current
+`decision-policy.yaml`, `decision-policy.md`, and pending candidate log as
+context, replies in Chinese, and appends each calibration turn to
+`decision.candidates_path`. The first version records candidates and dialogue
+only; it does not silently rewrite durable policy.
+
 Keep `decision.onboarding.auto_create_on_setup: false` for first installs unless
 the user explicitly wants startup to create the group automatically.
 
