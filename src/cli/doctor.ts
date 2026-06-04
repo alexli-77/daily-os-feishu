@@ -32,9 +32,13 @@ export async function runDoctor(config: AppConfig, configPath = 'config/config.y
     checks.push({ name: 'OPENAI_API_KEY', ok: Boolean(process.env.OPENAI_API_KEY) });
   }
 
-  if (usesFeishu(config)) {
-    checks.push({ name: 'LARK_APP_ID', ok: Boolean(process.env.LARK_APP_ID), detail: 'Feishu Developer Platform App ID' });
-    checks.push({ name: 'LARK_APP_SECRET', ok: Boolean(process.env.LARK_APP_SECRET), detail: 'Feishu Developer Platform App Secret' });
+  if (usesLarkCliFeishu(config)) {
+    checks.push(await larkCliAuthCheck());
+  }
+
+  if (config.interaction.feishu.enabled) {
+    checks.push({ name: 'LARK_APP_ID', ok: Boolean(process.env.LARK_APP_ID), detail: 'required only for Feishu websocket interaction' });
+    checks.push({ name: 'LARK_APP_SECRET', ok: Boolean(process.env.LARK_APP_SECRET), detail: 'required only for Feishu websocket interaction' });
   }
 
   if (config.interaction.feishu.enabled) {
@@ -146,8 +150,27 @@ async function codexLoginCheck(codexBin: string, env: NodeJS.ProcessEnv): Promis
   };
 }
 
-function usesFeishu(config: AppConfig): boolean {
-  return Boolean(config.output.feishu.enabled || config.feedback.feishu.enabled || config.sources.feishu.enabled || config.interaction.feishu.enabled);
+function usesLarkCliFeishu(config: AppConfig): boolean {
+  return Boolean(config.output.feishu.enabled || config.feedback.feishu.enabled || config.sources.feishu.enabled);
+}
+
+async function larkCliAuthCheck(): Promise<DoctorCheck> {
+  const result = await runCommand('lark-cli', ['auth', 'status'], { timeoutMs: 10000 });
+  if (!result.ok) {
+    return {
+      name: 'lark-cli auth',
+      ok: false,
+      detail: `Run \`lark-cli config init\` and \`lark-cli auth login\`, then rerun checks. ${(result.stderr || result.stdout).slice(0, 500)}`.trim(),
+    };
+  }
+  const text = result.stdout || result.stderr;
+  const hasUser = /"user"\s*:\s*\{[\s\S]*?"available"\s*:\s*true/.test(text);
+  const hasBot = /"bot"\s*:\s*\{[\s\S]*?"available"\s*:\s*true/.test(text);
+  return {
+    name: 'lark-cli auth',
+    ok: hasUser || hasBot,
+    detail: hasUser || hasBot ? `ready identities: ${[hasUser ? 'user' : '', hasBot ? 'bot' : ''].filter(Boolean).join(', ')}` : 'no ready user or bot identity',
+  };
 }
 
 async function toCheck(name: string, checkPromise: Promise<{ state: string; detail?: string }>): Promise<Omit<DoctorCheck, 'name'>> {

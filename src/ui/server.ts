@@ -17,7 +17,7 @@ import { runCommand } from '../utils/command.js';
 import { appendUiLog, clearUiLogs, readUiLogs } from '../storage/ui-log.js';
 
 const SECRET_ENV_KEYS = new Set(['OPENAI_API_KEY', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'VAULT_GATE_TOKEN', 'LARK_APP_SECRET']);
-const PLAIN_ENV_KEYS = ['FEISHU_CHAT_ID', 'VAULT_GATE_URL', 'CODEX_BIN', 'CODEX_HOME', 'TZ', 'LARK_APP_ID'];
+const PLAIN_ENV_KEYS = ['FEISHU_CHAT_ID', 'FEISHU_OWNER_OPEN_ID', 'VAULT_GATE_URL', 'CODEX_BIN', 'CODEX_HOME', 'TZ', 'LARK_APP_ID'];
 const ENV_KEYS = [...PLAIN_ENV_KEYS, ...SECRET_ENV_KEYS];
 
 export interface UiServerOptions {
@@ -185,6 +185,10 @@ async function runActionInner(options: UiServerOptions, request: Record<string, 
 
   if (action === 'discover_linear_token') {
     return { ok: true, text: discoverLinearTokenForUi(options, env) };
+  }
+
+  if (action === 'discover_feishu_setup') {
+    return { ok: true, text: await discoverFeishuSetupForUi(options, env), state: await buildState(options) };
   }
 
   if (action === 'discover_codex_binary') {
@@ -367,6 +371,142 @@ async function testCodexForUi(env: Record<string, string>): Promise<string> {
 
 function codexEnv(env: Record<string, string>): NodeJS.ProcessEnv {
   return { ...process.env, ...env };
+}
+
+async function discoverFeishuSetupForUi(options: UiServerOptions, env: Record<string, string>): Promise<string> {
+  const next = { ...env };
+  const lines: string[] = [];
+  const config = await readLarkCliConfig();
+  const auth = await readLarkCliAuthStatus();
+
+  if (!config.ok && !auth.ok) {
+    return [
+      'lark-cli Feishu setup was not found.',
+      'Run `lark-cli config init`, then `lark-cli auth login`, and try Auto configure again.',
+      compactCommandError(config.text || auth.text),
+    ].filter(Boolean).join('\n');
+  }
+
+  if (config.appId && !next.LARK_APP_ID) {
+    next.LARK_APP_ID = config.appId;
+    lines.push(`Saved Feishu App ID from lark-cli (${maskValue(config.appId)}).`);
+  } else if (config.appId) {
+    lines.push(`Feishu App ID is available from lark-cli (${maskValue(config.appId)}).`);
+  }
+
+  if (auth.ownerOpenId && !next.FEISHU_OWNER_OPEN_ID) {
+    next.FEISHU_OWNER_OPEN_ID = auth.ownerOpenId;
+    lines.push(`Saved owner open_id from lark-cli user login (${maskValue(auth.ownerOpenId)}).`);
+  } else if (auth.ownerOpenId) {
+    lines.push(`User open_id is available from lark-cli (${maskValue(auth.ownerOpenId)}).`);
+  }
+
+  if (!next.FEISHU_CHAT_ID) {
+    lines.push('Feishu Chat ID was not auto-detected. Paste an `oc_...` chat ID only if you send output, poll feedback, or collect IM history.');
+  }
+
+  if (!next.LARK_APP_SECRET) {
+    lines.push('App Secret cannot be read back from lark-cli/keychain. You only need to paste it when enabling the websocket interaction layer.');
+  }
+
+  lines.push(auth.userReady ? 'lark-cli user identity is ready.' : 'lark-cli user identity is not ready; run `lark-cli auth login` for calendar/tasks/docs as user.');
+  lines.push(auth.botReady ? 'lark-cli bot identity is ready.' : 'lark-cli bot identity is not ready; bot output may fail until the app bot is enabled.');
+
+  const scopes = auth.scopes;
+  if (scopes.length > 0) {
+    lines.push(scopeSummary('Calendar', scopes, ['calendar:calendar.event:read', 'calendar:calendar:readonly', 'calendar:calendar:read']));
+    lines.push(scopeSummary('Tasks', scopes, ['task:task:read', 'task:tasklist:read']));
+    lines.push(scopeSummary('Docs', scopes, ['docx:document:readonly', 'docs:doc:readonly', 'wiki:wiki:readonly']));
+    lines.push(scopeSummary('IM history', scopes, ['im:message:readonly', 'im:message.p2p_msg:get_as_user', 'im:message.group_msg:get_as_user']));
+  } else {
+    lines.push('Could not read granted scopes from lark-cli; use Run Checks or Collect to see the first missing permission.');
+  }
+
+  writeEnvFile(options.envPath, next);
+  applyEnv(next);
+  return lines.join('\n');
+}
+
+async function readLarkCliConfig(): Promise<{ ok: boolean; appId?: string; text: string }> {
+  const result = await runCommand('lark-cli', ['config', 'show'], { timeoutMs: 10000 });
+  const text = result.stdout || result.stderr;
+  const parsed = parseFirstJsonObject(text);
+  const appId = typeof parsed?.appId === 'string' ? parsed.appId : undefined;
+  return { ok: result.ok, appId, text };
+}
+
+async function readLarkCliAuthStatus(): Promise<{
+  ok: boolean;
+  ownerOpenId?: string;
+  userReady: boolean;
+  botReady: boolean;
+  scopes: string[];
+  text: string;
+}> {
+  const result = await runCommand('lark-cli', ['auth', 'status'], { timeoutMs: 10000 });
+  const text = result.stdout || result.stderr;
+  const parsed = parseFirstJsonObject(text);
+  const identities = readRecord(parsed?.identities);
+  const user = readRecord(identities.user);
+  const bot = readRecord(identities.bot);
+  const scopeText = typeof user.scope === 'string' ? user.scope : '';
+  return {
+    ok: result.ok,
+    ownerOpenId: typeof user.openId === 'string' ? user.openId : undefined,
+    userReady: user.available === true || user.status === 'ready',
+    botReady: bot.available === true || bot.status === 'ready',
+    scopes: scopeText.split(/\s+/).filter(Boolean),
+    text,
+  };
+}
+
+function parseFirstJsonObject(text: string): Record<string, unknown> | null {
+  const start = text.indexOf('{');
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escaping = false;
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (escaping) {
+      escaping = false;
+      continue;
+    }
+    if (char === '\\') {
+      escaping = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (char === '{') depth += 1;
+    if (char === '}') depth -= 1;
+    if (depth === 0) {
+      try {
+        const parsed = JSON.parse(text.slice(start, index + 1)) as unknown;
+        return readRecord(parsed);
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+function scopeSummary(label: string, granted: string[], accepted: string[]): string {
+  const ok = accepted.some((scope) => granted.includes(scope));
+  return `${ok ? 'OK' : 'Needs permission'}: ${label}${ok ? '' : ` (${accepted.join(' or ')})`}`;
+}
+
+function maskValue(value: string): string {
+  if (value.length <= 10) return 'configured';
+  return `${value.slice(0, 4)}...${value.slice(-4)}`;
+}
+
+function compactCommandError(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().slice(0, 500);
 }
 
 async function discoverGitHubTokenForUi(options: UiServerOptions, env: Record<string, string>): Promise<string> {
@@ -702,17 +842,30 @@ const HTML = String.raw`<!doctype html>
                 <legend>Feishu</legend>
                 <label><input id="source-feishu-enabled" type="checkbox" /> Enabled</label>
                 <div class="source-block">
-                  <p class="hint"><strong>Feishu Developer Platform credentials.</strong> One App ID/App Secret pair is used for all Feishu source profiles in this app.</p>
-                  <label>Feishu App ID <span class="required">Required</span><input id="env-LARK_APP_ID" placeholder="cli_xxx" /></label>
+                  <p class="hint"><strong>Simple setup:</strong> Daily OS uses your existing <code>lark-cli</code> login whenever possible. Click auto configure first; only fill the remaining fields it reports.</p>
+                  <div class="source-row">
+                    <button type="button" class="secondary compact" data-action="discover_feishu_setup">Auto configure from lark-cli</button>
+                    <button type="button" class="secondary compact" data-action="doctor">Run Checks</button>
+                  </div>
+                  <p class="hint status-line" id="feishu-setup-status"></p>
+                </div>
+                <details class="advanced-settings">
+                  <summary>Manual Feishu credentials</summary>
+                  <p class="hint">App ID is usually discovered from lark-cli. App Secret is only required for the websocket interaction layer; normal lark-cli collection can run without pasting it here.</p>
+                  <label>Feishu App ID<input id="env-LARK_APP_ID" placeholder="cli_xxx" /></label>
                   <div class="form-field">
-                    <label for="secret-LARK_APP_SECRET">Feishu App Secret <span class="required">Required</span></label>
+                    <label for="secret-LARK_APP_SECRET">Feishu App Secret</label>
                     <div class="secret-control"><input id="secret-LARK_APP_SECRET" type="password" autocomplete="new-password" /><button type="button" class="icon-button" data-toggle-secret="LARK_APP_SECRET" aria-label="Show Feishu App Secret">&#128065;</button></div>
                   </div>
-                  <label>Feishu Chat ID <span class="required">Required for output, feedback, or IM history</span><input id="env-FEISHU_CHAT_ID" placeholder="oc_xxx" /></label>
-                  <label>Feishu owner open_id <span class="required">Required for secure interaction</span><input id="env-FEISHU_OWNER_OPEN_ID" placeholder="ou_xxx" /></label>
-                </div>
+                  <label>Feishu Chat ID <span class="required">Only for output, feedback, or IM history</span><input id="env-FEISHU_CHAT_ID" placeholder="oc_xxx" /></label>
+                  <label>Owner open_id <span class="required">Only for secure interaction</span><input id="env-FEISHU_OWNER_OPEN_ID" placeholder="ou_xxx" /></label>
+                </details>
                 <div class="source-block">
-                  <p class="hint"><strong>Interaction layer:</strong> optional Feishu websocket listener. It receives chat commands directly and replies in the same chat, while still using the Daily OS workflow core.</p>
+                  <p class="hint"><strong>Source profiles:</strong> choose what lark-cli should collect. Calendar and tasks usually need no extra fields after user login. Docs need document URLs/tokens. IM history needs a chat ID.</p>
+                </div>
+                <details class="advanced-settings">
+                  <summary>Feishu interaction layer</summary>
+                  <p class="hint">Optional websocket listener for remote commands in Feishu. This is the only Feishu mode that requires App Secret in this UI.</p>
                   <label><input id="interaction-feishu-enabled" type="checkbox" /> Feishu interaction layer</label>
                   <label>Interaction prefix<input id="interaction-feishu-prefix" /></label>
                   <label>Reply mode<select id="interaction-feishu-reply-mode"><option>markdown</option><option>text</option></select></label>
@@ -724,10 +877,9 @@ const HTML = String.raw`<!doctype html>
                   <label>Allowed chat IDs<textarea id="interaction-feishu-chats" rows="3" spellcheck="false" placeholder="One Feishu chat_id per line"></textarea></label>
                   <label>Allowed workspaces<textarea id="interaction-feishu-workspaces" rows="3" spellcheck="false" placeholder="One local workspace path per line"></textarea></label>
                   <p class="hint">Safe default: interaction messages are denied until owner open_id, allowed users, or allowed chats are configured. Use full access only for trusted private deployments.</p>
-                </div>
+                </details>
                 <div class="manual-help">
-                  <p class="hint"><strong>How multiple Feishu sources work:</strong> add multiple profiles below when you want different calendars/tasks/docs/IM switches under the same Feishu app credentials.</p>
-                  <p class="hint">Different App ID/App Secret per profile is not supported in this version. For separate Feishu apps or tenants, run a separate app config.</p>
+                  <p class="hint"><strong>Multiple Feishu profiles:</strong> use profiles for different source mixes under the same lark-cli app. For separate Feishu tenants or apps, run a separate local config.</p>
                 </div>
                 <div id="feishu-profiles" class="profile-list"></div>
                 <button type="button" class="secondary" id="add-feishu-profile">Add Feishu profile</button>
@@ -1649,6 +1801,7 @@ setSaveStatus.timer = 0;
 function setSourceStatus(action, text) {
   const target = action === 'discover_github_token' ? $('github-token-status') :
     action === 'discover_linear_token' ? $('linear-token-status') :
+    action === 'discover_feishu_setup' ? $('feishu-setup-status') :
     ['discover_codex_binary', 'choose_codex_binary', 'choose_codex_home', 'codex_test'].includes(action) ? $('codex-status') : null;
   if (target) target.textContent = text;
 }
@@ -1720,6 +1873,8 @@ function renderFeishuProfiles(profiles) {
     labelCheck('Docs', profileFieldId(index, 'docs'), profile.docs.enabled) +
     labelCheck('IM history', profileFieldId(index, 'im'), profile.im_history.enabled) +
     '</div>' +
+    '<label>Document URLs or tokens<textarea id="' + profileFieldId(index, 'docs-list') + '" rows="4" spellcheck="false" placeholder="Weekly plan | https://.../docx/...\nProject doc | doccn...">' + escapeHtml(formatFeishuDocs(profile.docs.documents || [])) + '</textarea></label>' +
+    '<p class="hint">Docs are optional and cannot be guessed by lark-cli. Use one per line: <code>Name | document URL or token</code>. A plain URL/token also works.</p>' +
     '<div class="grid">' +
     labelNumber('Calendar days', profileFieldId(index, 'calendar-days'), profile.calendar.days, 1, 30) +
     labelNumber('Task pages', profileFieldId(index, 'task-pages'), profile.tasks.page_limit, 1, 20) +
@@ -1761,7 +1916,6 @@ function profileMeta(profile) {
 function readFeishuProfiles() {
   return [...document.querySelectorAll('[data-profile-index]')].map((card) => {
     const index = Number(card.dataset.profileIndex);
-    const existing = state.config.sources.feishu.profiles?.[index] || {};
     return {
       id: value(profileFieldId(index, 'id')) || 'feishu_' + (index + 1),
       label: value(profileFieldId(index, 'label')) || 'Feishu ' + (index + 1),
@@ -1778,7 +1932,7 @@ function readFeishuProfiles() {
       },
       docs: {
         enabled: isChecked(profileFieldId(index, 'docs')),
-        documents: existing.docs?.documents || [],
+        documents: parseFeishuDocs(value(profileFieldId(index, 'docs-list'))),
       },
       im_history: {
         enabled: isChecked(profileFieldId(index, 'im')),
@@ -1787,6 +1941,23 @@ function readFeishuProfiles() {
       },
     };
   });
+}
+
+function formatFeishuDocs(documents) {
+  return (documents || []).map((doc) => (doc.name || 'Document') + ' | ' + (doc.token || '')).join('\n');
+}
+
+function parseFeishuDocs(text) {
+  return text.split('\n').map((line, index) => {
+    const trimmed = line.trim();
+    if (!trimmed) return null;
+    const [name, ...rest] = trimmed.split('|').map((part) => part.trim());
+    const token = rest.join('|') || name;
+    return {
+      name: rest.length > 0 && name ? name : 'Document ' + (index + 1),
+      token,
+    };
+  }).filter(Boolean);
 }
 
 function profileFieldId(index, name) {
