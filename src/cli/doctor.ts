@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import type { AppConfig } from '../config/schema.js';
 import { commandExists, runCommand } from '../utils/command.js';
 import { checkLarkCli } from '../connectors/lark-cli.js';
+import { defaultMemoryRepositoryPath, resolveMemoryRepositoryPath } from '../storage/memory.js';
 
 export interface DoctorCheck {
   name: string;
@@ -35,9 +36,26 @@ export async function runDoctor(config: AppConfig, configPath = 'config/config.y
     checks.push({ name: 'LARK_APP_SECRET', ok: Boolean(process.env.LARK_APP_SECRET), detail: 'Feishu Developer Platform App Secret' });
   }
 
+  if (config.interaction.feishu.enabled) {
+    checks.push({
+      name: 'Feishu interaction layer',
+      ok: true,
+      detail: `prefix=${config.interaction.feishu.command_prefix}, debounce=${config.interaction.feishu.debounce_ms}ms`,
+    });
+  }
+
   if (config.output.feishu.enabled) {
     checks.push({ name: config.output.feishu.chat_id_env, ok: Boolean(process.env[config.output.feishu.chat_id_env]) });
   }
+
+  const memoryRepositoryPath = resolveMemoryRepositoryPath(config);
+  checks.push({
+    name: config.memory.repository_path.trim() ? 'memory.repository_path' : 'memory.repository_path (default)',
+    ok: fs.existsSync(memoryRepositoryPath),
+    detail: config.memory.repository_path.trim()
+      ? memoryRepositoryPath
+      : `using built-in template at ${defaultMemoryRepositoryPath()}`,
+  });
 
   if (config.sources.vault.enabled) {
     if (config.sources.vault.provider === 'remote') {
@@ -110,7 +128,7 @@ async function codexLoginCheck(codexBin: string, env: NodeJS.ProcessEnv): Promis
 }
 
 function usesFeishu(config: AppConfig): boolean {
-  return Boolean(config.output.feishu.enabled || config.feedback.feishu.enabled || config.sources.feishu.enabled);
+  return Boolean(config.output.feishu.enabled || config.feedback.feishu.enabled || config.sources.feishu.enabled || config.interaction.feishu.enabled);
 }
 
 async function toCheck(name: string, checkPromise: Promise<{ state: string; detail?: string }>): Promise<Omit<DoctorCheck, 'name'>> {

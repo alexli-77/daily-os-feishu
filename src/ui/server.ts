@@ -207,6 +207,10 @@ async function runActionInner(options: UiServerOptions, request: Record<string, 
     return chooseVaultFolder();
   }
 
+  if (action === 'choose_memory_repository') {
+    return chooseMemoryRepositoryFolder();
+  }
+
   applyEnv(env);
   const config = loadConfig(options.configPath);
 
@@ -269,6 +273,18 @@ async function chooseVaultFolder(): Promise<Record<string, unknown>> {
     throw new Error('Folder selection was cancelled or unavailable.');
   }
   return { ok: true, path: result.stdout.trim(), text: 'Vault folder selected.' };
+}
+
+async function chooseMemoryRepositoryFolder(): Promise<Record<string, unknown>> {
+  const result = await runCommand(
+    'osascript',
+    ['-e', 'POSIX path of (choose folder with prompt "Select your Daily OS memory repository folder")'],
+    { timeoutMs: 30000 },
+  );
+  if (!result.ok) {
+    throw new Error('Folder selection was cancelled or unavailable.');
+  }
+  return { ok: true, path: result.stdout.trim(), text: 'Memory repository folder selected.' };
 }
 
 async function chooseCodexBinary(options: UiServerOptions, env: Record<string, string>): Promise<Record<string, unknown>> {
@@ -656,7 +672,8 @@ const HTML = String.raw`<!doctype html>
             </div>
             <div class="source-list">
               <fieldset>
-                <legend>Vault</legend>
+                <legend>Knowledge vault</legend>
+                <p class="hint">This is the user's existing knowledge-base vault used as a source. It is separate from the Daily OS memory repository below.</p>
                 <label><input id="vault-enabled" type="checkbox" /> Enabled</label>
                 <label>Provider<select id="vault-provider"><option>local</option><option>remote</option></select></label>
                 <div class="form-field">
@@ -671,6 +688,17 @@ const HTML = String.raw`<!doctype html>
               </fieldset>
 
               <fieldset>
+                <legend>Memory repository</legend>
+                <p class="hint">This is Daily OS working memory. Leave empty to use the generic built-in template at <code>memory-vault/default</code>. Choose a private folder for durable goals, projects, commitments, and review notes.</p>
+                <div class="form-field">
+                  <label for="memory-repository-path">Repository path</label>
+                  <div class="path-control"><input id="memory-repository-path" placeholder="Use built-in default when empty" /><button type="button" class="secondary compact" data-action="choose_memory_repository">Choose folder</button></div>
+                </div>
+                <label>Long-term append log<input id="memory-long-term-path" /></label>
+                <label>Daily run log folder<input id="memory-daily-dir" /></label>
+              </fieldset>
+
+              <fieldset>
                 <legend>Feishu</legend>
                 <label><input id="source-feishu-enabled" type="checkbox" /> Enabled</label>
                 <div class="source-block">
@@ -681,6 +709,14 @@ const HTML = String.raw`<!doctype html>
                     <div class="secret-control"><input id="secret-LARK_APP_SECRET" type="password" autocomplete="new-password" /><button type="button" class="icon-button" data-toggle-secret="LARK_APP_SECRET" aria-label="Show Feishu App Secret">&#128065;</button></div>
                   </div>
                   <label>Feishu Chat ID <span class="required">Required for output, feedback, or IM history</span><input id="env-FEISHU_CHAT_ID" placeholder="oc_xxx" /></label>
+                </div>
+                <div class="source-block">
+                  <p class="hint"><strong>Interaction layer:</strong> optional Feishu websocket listener. It receives chat commands directly and replies in the same chat, while still using the Daily OS workflow core.</p>
+                  <label><input id="interaction-feishu-enabled" type="checkbox" /> Feishu interaction layer</label>
+                  <label>Interaction prefix<input id="interaction-feishu-prefix" /></label>
+                  <label>Reply mode<select id="interaction-feishu-reply-mode"><option>markdown</option><option>text</option></select></label>
+                  <label>Debounce ms<input id="interaction-feishu-debounce" type="number" min="0" /></label>
+                  <label><input id="interaction-feishu-require-mention" type="checkbox" /> Require @mention in groups</label>
                 </div>
                 <div class="manual-help">
                   <p class="hint"><strong>How multiple Feishu sources work:</strong> add multiple profiles below when you want different calendars/tasks/docs/IM switches under the same Feishu app credentials.</p>
@@ -1298,8 +1334,16 @@ function render() {
   set('vault-provider', config.sources.vault.provider);
   set('vault-local-path', config.sources.vault.local_path);
   set('env-VAULT_GATE_URL', state.env.VAULT_GATE_URL);
+  set('memory-repository-path', config.memory.repository_path || '');
+  set('memory-long-term-path', config.memory.long_term_path);
+  set('memory-daily-dir', config.memory.daily_dir);
 
   checked('source-feishu-enabled', config.sources.feishu.enabled);
+  checked('interaction-feishu-enabled', config.interaction.feishu.enabled);
+  checked('interaction-feishu-require-mention', config.interaction.feishu.require_mention_in_groups);
+  set('interaction-feishu-prefix', config.interaction.feishu.command_prefix);
+  set('interaction-feishu-reply-mode', config.interaction.feishu.reply_mode);
+  set('interaction-feishu-debounce', config.interaction.feishu.debounce_ms);
   config.sources.feishu.profiles = getFeishuProfilesForUi(config);
   renderFeishuProfiles(config.sources.feishu.profiles);
   checked('source-github', config.sources.github.enabled);
@@ -1380,6 +1424,11 @@ async function saveAll() {
   next.sources.vault.enabled = isChecked('vault-enabled');
   next.sources.vault.provider = value('vault-provider');
   next.sources.vault.local_path = value('vault-local-path');
+  next.interaction.feishu.enabled = isChecked('interaction-feishu-enabled');
+  next.interaction.feishu.command_prefix = value('interaction-feishu-prefix') || 'daily-os';
+  next.interaction.feishu.reply_mode = value('interaction-feishu-reply-mode');
+  next.interaction.feishu.debounce_ms = Number(value('interaction-feishu-debounce') || 600);
+  next.interaction.feishu.require_mention_in_groups = isChecked('interaction-feishu-require-mention');
   next.sources.feishu.enabled = isChecked('source-feishu-enabled');
   next.sources.feishu.profiles = readFeishuProfiles();
   if (next.sources.feishu.profiles.length > 0) {
@@ -1400,6 +1449,9 @@ async function saveAll() {
   next.sources.apple_calendar_snapshot.enabled = isChecked('source-apple-calendar');
   next.sources.local_files.enabled = isChecked('local-files-enabled');
   next.sources.local_files.files = parseFiles(value('local-files'));
+  next.memory.repository_path = value('memory-repository-path');
+  next.memory.long_term_path = value('memory-long-term-path') || './data/memory/long-term.md';
+  next.memory.daily_dir = value('memory-daily-dir') || './data/memory/daily';
 
   next.workflows.daily_plan.enabled = isChecked('workflow-plan-enabled');
   next.workflows.daily_plan.time = value('workflow-plan-time');
@@ -1475,6 +1527,12 @@ async function runAction(action) {
     if (action === 'choose_vault_folder' && result.path) {
       set('vault-local-path', result.path);
       $('output').textContent = result.text || 'Vault folder selected.';
+      setSaveStatus('Folder selected');
+      return;
+    }
+    if (action === 'choose_memory_repository' && result.path) {
+      set('memory-repository-path', result.path);
+      $('output').textContent = result.text || 'Memory repository folder selected.';
       setSaveStatus('Folder selected');
       return;
     }

@@ -11,6 +11,7 @@ import { formatDoctor, runDoctor } from './cli/doctor.js';
 import { installLaunchAgent, runScheduler, uninstallLaunchAgent } from './service/launchd.js';
 import { pollFeishuFeedback } from './feedback/feishu-feedback.js';
 import { startUiServer } from './ui/server.js';
+import { startFeishuInteraction } from './interaction/feishu-interaction.js';
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
@@ -72,6 +73,16 @@ async function main(): Promise<void> {
       if (subcommand === 'poll') {
         const result = await pollFeishuFeedback(config, { send: options.send });
         console.log(JSON.stringify(result, null, 2));
+      } else {
+        usage(1);
+      }
+      break;
+    case 'interaction':
+      if (subcommand === 'feishu') {
+        const controls = await startFeishuInteraction(config);
+        await waitForShutdown(async () => {
+          await controls.stop();
+        });
       } else {
         usage(1);
       }
@@ -155,6 +166,15 @@ async function runAndPrint(config: ReturnType<typeof loadConfig>, workflow: Work
   console.log(text);
 }
 
+async function waitForShutdown(stop: () => Promise<void>): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const done = (): void => resolve();
+    process.once('SIGINT', done);
+    process.once('SIGTERM', done);
+  });
+  await stop();
+}
+
 function setup(): void {
   copyIfMissing('.env.example', '.env');
   copyIfMissing('config/config.example.yaml', 'config/config.yaml');
@@ -186,6 +206,7 @@ Commands:
   service uninstall  Remove macOS launchd scheduler
   service run        Run scheduler in the foreground
   feedback poll      Poll Feishu for daily-os commands and feedback
+  interaction feishu Run the Feishu websocket interaction layer
 
 Options:
   --config <path>    Use a config file other than config/config.yaml
