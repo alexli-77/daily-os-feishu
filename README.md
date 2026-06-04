@@ -114,7 +114,7 @@ Feishu values are now required only when the enabled feature needs them:
 
 - `lark-cli` authentication: required for Feishu collection and lark-cli-based send/poll commands. Run `lark-cli config init` and `lark-cli auth login` if auto configure cannot find it.
 - `FEISHU_CHAT_ID`: required only for Feishu output, feedback polling, or any profile with IM history enabled.
-- Docs URLs/tokens: required only for profiles with Docs enabled. Add one per line in the profile as `Name | document URL or token`.
+- Docs URLs/tokens: required only for profiles with Docs enabled. Add one per line in the profile as `Name | document URL or token`. Docs collection uses `lark-cli docs +fetch --api-version v2 --as user` by default, so it follows the locally authenticated user's document access. A chat ID is not used for document reads.
 - `LARK_APP_ID` and `LARK_APP_SECRET`: required only for the optional Feishu websocket interaction layer. App ID is usually discovered from lark-cli; App Secret cannot be read back from lark-cli/keychain, so paste it only when enabling interaction.
 - Profile `identity`: choose `user` for user-authorized calendar/tasks/docs/IM access, or `bot` when the bot is installed in the target chat and has the needed scopes.
 

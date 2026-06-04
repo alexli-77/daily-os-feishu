@@ -731,6 +731,7 @@ const HTML = String.raw`<!doctype html>
         <div class="status" id="summary-status" title="Local setup checks">Loading</div>
       </div>
     </header>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
     <main class="layout">
       <nav class="nav" aria-label="Sections">
@@ -1026,10 +1027,43 @@ body {
 }
 
 .save-status {
-  color: var(--ok);
-  font-size: .85rem;
-  min-width: 4.5rem;
+  color: var(--muted);
+  font-size: .9rem;
+  min-width: 8rem;
   text-align: right;
+}
+.save-status.success { color: var(--ok); }
+.save-status.error { color: var(--danger); }
+
+.toast {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 20;
+  max-width: min(32rem, calc(100vw - 2rem));
+  padding: .8rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: .5rem;
+  background: var(--panel);
+  box-shadow: 0 12px 32px rgb(0 0 0 / .12);
+  color: var(--text);
+  opacity: 0;
+  transform: translateY(-.35rem);
+  pointer-events: none;
+  transition: opacity .16s ease, transform .16s ease;
+  white-space: pre-wrap;
+}
+.toast.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+.toast.success {
+  border-color: #98c8aa;
+  background: #edf7ef;
+}
+.toast.error {
+  border-color: #d5a4a4;
+  background: #fff0f0;
 }
 
 h1, h2, legend, p { margin: 0; }
@@ -1454,13 +1488,23 @@ $('add-feishu-profile').addEventListener('click', () => {
 
 $('config-form').addEventListener('submit', async (event) => {
   event.preventDefault();
-  await saveAll();
+  try {
+    await saveAll();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    $('output').textContent = 'Save failed: ' + message;
+    setSaveStatus('Save failed', 'error', false);
+    showToast('Save failed: ' + message, 'error', false);
+  }
 });
 
 $('refresh-logs').addEventListener('click', () => loadLogs());
 $('clear-logs').addEventListener('click', () => clearLogs());
 
-loadState();
+loadState().catch((error) => {
+  const message = error instanceof Error ? error.message : String(error);
+  showToast('Failed to load local state: ' + message, 'error', false);
+});
 
 async function loadState() {
   const response = await fetch('/api/state');
@@ -1574,6 +1618,7 @@ function renderChecks(checks) {
 }
 
 async function saveAll() {
+  setSaveStatus('Saving...', 'info', false);
   const next = structuredClone(state.config);
   next.user.display_name = value('user-display-name');
   next.user.timezone = value('user-timezone');
@@ -1648,9 +1693,17 @@ async function saveAll() {
   };
   const result = await post('/api/env', { values: envValues });
   state = result.state;
+  const savedChat = state.env.FEISHU_CHAT_ID || '';
+  const message = [
+    'Saved local configuration.',
+    'Config: ' + state.configPath,
+    'Env: ' + state.envPath,
+    'Active FEISHU_CHAT_ID: ' + maskClientValue(savedChat),
+  ].join('\n');
   render();
-  $('output').textContent = 'Saved local configuration.';
-  setSaveStatus('Saved');
+  $('output').textContent = message;
+  setSaveStatus('Saved', 'success');
+  showToast(message, 'success');
 }
 
 function renderSecret(key) {
@@ -1785,18 +1838,43 @@ function formatDuration(value) {
   return typeof value === 'number' ? value + ' ms' : '';
 }
 
-function setSaveStatus(text) {
+function setSaveStatus(text, level = 'info', autoClear = true) {
   document.querySelectorAll('.save-status').forEach((item) => {
     item.textContent = text;
+    item.className = 'save-status ' + level;
   });
   window.clearTimeout(setSaveStatus.timer);
-  setSaveStatus.timer = window.setTimeout(() => {
-    document.querySelectorAll('.save-status').forEach((item) => {
-      item.textContent = '';
-    });
-  }, 3000);
+  if (autoClear) {
+    setSaveStatus.timer = window.setTimeout(() => {
+      document.querySelectorAll('.save-status').forEach((item) => {
+        item.textContent = '';
+        item.className = 'save-status';
+      });
+    }, 5000);
+  }
 }
 setSaveStatus.timer = 0;
+
+function showToast(text, level = 'success', autoClear = true) {
+  const toast = $('toast');
+  if (!toast) return;
+  toast.textContent = text;
+  toast.className = 'toast visible ' + level;
+  window.clearTimeout(showToast.timer);
+  if (autoClear) {
+    showToast.timer = window.setTimeout(() => {
+      toast.className = 'toast';
+      toast.textContent = '';
+    }, 6000);
+  }
+}
+showToast.timer = 0;
+
+function maskClientValue(value) {
+  if (!value) return '<empty>';
+  if (value.length <= 12) return 'configured';
+  return value.slice(0, 5) + '...' + value.slice(-5) + ' (' + value.length + ' chars)';
+}
 
 function setSourceStatus(action, text) {
   const target = action === 'discover_github_token' ? $('github-token-status') :
@@ -1916,6 +1994,7 @@ function profileMeta(profile) {
 function readFeishuProfiles() {
   return [...document.querySelectorAll('[data-profile-index]')].map((card) => {
     const index = Number(card.dataset.profileIndex);
+    const previous = state.config.sources.feishu.profiles?.[index] || {};
     return {
       id: value(profileFieldId(index, 'id')) || 'feishu_' + (index + 1),
       label: value(profileFieldId(index, 'label')) || 'Feishu ' + (index + 1),
@@ -1927,7 +2006,7 @@ function readFeishuProfiles() {
       },
       tasks: {
         enabled: isChecked(profileFieldId(index, 'tasks')),
-        include_completed: Boolean(existing.tasks?.include_completed),
+        include_completed: Boolean(previous.tasks?.include_completed),
         page_limit: Number(value(profileFieldId(index, 'task-pages')) || 5),
       },
       docs: {
