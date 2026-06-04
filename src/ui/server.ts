@@ -1994,6 +1994,7 @@ function profileMeta(profile) {
 function readFeishuProfiles() {
   return [...document.querySelectorAll('[data-profile-index]')].map((card) => {
     const index = Number(card.dataset.profileIndex);
+    const previous = state.config.sources.feishu.profiles?.[index] || {};
     return {
       id: value(profileFieldId(index, 'id')) || 'feishu_' + (index + 1),
       label: value(profileFieldId(index, 'label')) || 'Feishu ' + (index + 1),
@@ -2005,7 +2006,7 @@ function readFeishuProfiles() {
       },
       tasks: {
         enabled: isChecked(profileFieldId(index, 'tasks')),
-        include_completed: Boolean(existing.tasks?.include_completed),
+        include_completed: Boolean(previous.tasks?.include_completed),
         page_limit: Number(value(profileFieldId(index, 'task-pages')) || 5),
       },
       docs: {
