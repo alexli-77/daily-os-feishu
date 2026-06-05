@@ -13,6 +13,7 @@ import { runWorkflow } from '../workflows/run-workflow.js';
 import { decideFeishuAccess, decideFeishuControl, type FeishuAccessDecision } from './access-policy.js';
 import { isDecisionCalibrationChat, startDecisionOnboarding } from '../decision/onboarding.js';
 import { runDecisionCalibrationAgent } from '../decision/calibration-agent.js';
+import { ensureFeishuSession } from './session-catalog.js';
 
 interface FeishuInteractionControls {
   stop: () => Promise<void>;
@@ -145,6 +146,13 @@ async function runBatch(input: {
 
   const text = input.batch.map((message) => message.content).join('\n').trim();
   const isCalibrationChat = isDecisionCalibrationChat(input.config, last.chatId);
+  const session = ensureFeishuSession(input.config, {
+    scopeKey: input.scope,
+    chatId: last.chatId,
+    chatType: last.chatType,
+    mode: last.threadId ? 'topic' : last.chatType,
+    ...(last.threadId ? { threadId: last.threadId } : {}),
+  });
   const commandPrefix = input.config.interaction.feishu.command_prefix;
   const commandText = isCalibrationChat && looksLikeBarePolicyCommand(text) ? `${commandPrefix} ${text}` : text;
   const command = parseDailyOsCommand(commandText, commandPrefix);
@@ -188,6 +196,7 @@ async function runBatch(input: {
       prefix: commandPrefix,
       sendWorkflowOutput: false,
       accessDecision,
+      sessionScopeId: session.scope_id,
       reply: async (reply) => {
         await replyToMessage(input.channel, last, reply, input.config.interaction.feishu.reply_mode);
       },
@@ -218,6 +227,7 @@ async function runBatch(input: {
     prefix: input.config.interaction.feishu.command_prefix,
     sendWorkflowOutput: false,
     accessDecision,
+    sessionScopeId: session.scope_id,
     reply: async (reply) => {
       await replyToMessage(input.channel, last, reply, input.config.interaction.feishu.reply_mode);
     },
