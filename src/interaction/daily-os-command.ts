@@ -2,11 +2,20 @@ import type { AppConfig, WorkflowName } from '../config/schema.js';
 import { appendFeedbackLog, appendLongTermMemory } from '../storage/memory.js';
 import { runWorkflow } from '../workflows/run-workflow.js';
 import { decisionCalibrationPrompt, decisionPolicyStatusText } from '../decision/policy.js';
+import {
+  confirmPolicyCandidate,
+  formatPolicyCandidateList,
+  listPolicyCandidates,
+  rejectPolicyCandidate,
+} from '../decision/candidates.js';
 
 export type ParsedDailyOsCommand =
   | { type: 'ignore' }
   | { type: 'status' }
   | { type: 'policy' }
+  | { type: 'policy_candidates' }
+  | { type: 'confirm_policy_candidate'; id: string }
+  | { type: 'reject_policy_candidate'; id: string; reason?: string }
   | { type: 'calibrate' }
   | { type: 'remember'; text: string }
   | { type: 'feedback'; text: string }
@@ -51,6 +60,14 @@ export function parseDailyOsCommand(text: string, prefix: string): ParsedDailyOs
 
   if (['help', 'status', '状态', '帮助'].includes(lower)) return { type: 'status' };
   if (['policy', 'decision policy', '规则', '决策规则'].includes(lower)) return { type: 'policy' };
+  if (['candidates', 'policy candidates', '候选规则', '待确认规则'].includes(lower)) return { type: 'policy_candidates' };
+  const confirmCandidate = normalized.match(/^(?:save|confirm)\s+(?:rule\s+)?(.+)$/i) || normalized.match(/^(?:保存规则|确认规则)\s*(.+)$/);
+  if (confirmCandidate?.[1]?.trim()) return { type: 'confirm_policy_candidate', id: confirmCandidate[1].trim() };
+  const rejectCandidate = normalized.match(/^(?:reject|dismiss)\s+(?:rule\s+)?(.+)$/i) || normalized.match(/^(?:拒绝规则|放弃规则)\s*(.+)$/);
+  if (rejectCandidate?.[1]?.trim()) {
+    const { id, reason } = splitCandidateIdAndReason(rejectCandidate[1].trim());
+    return { type: 'reject_policy_candidate', id, reason };
+  }
   if (['calibrate', 'decision calibrate', '校准', '决策校准', '开始校准'].includes(lower)) return { type: 'calibrate' };
   if (/^(rerun\s+)?(plan|daily plan)$/.test(lower) || ['日计划', '今日计划', '重跑今日计划'].includes(normalized)) {
     return { type: 'workflow', workflow: 'daily_plan' };
@@ -74,6 +91,9 @@ export function dailyOsStatusText(prefix: string): string {
     `- ${prefix} remember <text>`,
     `- ${prefix} feedback <text>`,
     `- ${prefix} policy`,
+    `- ${prefix} candidates`,
+    `- ${prefix} 保存规则 <候选ID>`,
+    `- ${prefix} 拒绝规则 <候选ID>`,
     `- ${prefix} calibrate`,
     `- ${prefix} plan`,
     `- ${prefix} review`,
@@ -89,6 +109,27 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
     case 'policy':
       await context.reply(decisionPolicyStatusText(context.config));
       return;
+    case 'policy_candidates':
+      await context.reply(formatPolicyCandidateList(listPolicyCandidates(context.config, 'pending')));
+      return;
+    case 'confirm_policy_candidate': {
+      const candidate = confirmPolicyCandidate(context.config, command.id);
+      await context.reply(
+        [
+          `已保存长期决策规则：${candidate.rule.id}`,
+          '',
+          candidate.rule.description,
+          '',
+          '后续日计划、Todo 分流、日复盘和周复盘会读取 memory repository 里的 `decision-policy.yaml` 与 `decision-policy.md`。',
+        ].join('\n'),
+      );
+      return;
+    }
+    case 'reject_policy_candidate': {
+      const candidate = rejectPolicyCandidate(context.config, command.id, command.reason);
+      await context.reply(`已拒绝候选规则：${candidate.id}`);
+      return;
+    }
     case 'calibrate':
       await context.reply(decisionCalibrationPrompt(context.config));
       return;
@@ -117,6 +158,12 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
     case 'ignore':
       return;
   }
+}
+
+function splitCandidateIdAndReason(text: string): { id: string; reason?: string } {
+  const [id = '', ...rest] = text.trim().split(/\s+/);
+  const reason = rest.join(' ').replace(/^(?:because|原因[:：]?)/i, '').trim();
+  return { id, ...(reason ? { reason } : {}) };
 }
 
 function stripPrefix(text: string, prefix: string): string | null {

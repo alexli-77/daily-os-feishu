@@ -144,7 +144,10 @@ async function runBatch(input: {
   if (!last) return;
 
   const text = input.batch.map((message) => message.content).join('\n').trim();
-  const command = parseDailyOsCommand(text, input.config.interaction.feishu.command_prefix);
+  const isCalibrationChat = isDecisionCalibrationChat(input.config, last.chatId);
+  const commandPrefix = input.config.interaction.feishu.command_prefix;
+  const commandText = isCalibrationChat && looksLikeBarePolicyCommand(text) ? `${commandPrefix} ${text}` : text;
+  const command = parseDailyOsCommand(commandText, commandPrefix);
   if (command.type === 'status') {
     await sendStatusCard(input.channel, last, input.config);
     console.log(`[interaction] handled ${input.scope}; command=status-card`);
@@ -169,7 +172,25 @@ async function runBatch(input: {
     return;
   }
 
-  if (isDecisionCalibrationChat(input.config, last.chatId)) {
+  if (isCalibrationChat && command.type !== 'ignore') {
+    const result = await handleDailyOsCommand({
+      config: input.config,
+      messageId: last.messageId,
+      text: commandText,
+      source: `feishu-decision-calibration:${input.scope}`,
+      prefix: commandPrefix,
+      sendWorkflowOutput: false,
+      reply: async (reply) => {
+        await replyToMessage(input.channel, last, reply, input.config.interaction.feishu.reply_mode);
+      },
+    });
+    if (result.handled) {
+      console.log(`[interaction] handled ${input.scope}; command=${result.command.type}`);
+      return;
+    }
+  }
+
+  if (isCalibrationChat) {
     const reply = await runDecisionCalibrationAgent(input.config, {
       text,
       chatId: last.chatId,
@@ -196,6 +217,11 @@ async function runBatch(input: {
   if (result.handled) {
     console.log(`[interaction] handled ${input.scope}; command=${result.command.type}`);
   }
+}
+
+function looksLikeBarePolicyCommand(text: string): boolean {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  return /^(?:候选规则|待确认规则|保存规则|确认规则|拒绝规则|放弃规则)(?:\s|$)/.test(normalized);
 }
 
 async function handleCardAction(input: {

@@ -5,6 +5,7 @@ import OpenAI from 'openai';
 import type { AppConfig } from '../config/schema.js';
 import { runCommand } from '../utils/command.js';
 import { decisionPolicyFiles, ensureDecisionPolicyFiles } from './policy.js';
+import { createPolicyCandidate, type PolicyRuleDraft } from './candidates.js';
 
 export interface DecisionCalibrationInput {
   text: string;
@@ -16,7 +17,30 @@ export interface DecisionCalibrationInput {
 export async function runDecisionCalibrationAgent(config: AppConfig, input: DecisionCalibrationInput): Promise<string> {
   ensureDecisionPolicyFiles(config);
   const prompt = buildCalibrationPrompt(config, input);
-  const reply = config.llm.provider === 'openai' ? await runOpenAiCalibration(config, prompt) : await runCodexCalibration(config, prompt);
+  const raw = config.llm.provider === 'openai' ? await runOpenAiCalibration(config, prompt) : await runCodexCalibration(config, prompt);
+  const output = parseCalibrationOutput(raw);
+  let reply = output.reply;
+
+  if (output.candidate) {
+    const candidate = createPolicyCandidate(config, {
+      chatId: input.chatId,
+      messageId: input.messageId,
+      senderOpenId: input.senderOpenId,
+      rawUserText: input.text,
+      assistantReply: reply,
+      rule: output.candidate,
+    });
+    reply = [
+      reply,
+      '',
+      `已记录一条待确认候选规则：\`${candidate.id}\``,
+      '',
+      '确认保存：`daily-os 保存规则 ' + candidate.id + '`',
+      '拒绝候选：`daily-os 拒绝规则 ' + candidate.id + '`',
+      '在这个决策校准群里，也可以直接回复“保存规则 ' + candidate.id + '”。',
+    ].join('\n');
+  }
+
   appendCalibrationLog(config, input, reply);
   return reply;
 }
@@ -58,7 +82,22 @@ function buildCalibrationPrompt(config: AppConfig, input: DecisionCalibrationInp
     input.text,
     '',
     '# 输出要求',
-    '只输出要发回飞书的中文消息。不要输出隐藏推理、JSON 或工具调用。',
+    '只输出 JSON，不要输出 Markdown 代码块、隐藏推理或工具调用。',
+    'JSON 结构：',
+    '{',
+    '  "reply": "要发回飞书的中文消息",',
+    '  "candidate": null 或 {',
+    '    "id": "短横线英文规则ID，可省略",',
+    '    "description": "可长期复用的中文规则描述",',
+    '    "applies_to": ["daily_plan", "todo", "daily_review", "weekly_review"],',
+    '    "when": {"触发条件": "用结构化短句表达"},',
+    '    "then": {"执行方式": "用结构化短句表达"},',
+    '    "reason": "为什么这条规则值得保存"',
+    '  }',
+    '}',
+    '',
+    '只有当用户表达了“以后也应该这样判断”的可复用偏好时，candidate 才能非空；如果只是一次性聊天或信息不足，candidate 必须为 null。',
+    'reply 中必须说明候选规则仍待用户确认，不能说已经保存。',
   ].join('\n');
 }
 
@@ -119,4 +158,55 @@ function appendCalibrationLog(config: AppConfig, input: DecisionCalibrationInput
 function readFilePreview(filePath: string, limit: number): string {
   if (!fs.existsSync(filePath)) return '';
   return fs.readFileSync(filePath, 'utf8').slice(0, limit);
+}
+
+interface CalibrationOutput {
+  reply: string;
+  candidate: PolicyRuleDraft | null;
+}
+
+function parseCalibrationOutput(raw: string): CalibrationOutput {
+  const trimmed = raw.trim();
+  const jsonText = extractJson(trimmed);
+  if (!jsonText) return { reply: trimmed || '我收到了，但这次没有生成有效回复。', candidate: null };
+  try {
+    const parsed = JSON.parse(jsonText) as unknown;
+    if (!isObject(parsed) || typeof parsed.reply !== 'string') {
+      return { reply: trimmed || '我收到了，但这次没有生成有效回复。', candidate: null };
+    }
+    const candidate = parseCandidate(parsed.candidate);
+    return {
+      reply: parsed.reply.trim() || '我收到了，但这次没有生成有效回复。',
+      candidate,
+    };
+  } catch {
+    return { reply: trimmed || '我收到了，但这次没有生成有效回复。', candidate: null };
+  }
+}
+
+function parseCandidate(value: unknown): PolicyRuleDraft | null {
+  if (!isObject(value)) return null;
+  if (typeof value.description !== 'string' || !value.description.trim()) return null;
+  const candidate: PolicyRuleDraft = {
+    ...(typeof value.id === 'string' && value.id.trim() ? { id: value.id.trim() } : {}),
+    description: value.description.trim(),
+    ...(Array.isArray(value.applies_to) ? { applies_to: value.applies_to.filter((item): item is string => typeof item === 'string') } : {}),
+    ...(isObject(value.when) ? { when: value.when } : {}),
+    ...(isObject(value.then) ? { then: value.then } : {}),
+    ...(typeof value.reason === 'string' && value.reason.trim() ? { reason: value.reason.trim() } : {}),
+  };
+  return candidate;
+}
+
+function extractJson(text: string): string | null {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = fenced?.[1]?.trim() || text;
+  const first = candidate.indexOf('{');
+  const last = candidate.lastIndexOf('}');
+  if (first === -1 || last === -1 || last <= first) return null;
+  return candidate.slice(first, last + 1);
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
