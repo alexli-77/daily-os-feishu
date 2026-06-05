@@ -314,6 +314,13 @@ interaction:
     debounce_ms: 600
     reply_mode: "markdown"
     session_catalog_path: "./data/memory/feishu-session-catalog.json"
+    agent_mode:
+      enabled: false
+      workdir: ""
+      sandbox: "read-only"
+      include_memory: true
+      include_evidence: false
+      timeout_ms: 300000
     security:
       owner_open_id_env: "FEISHU_OWNER_OPEN_ID"
       admin_open_ids: []
@@ -339,6 +346,20 @@ Supported messages are the same as feedback polling:
 - `daily-os calibrate` creates or reuses the decision calibration group.
 - `daily-os plan`, `daily-os review`, and `daily-os weekly` run workflows and
   reply in the same chat.
+
+When `interaction.feishu.agent_mode.enabled` is true, messages that are not
+recognized Daily OS commands are routed to Codex as free-form agent input. The
+prompt includes structured bridge context such as chat id, sender id, thread id,
+message ids, scope id, active session metadata, and optional Daily OS
+memory/evidence packs. The local session catalog stores the Codex `thread_id`
+so later messages in the same Feishu scope can resume the conversation.
+
+Agent mode controls:
+
+- `daily-os status`: show the standard action card.
+- `/new` or `daily-os new`: archive the current Feishu scope session and start a
+  fresh one on the next free-form message.
+- `/stop` or `daily-os stop`: stop the active Codex run for the current scope.
 
 This layer does not replace the knowledge vault or memory repository. It is only
 the Feishu-facing interaction surface.

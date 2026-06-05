@@ -277,6 +277,13 @@ interaction:
     debounce_ms: 600
     reply_mode: "markdown"
     session_catalog_path: "./data/memory/feishu-session-catalog.json"
+    agent_mode:
+      enabled: false
+      workdir: ""
+      sandbox: "read-only"
+      include_memory: true
+      include_evidence: false
+      timeout_ms: 300000
     security:
       owner_open_id_env: "FEISHU_OWNER_OPEN_ID"
       admin_open_ids: []
@@ -301,6 +308,18 @@ npm run interaction:feishu
 - `daily-os policy`：查看当前决策 policy 和 policy-skill 路径。
 - `daily-os calibrate`：创建或复用决策校准群。
 - `daily-os plan`、`daily-os review`、`daily-os weekly`：运行 workflow，并在同一个聊天里回复。
+
+当 `interaction.feishu.agent_mode.enabled` 为 true 时，无法识别为 Daily OS 固定命令的消息，
+会作为自由文本输入交给 Codex。Prompt 会包含结构化 bridge context，例如 chat id、
+sender id、thread id、message id、scope id、当前 session metadata，以及可选的
+Daily OS memory/evidence context pack。本地 session catalog 会保存 Codex `thread_id`，
+同一个飞书 scope 里的后续消息可以继续同一段 Codex 对话。
+
+Agent mode 控制命令：
+
+- `daily-os status`：显示标准操作卡片。
+- `/new` 或 `daily-os new`：归档当前飞书 scope session，下一条自由文本会开启新会话。
+- `/stop` 或 `daily-os stop`：停止当前 scope 正在运行的 Codex 任务。
 
 这一层不会替代知识库 vault 或 memory repository。它只是飞书侧的交互入口。
 

@@ -127,6 +127,13 @@ export function feishuSafetyWarnings(config: AppConfig): string[] {
   if (!config.interaction.feishu.require_mention_in_groups && security.allowed_chat_ids.length > 0) {
     warnings.push('group mention requirement is disabled; every message in allowed chats can be considered by the interaction layer');
   }
+  const agent = config.interaction.feishu.agent_mode;
+  if (agent.enabled && agent.sandbox !== 'read-only' && security.allowed_workspaces.length === 0) {
+    warnings.push('agent_mode write-capable sandbox should be paired with allowed_workspaces');
+  }
+  if (agent.enabled && agent.sandbox === 'danger-full-access') {
+    warnings.push('agent_mode sandbox=danger-full-access can run destructive commands; use only for trusted private deployments');
+  }
   return warnings;
 }
 
@@ -149,10 +156,10 @@ function workspaceDecision(config: AppConfig, workspacePath: string | undefined,
     return { ok: false, reason: 'workspace path is required for workspace access', requiresConfirmation: false };
   }
   if (accessLevel === 'full') return { ok: true, requiresConfirmation: write };
-  if (accessLevel !== 'workspace') {
+  if (write && accessLevel !== 'workspace') {
     return { ok: false, reason: `workspace access requires access_level=workspace or full, current=${accessLevel}`, requiresConfirmation: false };
   }
-  if (!isAllowedWorkspace(config, workspacePath)) {
+  if (config.interaction.feishu.security.allowed_workspaces.length > 0 && !isAllowedWorkspace(config, workspacePath)) {
     return { ok: false, reason: 'workspace path is outside interaction.feishu.security.allowed_workspaces', requiresConfirmation: false };
   }
   return { ok: true, requiresConfirmation: write };

@@ -81,6 +81,23 @@ export const AppConfigSchema = z.object({
         debounce_ms: z.number().int().nonnegative().default(600),
         reply_mode: z.enum(['markdown', 'text']).default('markdown'),
         session_catalog_path: z.string().default('./data/memory/feishu-session-catalog.json'),
+        agent_mode: z
+          .object({
+            enabled: z.boolean().default(false),
+            workdir: z.string().default(''),
+            sandbox: z.enum(['read-only', 'workspace-write', 'danger-full-access']).default('read-only'),
+            include_memory: z.boolean().default(true),
+            include_evidence: z.boolean().default(false),
+            timeout_ms: z.number().int().positive().default(300000),
+          })
+          .default({
+            enabled: false,
+            workdir: '',
+            sandbox: 'read-only',
+            include_memory: true,
+            include_evidence: false,
+            timeout_ms: 300000,
+          }),
         security: z
           .object({
             owner_open_id_env: z.string().default('FEISHU_OWNER_OPEN_ID'),
@@ -108,6 +125,14 @@ export const AppConfigSchema = z.object({
         debounce_ms: 600,
         reply_mode: 'markdown',
         session_catalog_path: './data/memory/feishu-session-catalog.json',
+        agent_mode: {
+          enabled: false,
+          workdir: '',
+          sandbox: 'read-only',
+          include_memory: true,
+          include_evidence: false,
+          timeout_ms: 300000,
+        },
         security: {
           owner_open_id_env: 'FEISHU_OWNER_OPEN_ID',
           admin_open_ids: [],

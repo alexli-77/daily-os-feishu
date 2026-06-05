@@ -17,6 +17,7 @@ export type ParsedDailyOsCommand =
   | { type: 'policy' }
   | { type: 'policy_candidates' }
   | { type: 'new_session' }
+  | { type: 'stop_agent' }
   | { type: 'confirm_policy_candidate'; id: string }
   | { type: 'reject_policy_candidate'; id: string; reason?: string }
   | { type: 'calibrate' }
@@ -34,6 +35,7 @@ export interface DailyOsCommandContext {
   sendWorkflowOutput?: boolean;
   accessDecision?: FeishuAccessDecision;
   sessionScopeId?: string;
+  stopAgentRun?: () => Promise<boolean>;
 }
 
 export async function handleDailyOsCommand(context: DailyOsCommandContext): Promise<{ handled: boolean; command: ParsedDailyOsCommand }> {
@@ -71,6 +73,7 @@ export function parseDailyOsCommand(text: string, prefix: string): ParsedDailyOs
 
   if (['help', 'status', '状态', '帮助'].includes(lower)) return { type: 'status' };
   if (['new', 'new session', '新会话', '重开会话'].includes(lower)) return { type: 'new_session' };
+  if (['stop', '停止', '停止当前任务'].includes(lower)) return { type: 'stop_agent' };
   if (['policy', 'decision policy', '规则', '决策规则'].includes(lower)) return { type: 'policy' };
   if (['candidates', 'policy candidates', '候选规则', '待确认规则'].includes(lower)) return { type: 'policy_candidates' };
   const confirmCandidate = normalized.match(/^(?:save|confirm)\s+(?:rule\s+)?(.+)$/i) || normalized.match(/^(?:保存规则|确认规则)\s*(.+)$/);
@@ -101,6 +104,7 @@ export function dailyOsStatusText(prefix: string): string {
     '可用命令：',
     `- ${prefix} status`,
     `- ${prefix} new`,
+    `- ${prefix} stop`,
     `- ${prefix} remember <text>`,
     `- ${prefix} feedback <text>`,
     `- ${prefix} policy`,
@@ -133,6 +137,11 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
       clearFeishuSession(context.config, context.sessionScopeId);
       await context.reply('已开启新的 Daily OS 远程会话。');
       return;
+    case 'stop_agent': {
+      const stopped = context.stopAgentRun ? await context.stopAgentRun() : false;
+      await context.reply(stopped ? '已停止当前 Codex 任务。' : '当前没有正在运行的 Codex 任务。');
+      return;
+    }
     case 'confirm_policy_candidate': {
       const candidate = confirmPolicyCandidate(context.config, command.id);
       await context.reply(
@@ -200,6 +209,7 @@ function commandEffect(command: ParsedDailyOsCommand): FeishuControlEffect {
     case 'policy':
     case 'policy_candidates':
     case 'new_session':
+    case 'stop_agent':
       return 'read';
     case 'workflow':
       return 'workflow_trigger';
@@ -219,6 +229,7 @@ function commandEffect(command: ParsedDailyOsCommand): FeishuControlEffect {
 function stripPrefix(text: string, prefix: string): string | null {
   const normalized = text.trim();
   if (normalized.toLowerCase() === '/new') return 'new';
+  if (normalized.toLowerCase() === '/stop') return 'stop';
   const prefixes = [prefix, `/${prefix}`, `@${prefix}`].map((value) => value.toLowerCase());
   const lower = normalized.toLowerCase();
 
