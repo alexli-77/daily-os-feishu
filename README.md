@@ -44,6 +44,18 @@ Edit:
 You can also edit the common fields in the local UI. It writes only to ignored
 local files.
 
+After configuration, the all-in-one foreground entry is:
+
+```bash
+npm run start
+```
+
+This opens the local UI, starts the scheduler for plan/review/weekly, and starts
+the Feishu websocket interaction layer when `interaction.feishu.enabled` is
+true. Keep the terminal window running. If you change scheduler or interaction
+settings in the UI, restart `npm run start` so the foreground services reload
+the updated config.
+
 Then check the installation:
 
 ```bash
@@ -89,6 +101,10 @@ It can save common config fields, save `.env` values, run `doctor`, send a
 Feishu test message, trigger plan/review/weekly workflows, poll Feishu feedback,
 and install or uninstall the local `launchd` service. Secret fields are stored
 locally and are not echoed back in the UI.
+
+For day-to-day use, prefer `npm run start`. Use `npm run ui` only when you want
+the dashboard without starting the foreground scheduler or Feishu interaction
+service.
 
 The Setup tab includes Codex configuration:
 

@@ -43,6 +43,16 @@ npm run ui
 
 常用配置也可以直接在本地 UI 中填写；它只会写入被 git 忽略的本地文件。
 
+配置完成后，日常使用的总入口是：
+
+```bash
+npm run start
+```
+
+它会打开本地 UI，启动 plan/review/weekly 的前台 scheduler，并在
+`interaction.feishu.enabled=true` 时启动飞书 websocket 实时交互层。保持这个终端窗口运行即可。
+如果你在 UI 里修改了 scheduler 或 interaction 配置，重启 `npm run start` 让前台服务重新读取配置。
+
 检查环境：
 
 ```bash
@@ -85,6 +95,9 @@ npm run ui
 ```
 
 它可以保存常用配置、保存 `.env` 值、运行 `doctor`、发送飞书测试消息、手动触发 plan/review/weekly、轮询飞书反馈，并安装或卸载本机 `launchd` 服务。密钥字段只保存在本地，页面不会回显原文。
+
+日常使用建议优先运行 `npm run start`。只有想单独打开配置面板、不启动前台 scheduler
+和飞书实时交互服务时，才单独运行 `npm run ui`。
 
 Setup 页提供 Codex 配置：
 

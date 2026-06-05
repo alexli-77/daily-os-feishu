@@ -38,7 +38,12 @@ export interface UiServerOptions {
   open: boolean;
 }
 
-export async function startUiServer(options: UiServerOptions): Promise<void> {
+export interface UiServerControls {
+  url: string;
+  stop: () => Promise<void>;
+}
+
+export async function startUiServer(options: UiServerOptions): Promise<UiServerControls> {
   ensureLocalFiles(options.configPath, options.envPath);
 
   const server = http.createServer((request, response) => {
@@ -60,6 +65,18 @@ export async function startUiServer(options: UiServerOptions): Promise<void> {
     const opened = await runCommand('open', [url], { timeoutMs: 5000 });
     if (!opened.ok) console.warn(`Could not open browser: ${opened.stderr || opened.stdout}`);
   }
+
+  return {
+    url,
+    stop: async () => {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      });
+    },
+  };
 }
 
 async function handleRequest(request: http.IncomingMessage, response: http.ServerResponse, options: UiServerOptions): Promise<void> {
