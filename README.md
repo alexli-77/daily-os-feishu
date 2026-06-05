@@ -354,6 +354,12 @@ message ids, scope id, active session metadata, and optional Daily OS
 memory/evidence packs. The local session catalog stores the Codex `thread_id`
 so later messages in the same Feishu scope can resume the conversation.
 
+Agent mode replies with an updating Feishu run card instead of a one-shot
+message. The card shows the running state, recent Codex progress events, final
+success/failure/timeout state, and a **Stop** button while the run is active.
+Final cards can send structured follow-up callbacks back into the same Feishu
+scope so Codex can continue the conversation.
+
 Agent mode controls:
 
 - `daily-os status`: show the standard action card.

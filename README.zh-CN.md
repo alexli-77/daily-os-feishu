@@ -315,6 +315,10 @@ sender id、thread id、message id、scope id、当前 session metadata，以及
 Daily OS memory/evidence context pack。本地 session catalog 会保存 Codex `thread_id`，
 同一个飞书 scope 里的后续消息可以继续同一段 Codex 对话。
 
+Agent mode 会回复一张持续更新的飞书运行卡片，而不是一次性文本。卡片会显示运行状态、
+最近的 Codex 进度、最终成功/失败/超时状态；运行中可以直接点 **停止**。最终卡片也能把
+结构化 follow-up callback 送回同一个飞书 scope，让 Codex 继续这段对话。
+
 Agent mode 控制命令：
 
 - `daily-os status`：显示标准操作卡片。

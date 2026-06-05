@@ -27,6 +27,7 @@ export interface FeishuAgentModeInput {
   bridge: FeishuAgentBridgeContext;
   access: FeishuAccessDecision;
   session: FeishuSessionRecord;
+  onEvent?: (event: FeishuAgentModeEvent) => void;
 }
 
 export interface FeishuAgentModeResult {
@@ -38,6 +39,12 @@ export interface FeishuAgentModeRun {
   runId: string;
   done: Promise<FeishuAgentModeResult>;
   stop: () => Promise<void>;
+}
+
+export interface FeishuAgentModeEvent {
+  type: 'started' | 'thread' | 'progress' | 'stderr' | 'completed' | 'failed' | 'stopped' | 'timeout';
+  message: string;
+  threadId?: string;
 }
 
 export async function startFeishuAgentModeRun(input: FeishuAgentModeInput): Promise<FeishuAgentModeRun> {
@@ -52,19 +59,35 @@ export async function startFeishuAgentModeRun(input: FeishuAgentModeInput): Prom
   let stderr = '';
   let threadId = input.session.codex_session_id;
   let stopped = false;
+  let timedOut = false;
   let settled = false;
+  let stdoutBuffer = '';
 
   const timeout = setTimeout(() => {
     stopped = true;
+    timedOut = true;
+    input.onEvent?.({ type: 'timeout', message: 'Codex 执行超时，正在停止。' });
     stopChild(child);
   }, input.config.interaction.feishu.agent_mode.timeout_ms);
 
+  input.onEvent?.({ type: 'started', message: 'Codex 进程已启动。' });
   child.stdout.on('data', (chunk: Buffer) => {
-    stdout += chunk.toString('utf8');
+    const text = chunk.toString('utf8');
+    stdout += text;
+    stdoutBuffer += text;
+    const parsed = drainJsonLines(stdoutBuffer);
+    stdoutBuffer = parsed.remainder;
+    for (const event of parsed.events) {
+      const progress = codexProgressEvent(event);
+      if (progress.threadId) threadId = progress.threadId;
+      if (progress.message) input.onEvent?.(progress);
+    }
     threadId = parseThreadId(stdout) || threadId;
   });
   child.stderr.on('data', (chunk: Buffer) => {
-    stderr += chunk.toString('utf8');
+    const text = chunk.toString('utf8');
+    stderr += text;
+    input.onEvent?.({ type: 'stderr', message: text.slice(0, 500) });
   });
   child.stdin.end(prompt, 'utf8');
 
@@ -80,12 +103,16 @@ export async function startFeishuAgentModeRun(input: FeishuAgentModeInput): Prom
       const reply = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, 'utf8').trim() : '';
       fs.rmSync(outputPath, { force: true });
       if (code === 0 || stopped) {
+        if (timedOut) input.onEvent?.({ type: 'timeout', message: 'Codex 已因超时停止。' });
+        else if (stopped) input.onEvent?.({ type: 'stopped', message: 'Codex 已停止。' });
+        else input.onEvent?.({ type: 'completed', message: 'Codex 已完成。' });
         resolve({
-          reply: stopped ? '已停止当前 Codex 会话。' : reply || 'Codex 已完成，但没有返回可发送内容。',
+          reply: timedOut ? 'Codex 执行超时，已停止当前会话。' : stopped ? '已停止当前 Codex 会话。' : reply || 'Codex 已完成，但没有返回可发送内容。',
           ...(threadId ? { threadId } : {}),
         });
         return;
       }
+      input.onEvent?.({ type: 'failed', message: 'Codex 执行失败。' });
       reject(new Error(`Codex agent mode failed: ${(stderr || stdout).slice(0, 2000)}`));
     });
   });
@@ -96,6 +123,7 @@ export async function startFeishuAgentModeRun(input: FeishuAgentModeInput): Prom
     stop: async () => {
       if (settled) return;
       stopped = true;
+      input.onEvent?.({ type: 'stopped', message: '已请求停止 Codex。' });
       await stopChild(child);
     },
   };
@@ -194,6 +222,58 @@ function parseThreadId(stdout: string): string | undefined {
     }
   }
   return undefined;
+}
+
+function drainJsonLines(buffer: string): { events: unknown[]; remainder: string } {
+  const lines = buffer.split('\n');
+  const remainder = lines.pop() ?? '';
+  const events: unknown[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      events.push(JSON.parse(trimmed));
+    } catch {
+      // Ignore non-JSON progress lines.
+    }
+  }
+  return { events, remainder };
+}
+
+function codexProgressEvent(event: unknown): FeishuAgentModeEvent {
+  if (!isObject(event)) return { type: 'progress', message: '' };
+  const type = typeof event.type === 'string' ? event.type : '';
+  if (type === 'thread.started' && typeof event.thread_id === 'string') {
+    return { type: 'thread', message: 'Codex 会话已建立。', threadId: event.thread_id };
+  }
+  if (type === 'turn.started') return { type: 'progress', message: 'Codex 正在处理这轮请求。' };
+  if (type === 'turn.completed') return { type: 'progress', message: 'Codex 已完成这轮请求。' };
+  if (type === 'item.started') return { type: 'progress', message: describeCodexItem(event, '开始') };
+  if (type === 'item.completed') return { type: 'progress', message: describeCodexItem(event, '完成') };
+  if (type === 'error') return { type: 'failed', message: stringifyEventMessage(event) || 'Codex 返回错误事件。' };
+  return { type: 'progress', message: '' };
+}
+
+function describeCodexItem(event: Record<string, unknown>, verb: string): string {
+  const item = isObject(event.item) ? event.item : event;
+  const itemType = typeof item.type === 'string' ? item.type : 'step';
+  if (itemType.includes('command') || itemType.includes('exec')) return `${verb}执行本地命令。`;
+  if (itemType.includes('tool')) return `${verb}调用工具。`;
+  if (itemType.includes('message')) return `${verb}生成回复。`;
+  if (itemType.includes('reasoning')) return `${verb}推理步骤。`;
+  return `${verb}处理步骤。`;
+}
+
+function stringifyEventMessage(event: Record<string, unknown>): string {
+  for (const key of ['message', 'error', 'detail']) {
+    const value = event[key];
+    if (typeof value === 'string') return value;
+  }
+  return '';
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
 async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {

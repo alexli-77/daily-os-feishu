@@ -18,14 +18,22 @@ import {
   agentModeControlEffect,
   agentWorkdir,
   startFeishuAgentModeRun,
+  type FeishuAgentModeEvent,
   type FeishuAgentModeRun,
 } from './agent-mode.js';
+import { AgentRunCardController, parseAgentRunCardAction, type AgentRunCardStatus } from './run-card.js';
 
 interface FeishuInteractionControls {
   stop: () => Promise<void>;
 }
 
 type ChatMode = 'p2p' | 'group' | 'topic';
+
+interface ActiveAgentRun {
+  run: FeishuAgentModeRun;
+  card?: AgentRunCardController;
+  scopeId: string;
+}
 
 export async function startFeishuInteraction(config: AppConfig): Promise<FeishuInteractionControls> {
   const cfg = config.interaction.feishu;
@@ -60,7 +68,7 @@ export async function startFeishuInteraction(config: AppConfig): Promise<FeishuI
   });
 
   const chatModes = new Map<string, ChatMode>();
-  const activeAgentRuns = new Map<string, FeishuAgentModeRun>();
+  const activeAgentRuns = new Map<string, ActiveAgentRun>();
   const queue = new PendingQueue<NormalizedMessage>(cfg.debounce_ms, (scope, batch) => {
     queue.block(scope);
     void runBatch({ config, channel, batch, scope, chatModes, activeAgentRuns })
@@ -78,7 +86,7 @@ export async function startFeishuInteraction(config: AppConfig): Promise<FeishuI
       await intakeMessage({ config, channel, message, queue, chatModes, activeAgentRuns });
     },
     cardAction: async (event) => {
-      await handleCardAction({ config, channel, event, chatModes });
+      await handleCardAction({ config, channel, event, queue, chatModes, activeAgentRuns });
     },
     reject: (event) => {
       console.warn(`[interaction] rejected ${event.chatId}/${event.messageId}: ${event.reason}`);
@@ -118,7 +126,7 @@ async function intakeMessage(input: {
   message: NormalizedMessage;
   queue: PendingQueue<NormalizedMessage>;
   chatModes: Map<string, ChatMode>;
-  activeAgentRuns: Map<string, FeishuAgentModeRun>;
+  activeAgentRuns: Map<string, ActiveAgentRun>;
 }): Promise<void> {
   const mode = await resolveChatMode(input.channel, input.message.chatId, input.chatModes, input.message.chatType);
   const scope = scopeFor(input.message, mode);
@@ -133,7 +141,7 @@ async function intakeMessage(input: {
       await replyToMessage(input.channel, input.message, `权限不足：${access.reason}`, input.config.interaction.feishu.reply_mode);
       return;
     }
-    await input.activeAgentRuns.get(scope)?.stop();
+    await stopAgentRun(input.activeAgentRuns, scope);
     await replyToMessage(input.channel, input.message, '已请求停止当前 Codex 任务。', input.config.interaction.feishu.reply_mode);
     return;
   }
@@ -157,7 +165,7 @@ async function runBatch(input: {
   batch: NormalizedMessage[];
   scope: string;
   chatModes: Map<string, ChatMode>;
-  activeAgentRuns: Map<string, FeishuAgentModeRun>;
+  activeAgentRuns: Map<string, ActiveAgentRun>;
 }): Promise<void> {
   const last = input.batch[input.batch.length - 1];
   if (!last) return;
@@ -270,12 +278,17 @@ async function runBatch(input: {
       console.log(`[interaction] denied ${input.scope}; command=agent-mode; reason=${control.reason}`);
       return;
     }
-    await replyToMessage(input.channel, last, 'Codex 正在处理...', input.config.interaction.feishu.reply_mode);
+    const pendingEvents: FeishuAgentModeEvent[] = [];
+    let card: AgentRunCardController | undefined;
     const run = await startFeishuAgentModeRun({
       config: input.config,
       text,
       access: accessDecision,
       session,
+      onEvent: (event) => {
+        if (card) card.record(toCardEvent(event));
+        else pendingEvents.push(event);
+      },
       bridge: {
         chatId: last.chatId,
         chatType: last.chatType,
@@ -287,7 +300,18 @@ async function runBatch(input: {
         source: 'feishu',
       },
     });
-    input.activeAgentRuns.set(input.scope, run);
+    card = new AgentRunCardController({
+      config: input.config,
+      channel: input.channel,
+      message: last,
+      runId: run.runId,
+      scopeId: session.scope_id,
+      title: 'Codex 正在处理飞书请求',
+    });
+    input.activeAgentRuns.set(input.scope, { run, card, scopeId: session.scope_id });
+    await card.send();
+    for (const event of pendingEvents) card.record(toCardEvent(event));
+    await card.flushPending();
     try {
       const output = await run.done;
       if (output.threadId) {
@@ -296,8 +320,12 @@ async function runBatch(input: {
           codexSessionId: output.threadId,
         });
       }
-      await replyToMessage(input.channel, last, output.reply, input.config.interaction.feishu.reply_mode);
+      await card.finalize(finalStatusForReply(output.reply), output.reply);
       console.log(`[interaction] handled ${input.scope}; command=agent-mode; run=${run.runId}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await card.finalize('failed', message);
+      console.error(`[interaction] ${input.scope} agent-mode failed: ${message}`);
     } finally {
       input.activeAgentRuns.delete(input.scope);
     }
@@ -324,19 +352,54 @@ function isStopText(text: string): boolean {
   return normalized === '/stop' || normalized === 'stop' || normalized === 'daily-os stop' || normalized === '停止' || normalized === '停止当前任务';
 }
 
-async function stopAgentRun(activeRuns: Map<string, FeishuAgentModeRun>, scope: string): Promise<boolean> {
-  const run = activeRuns.get(scope);
-  if (!run) return false;
-  await run.stop();
+async function stopAgentRun(activeRuns: Map<string, ActiveAgentRun>, scope: string): Promise<boolean> {
+  const active = activeRuns.get(scope);
+  if (!active) return false;
+  await active.card?.markStopping();
+  await active.run.stop();
   return true;
+}
+
+async function stopAgentRunByScopeOrId(
+  activeRuns: Map<string, ActiveAgentRun>,
+  scope: string,
+  scopeId: string,
+  runId: string,
+): Promise<boolean> {
+  const active = activeRuns.get(scope) || [...activeRuns.values()].find((candidate) => candidate.scopeId === scopeId && candidate.run.runId === runId);
+  if (!active) return false;
+  await active.card?.markStopping();
+  await active.run.stop();
+  return true;
+}
+
+function toCardEvent(event: FeishuAgentModeEvent): { type: 'started' | 'thread' | 'progress' | 'stderr' | 'final'; message: string } {
+  if (event.type === 'started' || event.type === 'thread' || event.type === 'stderr') return { type: event.type, message: event.message };
+  if (event.type === 'completed' || event.type === 'failed' || event.type === 'stopped' || event.type === 'timeout') {
+    return { type: 'final', message: event.message };
+  }
+  return { type: 'progress', message: event.message };
+}
+
+function finalStatusForReply(reply: string): Exclude<AgentRunCardStatus, 'running' | 'stopping'> {
+  if (/超时|timeout/i.test(reply)) return 'timeout';
+  if (/停止|stopped|stop/i.test(reply)) return 'stopped';
+  return 'success';
 }
 
 async function handleCardAction(input: {
   config: AppConfig;
   channel: LarkChannel;
   event: CardActionEvent;
+  queue: PendingQueue<NormalizedMessage>;
   chatModes: Map<string, ChatMode>;
+  activeAgentRuns: Map<string, ActiveAgentRun>;
 }): Promise<void> {
+  const agentAction = parseAgentRunCardAction(input.event.action.value, input.config);
+  if (agentAction) {
+    await handleAgentRunCardAction({ ...input, action: agentAction });
+    return;
+  }
   const action = parseCardAction(input.event.action.value);
   if (!action) return;
   const access = decideFeishuAccess(input.config, {
@@ -357,6 +420,65 @@ async function handleCardAction(input: {
   await input.channel.send(input.event.chatId, { text: `正在运行 ${action.replaceAll('_', ' ')}...` }, { replyTo: input.event.messageId });
   const output = await runWorkflow(input.config, action, { send: false });
   await input.channel.send(input.event.chatId, toSendInput(output, input.config.interaction.feishu.reply_mode), { replyTo: input.event.messageId });
+}
+
+async function handleAgentRunCardAction(input: {
+  config: AppConfig;
+  channel: LarkChannel;
+  event: CardActionEvent;
+  queue: PendingQueue<NormalizedMessage>;
+  chatModes: Map<string, ChatMode>;
+  activeAgentRuns: Map<string, ActiveAgentRun>;
+  action: { action: 'stop' | 'followup'; runId: string; scopeId: string; text?: string };
+}): Promise<void> {
+  const mode = await resolveChatMode(input.channel, input.event.chatId, input.chatModes, 'group');
+  const threadId = mode === 'topic' ? await lookupMessageThreadId(input.channel, input.event.messageId) : undefined;
+  const scope = mode === 'topic' && threadId ? `${input.event.chatId}:${threadId}` : input.event.chatId;
+  const access = decideFeishuAccess(input.config, {
+    senderOpenId: input.event.operator.openId,
+    chatId: input.event.chatId,
+    chatType: mode === 'p2p' ? 'p2p' : 'group',
+  });
+  if (!access.ok) {
+    console.warn(`[interaction] denied agent card action ${input.event.chatId}; operator=${input.event.operator.openId.slice(-6)}; reason=${access.reason}`);
+    return;
+  }
+  if (input.action.action === 'stop') {
+    const stopped = await stopAgentRunByScopeOrId(input.activeAgentRuns, scope, input.action.scopeId, input.action.runId);
+    await input.channel.send(input.event.chatId, { text: stopped ? '已请求停止当前 Codex 任务。' : '当前没有可停止的 Codex 任务。' }, { replyTo: input.event.messageId });
+    return;
+  }
+
+  const synthetic: NormalizedMessage = {
+    messageId: input.event.messageId,
+    chatId: input.event.chatId,
+    chatType: mode === 'p2p' ? 'p2p' : 'group',
+    senderId: input.event.operator.openId,
+    senderName: input.event.operator.name,
+    content: `[card-callback] ${JSON.stringify({ action: input.action.action, run_id: input.action.runId, text: input.action.text || '继续讨论' })}`,
+    rawContentType: 'card_action',
+    resources: [],
+    mentions: [],
+    mentionAll: false,
+    mentionedBot: true,
+    createTime: Date.now(),
+    ...(threadId ? { threadId } : {}),
+  };
+  console.log(`[interaction] queued ${scope}; source=agent-card-callback`);
+  const queued = input.queue.push(scope, synthetic);
+  await input.channel.send(input.event.chatId, { text: `已加入后续消息队列（${queued}）。` }, { replyTo: input.event.messageId });
+}
+
+async function lookupMessageThreadId(channel: LarkChannel, messageId: string): Promise<string | undefined> {
+  try {
+    const response = (await channel.rawClient.im.v1.message.get({
+      path: { message_id: messageId },
+    })) as { data?: { items?: { thread_id?: string }[] } };
+    return response.data?.items?.[0]?.thread_id;
+  } catch (error) {
+    console.warn(`[interaction] failed to resolve card thread: ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
+  }
 }
 
 async function sendStatusCard(channel: LarkChannel, message: NormalizedMessage, config: AppConfig): Promise<void> {
