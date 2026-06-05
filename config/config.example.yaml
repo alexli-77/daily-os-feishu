@@ -48,6 +48,13 @@ interaction:
     debounce_ms: 600
     reply_mode: "markdown" # markdown | text
     session_catalog_path: "./data/memory/feishu-session-catalog.json"
+    agent_mode:
+      enabled: false
+      workdir: "" # Empty uses the current project root. Set a trusted workspace before enabling write-capable modes.
+      sandbox: "read-only" # read-only | workspace-write | danger-full-access
+      include_memory: true
+      include_evidence: false
+      timeout_ms: 300000
     security:
       # Safe default: interaction messages are denied until one owner/user/chat rule is configured.
       owner_open_id_env: "FEISHU_OWNER_OPEN_ID"

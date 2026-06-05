@@ -14,6 +14,12 @@ import { decideFeishuAccess, decideFeishuControl, type FeishuAccessDecision } fr
 import { isDecisionCalibrationChat, startDecisionOnboarding } from '../decision/onboarding.js';
 import { runDecisionCalibrationAgent } from '../decision/calibration-agent.js';
 import { ensureFeishuSession } from './session-catalog.js';
+import {
+  agentModeControlEffect,
+  agentWorkdir,
+  startFeishuAgentModeRun,
+  type FeishuAgentModeRun,
+} from './agent-mode.js';
 
 interface FeishuInteractionControls {
   stop: () => Promise<void>;
@@ -54,9 +60,10 @@ export async function startFeishuInteraction(config: AppConfig): Promise<FeishuI
   });
 
   const chatModes = new Map<string, ChatMode>();
+  const activeAgentRuns = new Map<string, FeishuAgentModeRun>();
   const queue = new PendingQueue<NormalizedMessage>(cfg.debounce_ms, (scope, batch) => {
     queue.block(scope);
-    void runBatch({ config, channel, batch, scope, chatModes })
+    void runBatch({ config, channel, batch, scope, chatModes, activeAgentRuns })
       .catch(async (error) => {
         const last = batch[batch.length - 1];
         const message = error instanceof Error ? error.message : String(error);
@@ -68,7 +75,7 @@ export async function startFeishuInteraction(config: AppConfig): Promise<FeishuI
 
   channel.on({
     message: async (message) => {
-      await intakeMessage({ config, channel, message, queue, chatModes });
+      await intakeMessage({ config, channel, message, queue, chatModes, activeAgentRuns });
     },
     cardAction: async (event) => {
       await handleCardAction({ config, channel, event, chatModes });
@@ -111,6 +118,7 @@ async function intakeMessage(input: {
   message: NormalizedMessage;
   queue: PendingQueue<NormalizedMessage>;
   chatModes: Map<string, ChatMode>;
+  activeAgentRuns: Map<string, FeishuAgentModeRun>;
 }): Promise<void> {
   const mode = await resolveChatMode(input.channel, input.message.chatId, input.chatModes, input.message.chatType);
   const scope = scopeFor(input.message, mode);
@@ -120,6 +128,15 @@ async function intakeMessage(input: {
     chatType: input.message.chatType,
   });
   const isCalibrationChat = isDecisionCalibrationChat(input.config, input.message.chatId);
+  if (isStopText(input.message.content) && input.activeAgentRuns.has(scope)) {
+    if (!access.ok && !isCalibrationChat) {
+      await replyToMessage(input.channel, input.message, `权限不足：${access.reason}`, input.config.interaction.feishu.reply_mode);
+      return;
+    }
+    await input.activeAgentRuns.get(scope)?.stop();
+    await replyToMessage(input.channel, input.message, '已请求停止当前 Codex 任务。', input.config.interaction.feishu.reply_mode);
+    return;
+  }
   if (!access.ok && !isCalibrationChat) {
     console.warn(`[interaction] denied ${scope}; sender=${input.message.senderId.slice(-6)}; reason=${access.reason}`);
     if (input.message.chatType === 'p2p') await replyToMessage(input.channel, input.message, '当前飞书用户尚未启用 Daily OS。', 'text');
@@ -140,19 +157,22 @@ async function runBatch(input: {
   batch: NormalizedMessage[];
   scope: string;
   chatModes: Map<string, ChatMode>;
+  activeAgentRuns: Map<string, FeishuAgentModeRun>;
 }): Promise<void> {
   const last = input.batch[input.batch.length - 1];
   if (!last) return;
 
   const text = input.batch.map((message) => message.content).join('\n').trim();
   const isCalibrationChat = isDecisionCalibrationChat(input.config, last.chatId);
-  const session = ensureFeishuSession(input.config, {
+  const agentWorkdirPath = input.config.interaction.feishu.agent_mode.enabled ? agentWorkdir(input.config) : undefined;
+  const scopeDescriptor = {
     scopeKey: input.scope,
     chatId: last.chatId,
     chatType: last.chatType,
     mode: last.threadId ? 'topic' : last.chatType,
     ...(last.threadId ? { threadId: last.threadId } : {}),
-  });
+  } as const;
+  const session = ensureFeishuSession(input.config, scopeDescriptor, { workdir: agentWorkdirPath });
   const commandPrefix = input.config.interaction.feishu.command_prefix;
   const commandText = isCalibrationChat && looksLikeBarePolicyCommand(text) ? `${commandPrefix} ${text}` : text;
   const command = parseDailyOsCommand(commandText, commandPrefix);
@@ -197,6 +217,7 @@ async function runBatch(input: {
       sendWorkflowOutput: false,
       accessDecision,
       sessionScopeId: session.scope_id,
+      stopAgentRun: async () => stopAgentRun(input.activeAgentRuns, input.scope),
       reply: async (reply) => {
         await replyToMessage(input.channel, last, reply, input.config.interaction.feishu.reply_mode);
       },
@@ -228,6 +249,7 @@ async function runBatch(input: {
     sendWorkflowOutput: false,
     accessDecision,
     sessionScopeId: session.scope_id,
+    stopAgentRun: async () => stopAgentRun(input.activeAgentRuns, input.scope),
     reply: async (reply) => {
       await replyToMessage(input.channel, last, reply, input.config.interaction.feishu.reply_mode);
     },
@@ -235,6 +257,50 @@ async function runBatch(input: {
 
   if (result.handled) {
     console.log(`[interaction] handled ${input.scope}; command=${result.command.type}`);
+    return;
+  }
+
+  if (input.config.interaction.feishu.agent_mode.enabled) {
+    const control = decideFeishuControl(input.config, accessDecision, {
+      effect: agentModeControlEffect(input.config),
+      workspacePath: agentWorkdir(input.config),
+    });
+    if (!control.ok) {
+      await replyToMessage(input.channel, last, `权限不足：${control.reason}`, input.config.interaction.feishu.reply_mode);
+      console.log(`[interaction] denied ${input.scope}; command=agent-mode; reason=${control.reason}`);
+      return;
+    }
+    await replyToMessage(input.channel, last, 'Codex 正在处理...', input.config.interaction.feishu.reply_mode);
+    const run = await startFeishuAgentModeRun({
+      config: input.config,
+      text,
+      access: accessDecision,
+      session,
+      bridge: {
+        chatId: last.chatId,
+        chatType: last.chatType,
+        senderId: last.senderId,
+        ...(last.threadId ? { threadId: last.threadId } : {}),
+        messageIds: input.batch.map((message) => message.messageId),
+        scopeId: session.scope_id,
+        scopeHash: session.scope_hash,
+        source: 'feishu',
+      },
+    });
+    input.activeAgentRuns.set(input.scope, run);
+    try {
+      const output = await run.done;
+      if (output.threadId) {
+        ensureFeishuSession(input.config, scopeDescriptor, {
+          workdir: agentWorkdir(input.config),
+          codexSessionId: output.threadId,
+        });
+      }
+      await replyToMessage(input.channel, last, output.reply, input.config.interaction.feishu.reply_mode);
+      console.log(`[interaction] handled ${input.scope}; command=agent-mode; run=${run.runId}`);
+    } finally {
+      input.activeAgentRuns.delete(input.scope);
+    }
   }
 }
 
@@ -251,6 +317,18 @@ function commandAccessDecision(config: AppConfig, message: NormalizedMessage, is
   });
   if (decision.ok || !isCalibrationChat) return decision;
   return { ok: true, role: 'allowed_chat' };
+}
+
+function isStopText(text: string): boolean {
+  const normalized = text.replace(/\s+/g, ' ').trim().toLowerCase();
+  return normalized === '/stop' || normalized === 'stop' || normalized === 'daily-os stop' || normalized === '停止' || normalized === '停止当前任务';
+}
+
+async function stopAgentRun(activeRuns: Map<string, FeishuAgentModeRun>, scope: string): Promise<boolean> {
+  const run = activeRuns.get(scope);
+  if (!run) return false;
+  await run.stop();
+  return true;
 }
 
 async function handleCardAction(input: {
