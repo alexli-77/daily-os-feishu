@@ -8,6 +8,7 @@ import {
   listPolicyCandidates,
   rejectPolicyCandidate,
 } from '../decision/candidates.js';
+import { decideFeishuControl, type FeishuAccessDecision, type FeishuControlEffect } from './access-policy.js';
 
 export type ParsedDailyOsCommand =
   | { type: 'ignore' }
@@ -29,11 +30,18 @@ export interface DailyOsCommandContext {
   prefix: string;
   reply: (text: string) => Promise<void>;
   sendWorkflowOutput?: boolean;
+  accessDecision?: FeishuAccessDecision;
 }
 
 export async function handleDailyOsCommand(context: DailyOsCommandContext): Promise<{ handled: boolean; command: ParsedDailyOsCommand }> {
   const command = parseDailyOsCommand(context.text, context.prefix);
   if (command.type === 'ignore') return { handled: false, command };
+
+  const authorization = authorizeRemoteCommand(context, command);
+  if (!authorization.ok) {
+    await context.reply(`权限不足：${authorization.reason}`);
+    return { handled: true, command };
+  }
 
   await runParsedDailyOsCommand(context, command);
   return { handled: true, command };
@@ -164,6 +172,34 @@ function splitCandidateIdAndReason(text: string): { id: string; reason?: string 
   const [id = '', ...rest] = text.trim().split(/\s+/);
   const reason = rest.join(' ').replace(/^(?:because|原因[:：]?)/i, '').trim();
   return { id, ...(reason ? { reason } : {}) };
+}
+
+function authorizeRemoteCommand(context: DailyOsCommandContext, command: ParsedDailyOsCommand): { ok: boolean; reason?: string } {
+  if (!context.accessDecision) return { ok: true };
+  const effect = commandEffect(command);
+  const decision = decideFeishuControl(context.config, context.accessDecision, { effect });
+  return decision.ok ? { ok: true } : { ok: false, reason: decision.reason };
+}
+
+function commandEffect(command: ParsedDailyOsCommand): FeishuControlEffect {
+  switch (command.type) {
+    case 'status':
+    case 'policy':
+    case 'policy_candidates':
+      return 'read';
+    case 'workflow':
+      return 'workflow_trigger';
+    case 'remember':
+    case 'feedback':
+      return 'memory_write';
+    case 'confirm_policy_candidate':
+    case 'reject_policy_candidate':
+      return 'policy_write';
+    case 'calibrate':
+      return 'interaction_admin';
+    case 'ignore':
+      return 'read';
+  }
 }
 
 function stripPrefix(text: string, prefix: string): string | null {

@@ -354,13 +354,26 @@ Access checks run before message batching, workflow triggers, and card button
 callbacks. In groups, keep `require_mention_in_groups: true` unless you are
 testing in a private bot-only group.
 
+Role rules:
+
+- `owner` / `admin`: can run interaction admin actions and confirm durable
+  decision-policy changes.
+- `allowed_user`: can run normal read/workflow commands and write feedback or
+  memory notes, but cannot confirm durable policy changes.
+- `allowed_chat`: can run read/workflow commands only. This keeps an allowed
+  group useful without letting every member mutate memory or policy.
+
 Access levels:
 
-- `read_only`: safest default. Use for workflow triggering and future
-  read-only agent mode.
+- `read_only`: safest default. Allows Daily OS workflow triggers and internal
+  memory/feedback writes, but blocks arbitrary workspace writes.
 - `workspace`: future agent mode may write only inside configured
-  `allowed_workspaces`.
-- `full`: trusted private deployments only. Doctor reports this as a warning.
+  `allowed_workspaces`; Doctor warns if no workspace is configured.
+- `full`: trusted private deployments only. Full-control actions still require
+  owner/admin and explicit confirmation. Doctor reports this as a warning.
+
+Workspace paths are normalized before checks. A requested workspace must be the
+configured allowed path or a child of it; sibling/path-escape writes are denied.
 
 Use Feishu/Lark `open_id` values for users/admins and `chat_id` values for
 allowed chats.

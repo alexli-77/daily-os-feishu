@@ -53,8 +53,8 @@ interaction:
       admin_open_ids: []
       allowed_user_open_ids: []
       allowed_chat_ids: []
-      access_level: "read_only" # read_only | workspace | full
-      allowed_workspaces: []
+      access_level: "read_only" # read_only blocks arbitrary workspace writes; workspace/full require tighter trust.
+      allowed_workspaces: [] # Required before future workspace-write agent actions can run with access_level=workspace.
 
 decision:
   enabled: true

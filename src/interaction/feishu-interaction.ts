@@ -10,7 +10,7 @@ import type { AppConfig, WorkflowName } from '../config/schema.js';
 import { handleDailyOsCommand, parseDailyOsCommand } from './daily-os-command.js';
 import { PendingQueue } from './pending-queue.js';
 import { runWorkflow } from '../workflows/run-workflow.js';
-import { decideFeishuAccess } from './access-policy.js';
+import { decideFeishuAccess, decideFeishuControl, type FeishuAccessDecision } from './access-policy.js';
 import { isDecisionCalibrationChat, startDecisionOnboarding } from '../decision/onboarding.js';
 import { runDecisionCalibrationAgent } from '../decision/calibration-agent.js';
 
@@ -148,12 +148,19 @@ async function runBatch(input: {
   const commandPrefix = input.config.interaction.feishu.command_prefix;
   const commandText = isCalibrationChat && looksLikeBarePolicyCommand(text) ? `${commandPrefix} ${text}` : text;
   const command = parseDailyOsCommand(commandText, commandPrefix);
+  const accessDecision = commandAccessDecision(input.config, last, isCalibrationChat);
   if (command.type === 'status') {
     await sendStatusCard(input.channel, last, input.config);
     console.log(`[interaction] handled ${input.scope}; command=status-card`);
     return;
   }
   if (command.type === 'calibrate') {
+    const control = decideFeishuControl(input.config, accessDecision, { effect: 'interaction_admin' });
+    if (!control.ok) {
+      await replyToMessage(input.channel, last, `权限不足：${control.reason}`, input.config.interaction.feishu.reply_mode);
+      console.log(`[interaction] denied ${input.scope}; command=calibrate; reason=${control.reason}`);
+      return;
+    }
     const result = await startDecisionOnboarding(input.config, { channel: input.channel });
     await replyToMessage(
       input.channel,
@@ -180,6 +187,7 @@ async function runBatch(input: {
       source: `feishu-decision-calibration:${input.scope}`,
       prefix: commandPrefix,
       sendWorkflowOutput: false,
+      accessDecision,
       reply: async (reply) => {
         await replyToMessage(input.channel, last, reply, input.config.interaction.feishu.reply_mode);
       },
@@ -209,6 +217,7 @@ async function runBatch(input: {
     source: `feishu-interaction:${input.scope}`,
     prefix: input.config.interaction.feishu.command_prefix,
     sendWorkflowOutput: false,
+    accessDecision,
     reply: async (reply) => {
       await replyToMessage(input.channel, last, reply, input.config.interaction.feishu.reply_mode);
     },
@@ -222,6 +231,16 @@ async function runBatch(input: {
 function looksLikeBarePolicyCommand(text: string): boolean {
   const normalized = text.replace(/\s+/g, ' ').trim();
   return /^(?:候选规则|待确认规则|保存规则|确认规则|拒绝规则|放弃规则)(?:\s|$)/.test(normalized);
+}
+
+function commandAccessDecision(config: AppConfig, message: NormalizedMessage, isCalibrationChat: boolean): FeishuAccessDecision {
+  const decision = decideFeishuAccess(config, {
+    senderOpenId: message.senderId,
+    chatId: message.chatId,
+    chatType: message.chatType,
+  });
+  if (decision.ok || !isCalibrationChat) return decision;
+  return { ok: true, role: 'allowed_chat' };
 }
 
 async function handleCardAction(input: {
@@ -239,6 +258,11 @@ async function handleCardAction(input: {
   });
   if (!access.ok) {
     console.warn(`[interaction] denied card action ${input.event.chatId}; operator=${input.event.operator.openId.slice(-6)}; reason=${access.reason}`);
+    return;
+  }
+  const control = decideFeishuControl(input.config, access, { effect: 'workflow_trigger' });
+  if (!control.ok) {
+    await input.channel.send(input.event.chatId, { text: `权限不足：${control.reason}` }, { replyTo: input.event.messageId });
     return;
   }
 
