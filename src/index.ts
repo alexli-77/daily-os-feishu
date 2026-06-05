@@ -36,6 +36,11 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === 'start') {
+    await startAll(options);
+    return;
+  }
+
   loadDotEnv(options.envPath);
   const config = loadConfig(options.configPath);
 
@@ -100,6 +105,42 @@ async function main(): Promise<void> {
     default:
       usage(command === 'help' ? 0 : 1);
   }
+}
+
+async function startAll(options: CliOptions): Promise<void> {
+  ensureLocalSetup(options.configPath, options.envPath);
+  loadDotEnv(options.envPath);
+  const config = loadConfig(options.configPath);
+  ensureMemoryFiles(config);
+  ensureDecisionPolicyFiles(config);
+
+  console.log('daily-os-feishu 正在启动全部本地功能...');
+  const ui = await startUiServer({
+    configPath: options.configPath,
+    envPath: options.envPath,
+    host: options.host,
+    port: options.port,
+    open: options.openUi,
+  });
+
+  await runScheduler(config);
+  console.log('daily-os-feishu scheduler 已启动。');
+
+  let interactionControls: Awaited<ReturnType<typeof startFeishuInteraction>> | null = null;
+  if (config.interaction.feishu.enabled) {
+    interactionControls = await startFeishuInteraction(config);
+    console.log('daily-os-feishu 飞书实时交互已启动。');
+  } else {
+    console.warn('interaction.feishu.enabled=false；飞书实时对话未启动。可在 UI 中启用并重启 `npm run start`。');
+  }
+
+  console.log(`全部功能入口已启动：${ui.url}`);
+  console.log('保持这个终端窗口运行。按 Ctrl+C 停止。');
+
+  await waitForShutdown(async () => {
+    if (interactionControls) await interactionControls.stop();
+    await ui.stop();
+  });
 }
 
 interface CliOptions {
@@ -186,14 +227,19 @@ async function waitForShutdown(stop: () => Promise<void>): Promise<void> {
 }
 
 function setup(): void {
-  copyIfMissing('.env.example', '.env');
-  copyIfMissing('config/config.example.yaml', 'config/config.yaml');
-  const config = loadConfig('config/config.yaml');
+  const options = parseArgs(process.argv.slice(2));
+  ensureLocalSetup(options.configPath, options.envPath);
+  console.log('已创建本地 .env、config/config.yaml 和 data 目录。请先编辑配置，再运行 doctor。');
+}
+
+function ensureLocalSetup(configPath = 'config/config.yaml', envPath = '.env'): void {
+  copyIfMissing('.env.example', envPath);
+  copyIfMissing('config/config.example.yaml', configPath);
+  const config = loadConfig(configPath);
   ensureMemoryFiles(config);
   ensureDecisionPolicyFiles(config);
   fs.mkdirSync(path.resolve('data/snapshots/chrome'), { recursive: true });
   fs.mkdirSync(path.resolve('data/snapshots/calendar'), { recursive: true });
-  console.log('已创建本地 .env、config/config.yaml 和 data 目录。请先编辑配置，再运行 doctor。');
 }
 
 function copyIfMissing(from: string, to: string): void {
@@ -206,6 +252,7 @@ function usage(code: number): never {
   console.log(`daily-os-feishu
 
 Commands:
+  start              Start UI, scheduler, and Feishu interaction if enabled
   setup              Create local config files and data directories
   doctor             Check local dependencies and required env vars
   collect            Print collected evidence as JSON
