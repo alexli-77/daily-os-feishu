@@ -3,7 +3,7 @@ import type { AppConfig } from '../config/schema.js';
 import { commandExists, runCommand } from '../utils/command.js';
 import { checkLarkCli } from '../connectors/lark-cli.js';
 import { defaultMemoryRepositoryPath, resolveMemoryRepositoryPath } from '../storage/memory.js';
-import { hasAnyAccessRule, summarizeFeishuAccess } from '../interaction/access-policy.js';
+import { feishuSafetyWarnings, hasAnyAccessRule, summarizeFeishuAccess } from '../interaction/access-policy.js';
 import { decisionPolicyFiles } from '../decision/policy.js';
 
 export interface DoctorCheck {
@@ -66,6 +66,14 @@ export async function runDoctor(config: AppConfig, configPath = 'config/config.y
             detail: `configure ${config.interaction.feishu.security.owner_open_id_env}, allowed_user_open_ids, or allowed_chat_ids before remote control will process messages`,
           },
     );
+    for (const warning of feishuSafetyWarnings(config)) {
+      checks.push({
+        name: 'Feishu interaction safety',
+        ok: true,
+        level: 'warning',
+        detail: warning,
+      });
+    }
   }
 
   if (config.output.feishu.enabled) {
