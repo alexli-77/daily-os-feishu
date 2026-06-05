@@ -47,6 +47,7 @@ interaction:
     require_mention_in_groups: true
     debounce_ms: 600
     reply_mode: "markdown" # markdown | text
+    session_catalog_path: "./data/memory/feishu-session-catalog.json"
     security:
       # Safe default: interaction messages are denied until one owner/user/chat rule is configured.
       owner_open_id_env: "FEISHU_OWNER_OPEN_ID"

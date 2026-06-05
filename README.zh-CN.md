@@ -276,6 +276,7 @@ interaction:
     require_mention_in_groups: true
     debounce_ms: 600
     reply_mode: "markdown"
+    session_catalog_path: "./data/memory/feishu-session-catalog.json"
     security:
       owner_open_id_env: "FEISHU_OWNER_OPEN_ID"
       admin_open_ids: []
@@ -294,6 +295,7 @@ npm run interaction:feishu
 支持的消息和 feedback polling 一致：
 
 - `daily-os status`：返回带 Plan、Review、Weekly 按钮的操作卡片。
+- `/new` 或 `daily-os new`：清除当前飞书 chat/topic 的远程会话。
 - `daily-os remember <text>`：写入 long-term memory。
 - `daily-os feedback <text>`：写入本地 feedback log。
 - `daily-os policy`：查看当前决策 policy 和 policy-skill 路径。
@@ -301,6 +303,12 @@ npm run interaction:feishu
 - `daily-os plan`、`daily-os review`、`daily-os weekly`：运行 workflow，并在同一个聊天里回复。
 
 这一层不会替代知识库 vault 或 memory repository。它只是飞书侧的交互入口。
+
+每个飞书私聊、群聊或 topic thread 都会映射到一个稳定的本地 session scope。
+`interaction.feishu.session_catalog_path` 指向本地目录文件，只保存 metadata：
+scope id、chat/thread id、可选 Codex session id、workdir、policy signature 和时间戳。
+它不会保存消息正文。如果 workdir 或远程控制 policy 变化，旧 scope session 会被归档，
+并创建新的 active session。
 
 ### Interaction Access Policy
 

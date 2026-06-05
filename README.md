@@ -313,6 +313,7 @@ interaction:
     require_mention_in_groups: true
     debounce_ms: 600
     reply_mode: "markdown"
+    session_catalog_path: "./data/memory/feishu-session-catalog.json"
     security:
       owner_open_id_env: "FEISHU_OWNER_OPEN_ID"
       admin_open_ids: []
@@ -331,6 +332,7 @@ npm run interaction:feishu
 Supported messages are the same as feedback polling:
 
 - `daily-os status` returns an action card with Plan, Review, and Weekly buttons.
+- `/new` or `daily-os new` clears the current Feishu chat/topic session.
 - `daily-os remember <text>` appends to long-term memory.
 - `daily-os feedback <text>` appends to the local feedback log.
 - `daily-os policy` shows the current decision policy and policy-skill paths.
@@ -340,6 +342,13 @@ Supported messages are the same as feedback polling:
 
 This layer does not replace the knowledge vault or memory repository. It is only
 the Feishu-facing interaction surface.
+
+Each Feishu DM, group, or topic thread maps to a stable local session scope.
+The catalog at `interaction.feishu.session_catalog_path` stores metadata only:
+scope ids, chat/thread ids, optional Codex session id, workdir, policy signature,
+and timestamps. It does not store message bodies. If the workdir or remote-control
+policy changes, the previous scope session is archived and a fresh active record
+is created.
 
 ### Interaction Access Policy
 

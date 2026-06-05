@@ -80,6 +80,7 @@ export const AppConfigSchema = z.object({
         require_mention_in_groups: z.boolean().default(true),
         debounce_ms: z.number().int().nonnegative().default(600),
         reply_mode: z.enum(['markdown', 'text']).default('markdown'),
+        session_catalog_path: z.string().default('./data/memory/feishu-session-catalog.json'),
         security: z
           .object({
             owner_open_id_env: z.string().default('FEISHU_OWNER_OPEN_ID'),
@@ -106,6 +107,7 @@ export const AppConfigSchema = z.object({
         require_mention_in_groups: true,
         debounce_ms: 600,
         reply_mode: 'markdown',
+        session_catalog_path: './data/memory/feishu-session-catalog.json',
         security: {
           owner_open_id_env: 'FEISHU_OWNER_OPEN_ID',
           admin_open_ids: [],

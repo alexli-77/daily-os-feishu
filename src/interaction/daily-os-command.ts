@@ -9,12 +9,14 @@ import {
   rejectPolicyCandidate,
 } from '../decision/candidates.js';
 import { decideFeishuControl, type FeishuAccessDecision, type FeishuControlEffect } from './access-policy.js';
+import { clearFeishuSession } from './session-catalog.js';
 
 export type ParsedDailyOsCommand =
   | { type: 'ignore' }
   | { type: 'status' }
   | { type: 'policy' }
   | { type: 'policy_candidates' }
+  | { type: 'new_session' }
   | { type: 'confirm_policy_candidate'; id: string }
   | { type: 'reject_policy_candidate'; id: string; reason?: string }
   | { type: 'calibrate' }
@@ -31,6 +33,7 @@ export interface DailyOsCommandContext {
   reply: (text: string) => Promise<void>;
   sendWorkflowOutput?: boolean;
   accessDecision?: FeishuAccessDecision;
+  sessionScopeId?: string;
 }
 
 export async function handleDailyOsCommand(context: DailyOsCommandContext): Promise<{ handled: boolean; command: ParsedDailyOsCommand }> {
@@ -67,6 +70,7 @@ export function parseDailyOsCommand(text: string, prefix: string): ParsedDailyOs
   }
 
   if (['help', 'status', '状态', '帮助'].includes(lower)) return { type: 'status' };
+  if (['new', 'new session', '新会话', '重开会话'].includes(lower)) return { type: 'new_session' };
   if (['policy', 'decision policy', '规则', '决策规则'].includes(lower)) return { type: 'policy' };
   if (['candidates', 'policy candidates', '候选规则', '待确认规则'].includes(lower)) return { type: 'policy_candidates' };
   const confirmCandidate = normalized.match(/^(?:save|confirm)\s+(?:rule\s+)?(.+)$/i) || normalized.match(/^(?:保存规则|确认规则)\s*(.+)$/);
@@ -96,6 +100,7 @@ export function dailyOsStatusText(prefix: string): string {
     '',
     '可用命令：',
     `- ${prefix} status`,
+    `- ${prefix} new`,
     `- ${prefix} remember <text>`,
     `- ${prefix} feedback <text>`,
     `- ${prefix} policy`,
@@ -119,6 +124,14 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
       return;
     case 'policy_candidates':
       await context.reply(formatPolicyCandidateList(listPolicyCandidates(context.config, 'pending')));
+      return;
+    case 'new_session':
+      if (!context.sessionScopeId) {
+        await context.reply('当前命令没有绑定远程会话 scope。');
+        return;
+      }
+      clearFeishuSession(context.config, context.sessionScopeId);
+      await context.reply('已开启新的 Daily OS 远程会话。');
       return;
     case 'confirm_policy_candidate': {
       const candidate = confirmPolicyCandidate(context.config, command.id);
@@ -186,6 +199,7 @@ function commandEffect(command: ParsedDailyOsCommand): FeishuControlEffect {
     case 'status':
     case 'policy':
     case 'policy_candidates':
+    case 'new_session':
       return 'read';
     case 'workflow':
       return 'workflow_trigger';
@@ -204,6 +218,7 @@ function commandEffect(command: ParsedDailyOsCommand): FeishuControlEffect {
 
 function stripPrefix(text: string, prefix: string): string | null {
   const normalized = text.trim();
+  if (normalized.toLowerCase() === '/new') return 'new';
   const prefixes = [prefix, `/${prefix}`, `@${prefix}`].map((value) => value.toLowerCase());
   const lower = normalized.toLowerCase();
 

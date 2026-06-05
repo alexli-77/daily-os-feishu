@@ -5,6 +5,7 @@ import { checkLarkCli } from '../connectors/lark-cli.js';
 import { defaultMemoryRepositoryPath, resolveMemoryRepositoryPath } from '../storage/memory.js';
 import { feishuSafetyWarnings, hasAnyAccessRule, summarizeFeishuAccess } from '../interaction/access-policy.js';
 import { decisionPolicyFiles } from '../decision/policy.js';
+import { feishuSessionCatalogPath } from '../interaction/session-catalog.js';
 
 export interface DoctorCheck {
   name: string;
@@ -47,6 +48,11 @@ export async function runDoctor(config: AppConfig, configPath = 'config/config.y
       name: 'Feishu interaction layer',
       ok: true,
       detail: `prefix=${config.interaction.feishu.command_prefix}, debounce=${config.interaction.feishu.debounce_ms}ms`,
+    });
+    checks.push({
+      name: 'Feishu session catalog',
+      ok: true,
+      detail: feishuSessionCatalogPath(config),
     });
     checks.push(
       hasAnyAccessRule(config)
