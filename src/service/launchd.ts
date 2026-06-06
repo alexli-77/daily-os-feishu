@@ -4,6 +4,8 @@ import path from 'node:path';
 import type { AppConfig, WorkflowName } from '../config/schema.js';
 import { runCommand } from '../utils/command.js';
 import { runWorkflow } from '../workflows/run-workflow.js';
+import { collectProgressCandidates } from '../progress/capture.js';
+import { sendFeishuMessage } from '../connectors/lark-cli.js';
 
 const LABEL = 'com.daily-os-feishu.agent';
 
@@ -83,6 +85,31 @@ async function tick(config: AppConfig, fired: Set<string>): Promise<void> {
       await runWorkflow(config, item.workflow);
     } catch (error) {
       console.error(error instanceof Error ? error.stack || error.message : String(error));
+    }
+  }
+
+  if (config.progress.enabled && config.progress.no_progress_reminder_time === time) {
+    const key = `${date}:progress_reminder:${time}`;
+    if (!fired.has(key)) {
+      fired.add(key);
+      try {
+        const result = await collectProgressCandidates(config, date);
+        if (result.candidates.length === 0) {
+          await sendFeishuMessage(
+            config,
+            [
+              '今天暂时没有看到可靠的进展证据。',
+              '',
+              '如果你已经推进了事情，可以直接回复：',
+              '`daily-os remember 今天进展：...`',
+              '',
+              '也可以发送 `daily-os progress` 重新查看候选进展。',
+            ].join('\n'),
+          );
+        }
+      } catch (error) {
+        console.error(error instanceof Error ? error.stack || error.message : String(error));
+      }
     }
   }
 }

@@ -16,6 +16,7 @@ import { getLaunchAgentStatus, installLaunchAgent, uninstallLaunchAgent } from '
 import { runCommand } from '../utils/command.js';
 import { appendUiLog, clearUiLogs, readUiLogs } from '../storage/ui-log.js';
 import { startDecisionOnboarding } from '../decision/onboarding.js';
+import { collectProgressCandidates, formatProgressCandidates } from '../progress/capture.js';
 
 const SECRET_ENV_KEYS = new Set(['OPENAI_API_KEY', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'VAULT_GATE_TOKEN', 'LARK_APP_SECRET']);
 const PLAIN_ENV_KEYS = [
@@ -254,6 +255,10 @@ async function runActionInner(options: UiServerOptions, request: Record<string, 
     return { ok: true, text: JSON.stringify(await collectEvidence(config, todayInTimezone(config)), null, 2) };
   }
 
+  if (action === 'progress') {
+    return { ok: true, text: formatProgressCandidates(await collectProgressCandidates(config, todayInTimezone(config))) };
+  }
+
   if (action === 'feishu_test') {
     if (!config.output.feishu.enabled) throw new Error('Feishu output is disabled in config.');
     await sendFeishuMessage(config, `daily-os-feishu test message\n${new Date().toISOString()}`);
@@ -304,6 +309,7 @@ async function runActionInner(options: UiServerOptions, request: Record<string, 
 function actionResultDetail(action: string): string {
   if (action === 'collect') return 'Evidence collection completed. Response body is not written to logs.';
   if (['plan', 'review', 'weekly'].includes(action)) return 'Workflow completed. Generated content is not written to logs.';
+  if (action === 'progress') return 'Progress candidates collected. Candidate text is not written to logs.';
   if (action === 'feedback_poll') return 'Feishu feedback poll completed. Message bodies are not written to logs.';
   if (action === 'feishu_test') return 'Feishu test message sent.';
   if (action === 'decision_onboarding_start') return '决策校准群已准备好。';
@@ -797,6 +803,7 @@ const HTML = String.raw`<!doctype html>
               <button type="button" data-action="feishu_test">Test Feishu</button>
               <button type="button" data-action="feedback_poll">Poll Feedback</button>
               <button type="button" data-action="collect">Collect</button>
+              <button type="button" data-action="progress">Progress</button>
               <label class="inline">
                 <input id="send-output" type="checkbox" checked />
                 Send output

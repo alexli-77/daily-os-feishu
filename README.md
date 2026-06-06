@@ -67,10 +67,36 @@ Run workflows manually. Use `--no-send` for the first generated result:
 
 ```bash
 npm run plan -- --no-send
+npm run progress
 npm run review
 npm run weekly
 npm run feedback:poll
 ```
+
+## Daily Progress Capture
+
+Daily OS can collect confirmable progress candidates before the evening review.
+It does not treat inferred evidence as fact until the user confirms it.
+
+Use:
+
+```bash
+npm run progress
+npm run progress:confirm
+```
+
+In Feishu interaction mode, send:
+
+```text
+daily-os progress
+```
+
+Daily OS replies with a confirmation card. **Confirm all** writes the selected
+candidates to `progress.ledger_dir` as a date-based progress ledger. Review and
+weekly workflows receive that ledger as the `progress_ledger` evidence source.
+If the scheduler reaches `progress.no_progress_reminder_time` and sees no
+candidate progress, it sends a lightweight reminder instead of waiting until the
+nightly review.
 
 Install the macOS scheduler:
 

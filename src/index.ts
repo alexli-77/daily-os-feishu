@@ -14,6 +14,12 @@ import { startUiServer } from './ui/server.js';
 import { startFeishuInteraction } from './interaction/feishu-interaction.js';
 import { startDecisionOnboarding } from './decision/onboarding.js';
 import { ensureDecisionPolicyFiles } from './decision/policy.js';
+import {
+  appendConfirmedProgress,
+  collectProgressCandidates,
+  confirmedEntriesFromCandidates,
+  formatProgressCandidates,
+} from './progress/capture.js';
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
@@ -51,6 +57,17 @@ async function main(): Promise<void> {
     }
     case 'collect': {
       console.log(JSON.stringify(await collectEvidence(config, todayInTimezone(config)), null, 2));
+      break;
+    }
+    case 'progress': {
+      const date = todayInTimezone(config);
+      const result = await collectProgressCandidates(config, date);
+      if (subcommand === 'confirm') {
+        const ledgerPath = appendConfirmedProgress(config, date, confirmedEntriesFromCandidates(result.candidates));
+        console.log(`Confirmed ${result.candidates.length} progress candidate(s): ${ledgerPath}`);
+      } else {
+        console.log(formatProgressCandidates(result));
+      }
       break;
     }
     case 'plan':
@@ -256,6 +273,8 @@ Commands:
   setup              Create local config files and data directories
   doctor             Check local dependencies and required env vars
   collect            Print collected evidence as JSON
+  progress           Print today's progress candidates
+  progress confirm   Confirm all current progress candidates into the daily ledger
   ui                 Open a local setup and trigger dashboard
   plan [--no-send]   Run daily planning workflow now
   review [--no-send] Run daily review workflow now

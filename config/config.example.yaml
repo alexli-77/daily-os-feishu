@@ -79,6 +79,12 @@ decision:
     # Keep false for safety: users should click Start onboarding or run the CLI command.
     auto_create_on_setup: false
 
+progress:
+  enabled: true
+  ledger_dir: "./data/memory/progress"
+  no_progress_reminder_time: "16:30"
+  max_candidates: 12
+
 sources:
   # User knowledge-base vault used as an evidence source.
   # This is separate from memory.repository_path below.
