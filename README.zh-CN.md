@@ -64,10 +64,34 @@ npm run collect
 
 ```bash
 npm run plan -- --no-send
+npm run progress
 npm run review
 npm run weekly
 npm run feedback:poll
 ```
+
+## 今日进展捕获
+
+Daily OS 可以在晚间复盘前先收集“可能的今日进展”。这些候选只来自证据源，不会直接当成事实；
+用户确认后才会写入今日进展账本。
+
+命令行：
+
+```bash
+npm run progress
+npm run progress:confirm
+```
+
+飞书实时交互中发送：
+
+```text
+daily-os progress
+```
+
+Daily OS 会回复一张确认卡片。点击 **确认全部** 后，候选进展会写入
+`progress.ledger_dir` 下按日期保存的 progress ledger。日复盘和周复盘会把这个 ledger
+作为 `progress_ledger` 证据源读取。如果 scheduler 到了
+`progress.no_progress_reminder_time` 仍没有看到候选进展，会发一条轻提醒，而不是等到晚上才让用户回忆。
 
 安装 macOS 定时服务：
 

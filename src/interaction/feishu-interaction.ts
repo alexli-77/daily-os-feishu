@@ -22,6 +22,14 @@ import {
   type FeishuAgentModeRun,
 } from './agent-mode.js';
 import { AgentRunCardController, parseAgentRunCardAction, type AgentRunCardStatus } from './run-card.js';
+import {
+  appendConfirmedProgress,
+  collectProgressCandidates,
+  confirmedEntriesFromCandidates,
+  formatProgressCandidates,
+} from '../progress/capture.js';
+import { parseProgressCardAction, renderProgressConfirmationCard } from '../progress/card.js';
+import { todayInTimezone } from '../utils/date.js';
 
 interface FeishuInteractionControls {
   stop: () => Promise<void>;
@@ -188,6 +196,20 @@ async function runBatch(input: {
   if (command.type === 'status') {
     await sendStatusCard(input.channel, last, input.config);
     console.log(`[interaction] handled ${input.scope}; command=status-card`);
+    return;
+  }
+  if (command.type === 'progress') {
+    const date = todayInTimezone(input.config);
+    const progress = await collectProgressCandidates(input.config, date);
+    await input.channel.send(
+      last.chatId,
+      { card: renderProgressConfirmationCard(input.config, progress) },
+      {
+        replyTo: last.messageId,
+        ...(last.threadId ? { replyInThread: true } : {}),
+      },
+    );
+    console.log(`[interaction] handled ${input.scope}; command=progress-card`);
     return;
   }
   if (command.type === 'calibrate') {
@@ -395,6 +417,11 @@ async function handleCardAction(input: {
   chatModes: Map<string, ChatMode>;
   activeAgentRuns: Map<string, ActiveAgentRun>;
 }): Promise<void> {
+  const progressAction = parseProgressCardAction(input.event.action.value, input.config);
+  if (progressAction) {
+    await handleProgressCardAction({ ...input, action: progressAction });
+    return;
+  }
   const agentAction = parseAgentRunCardAction(input.event.action.value, input.config);
   if (agentAction) {
     await handleAgentRunCardAction({ ...input, action: agentAction });
@@ -420,6 +447,52 @@ async function handleCardAction(input: {
   await input.channel.send(input.event.chatId, { text: `正在运行 ${action.replaceAll('_', ' ')}...` }, { replyTo: input.event.messageId });
   const output = await runWorkflow(input.config, action, { send: false });
   await input.channel.send(input.event.chatId, toSendInput(output, input.config.interaction.feishu.reply_mode), { replyTo: input.event.messageId });
+}
+
+async function handleProgressCardAction(input: {
+  config: AppConfig;
+  channel: LarkChannel;
+  event: CardActionEvent;
+  action: { action: 'confirm_all' | 'ignore_all' | 'review'; date: string; candidateIds: string[] };
+}): Promise<void> {
+  const access = decideFeishuAccess(input.config, {
+    senderOpenId: input.event.operator.openId,
+    chatId: input.event.chatId,
+    chatType: 'group',
+  });
+  if (!access.ok) {
+    console.warn(`[interaction] denied progress card action ${input.event.chatId}; operator=${input.event.operator.openId.slice(-6)}; reason=${access.reason}`);
+    return;
+  }
+  const control = decideFeishuControl(input.config, access, { effect: 'memory_write' });
+  if (!control.ok) {
+    await input.channel.send(input.event.chatId, { text: `权限不足：${control.reason}` }, { replyTo: input.event.messageId });
+    return;
+  }
+
+  const result = await collectProgressCandidates(input.config, input.action.date);
+  const selected = result.candidates.filter((candidate) => input.action.candidateIds.includes(candidate.id));
+  if (input.action.action === 'confirm_all') {
+    const ledgerPath = appendConfirmedProgress(input.config, input.action.date, confirmedEntriesFromCandidates(selected));
+    await input.channel.send(
+      input.event.chatId,
+      {
+        text:
+          selected.length > 0
+            ? `已确认 ${selected.length} 条今日进展，并写入：${ledgerPath}`
+            : '没有可写入的进展候选；可能候选已经变化或为空。',
+      },
+      { replyTo: input.event.messageId },
+    );
+    return;
+  }
+  if (input.action.action === 'review') {
+    await input.channel.send(input.event.chatId, toSendInput(formatProgressCandidates(result), input.config.interaction.feishu.reply_mode), {
+      replyTo: input.event.messageId,
+    });
+    return;
+  }
+  await input.channel.send(input.event.chatId, { text: '好的，这次不写入今日进展账本。' }, { replyTo: input.event.messageId });
 }
 
 async function handleAgentRunCardAction(input: {

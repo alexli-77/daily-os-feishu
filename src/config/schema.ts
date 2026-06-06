@@ -181,6 +181,19 @@ export const AppConfigSchema = z.object({
         auto_create_on_setup: false,
       },
     }),
+  progress: z
+    .object({
+      enabled: z.boolean().default(true),
+      ledger_dir: z.string().default('./data/memory/progress'),
+      no_progress_reminder_time: z.string().default('16:30'),
+      max_candidates: z.number().int().positive().default(12),
+    })
+    .default({
+      enabled: true,
+      ledger_dir: './data/memory/progress',
+      no_progress_reminder_time: '16:30',
+      max_candidates: 12,
+    }),
   sources: z.object({
     vault: enabled.extend({
       provider: z.enum(['remote', 'local']).default('remote'),

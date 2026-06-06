@@ -62,6 +62,7 @@ export function appendFeedbackLog(config: AppConfig, content: string, metadata: 
 
 export function ensureMemoryFiles(config: AppConfig): void {
   fs.mkdirSync(path.resolve(config.memory.daily_dir), { recursive: true });
+  fs.mkdirSync(path.resolve(config.progress.ledger_dir), { recursive: true });
   const longTermPath = path.resolve(config.memory.long_term_path);
   fs.mkdirSync(path.dirname(longTermPath), { recursive: true });
   if (!fs.existsSync(longTermPath)) {
