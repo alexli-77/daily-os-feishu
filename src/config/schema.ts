@@ -194,6 +194,17 @@ export const AppConfigSchema = z.object({
       no_progress_reminder_time: '16:30',
       max_candidates: 12,
     }),
+  chat_analysis: z
+    .object({
+      enabled: z.boolean().default(true),
+      lookback_messages: z.number().int().positive().default(40),
+      max_suggestions: z.number().int().positive().default(8),
+    })
+    .default({
+      enabled: true,
+      lookback_messages: 40,
+      max_suggestions: 8,
+    }),
   sources: z.object({
     vault: enabled.extend({
       provider: z.enum(['remote', 'local']).default('remote'),

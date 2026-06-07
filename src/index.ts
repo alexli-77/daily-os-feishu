@@ -20,6 +20,7 @@ import {
   confirmedEntriesFromCandidates,
   formatProgressCandidates,
 } from './progress/capture.js';
+import { analyzeChatContext, formatChatContextAnalysis } from './chat/context-analysis.js';
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
@@ -57,6 +58,15 @@ async function main(): Promise<void> {
     }
     case 'collect': {
       console.log(JSON.stringify(await collectEvidence(config, todayInTimezone(config)), null, 2));
+      break;
+    }
+    case 'chat': {
+      if (!config.chat_analysis.enabled) {
+        console.log('chat_analysis.enabled=false；聊天上下文分析已禁用。');
+        break;
+      }
+      const date = todayInTimezone(config);
+      console.log(formatChatContextAnalysis(await analyzeChatContext(config, date)));
       break;
     }
     case 'progress': {
@@ -273,6 +283,7 @@ Commands:
   setup              Create local config files and data directories
   doctor             Check local dependencies and required env vars
   collect            Print collected evidence as JSON
+  chat               Analyze Feishu chat context and print update suggestions
   progress           Print today's progress candidates
   progress confirm   Confirm all current progress candidates into the daily ledger
   ui                 Open a local setup and trigger dashboard

@@ -67,11 +67,35 @@ Run workflows manually. Use `--no-send` for the first generated result:
 
 ```bash
 npm run plan -- --no-send
+npm run chat
 npm run progress
 npm run review
 npm run weekly
 npm run feedback:poll
 ```
+
+## Feishu Chat Context Suggestions
+
+Daily OS can inspect recent Feishu IM history and suggest updates to todo,
+calendar, documents, Linear, memory, or the daily plan. This is intentionally a
+suggestion layer: it does not write to external systems automatically.
+
+Use:
+
+```bash
+npm run chat
+```
+
+In Feishu interaction mode, send:
+
+```text
+daily-os chat
+```
+
+The result highlights new tasks, reschedules, completion signals, blockers,
+owner changes, calendar/document update hints, and possible conflicts with
+existing evidence. Configure `chat_analysis.lookback_messages` and
+`chat_analysis.max_suggestions` to control the scan window and output size.
 
 ## Daily Progress Capture
 
@@ -382,6 +406,8 @@ Supported messages are the same as feedback polling:
 
 - `daily-os status` returns an action card with Plan, Review, and Weekly buttons.
 - `/new` or `daily-os new` clears the current Feishu chat/topic session.
+- `daily-os chat` analyzes recent Feishu chat context and suggests todo,
+  calendar, document, and plan updates.
 - `daily-os remember <text>` appends to long-term memory.
 - `daily-os feedback <text>` appends to the local feedback log.
 - `daily-os policy` shows the current decision policy and policy-skill paths.

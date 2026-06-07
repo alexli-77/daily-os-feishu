@@ -64,11 +64,33 @@ npm run collect
 
 ```bash
 npm run plan -- --no-send
+npm run chat
 npm run progress
 npm run review
 npm run weekly
 npm run feedback:poll
 ```
+
+## 飞书聊天上下文建议
+
+Daily OS 可以检查最近的飞书 IM history，并提出 todo、日历、文档、Linear、记忆库或今日计划的变更建议。
+这一层只做建议，不会自动写入外部系统，避免把聊天里的误读直接变成任务变更。
+
+命令行：
+
+```bash
+npm run chat
+```
+
+飞书实时交互中发送：
+
+```text
+daily-os chat
+```
+
+它会识别新增待办、延期/改期、完成信号、阻塞、负责人变化、日历/文档更新线索，以及和现有 evidence
+可能冲突的事项。可以用 `chat_analysis.lookback_messages` 和
+`chat_analysis.max_suggestions` 控制扫描消息数和输出条数。
 
 ## 今日进展捕获
 
@@ -340,6 +362,7 @@ npm run interaction:feishu
 
 - `daily-os status`：返回带 Plan、Review、Weekly 按钮的操作卡片。
 - `/new` 或 `daily-os new`：清除当前飞书 chat/topic 的远程会话。
+- `daily-os chat`：分析最近飞书聊天上下文，提出 todo、日历、文档和计划变更建议。
 - `daily-os remember <text>`：写入 long-term memory。
 - `daily-os feedback <text>`：写入本地 feedback log。
 - `daily-os policy`：查看当前决策 policy 和 policy-skill 路径。
