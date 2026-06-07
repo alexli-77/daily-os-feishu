@@ -84,18 +84,31 @@ Use:
 
 ```bash
 npm run chat
+npm run chat -- todo
+npm run chat -- review
 ```
 
 In Feishu interaction mode, send:
 
 ```text
 daily-os chat
+daily-os chat todo
+daily-os chat review
 ```
 
 The result highlights new tasks, reschedules, completion signals, blockers,
 owner changes, calendar/document update hints, and possible conflicts with
-existing evidence. Configure `chat_analysis.lookback_messages` and
-`chat_analysis.max_suggestions` to control the scan window and output size.
+existing evidence.
+
+The scan window is mode-based:
+
+- `manual`: latest configured IM history messages.
+- `todo`: yesterday 00:00 through today's `daily_plan.time`.
+- `review`: today's `daily_plan.time` through now, capped by `daily_review.time`.
+
+Configure `chat_analysis.default_mode`, `chat_analysis.max_messages`, and
+`chat_analysis.max_suggestions`. The Feishu source profile `im_history.limit`
+should be at least as large as `chat_analysis.max_messages`.
 
 ## Daily Progress Capture
 
@@ -406,7 +419,7 @@ Supported messages are the same as feedback polling:
 
 - `daily-os status` returns an action card with Plan, Review, and Weekly buttons.
 - `/new` or `daily-os new` clears the current Feishu chat/topic session.
-- `daily-os chat` analyzes recent Feishu chat context and suggests todo,
+- `daily-os chat [todo|review]` analyzes Feishu chat context and suggests todo,
   calendar, document, and plan updates.
 - `daily-os remember <text>` appends to long-term memory.
 - `daily-os feedback <text>` appends to the local feedback log.

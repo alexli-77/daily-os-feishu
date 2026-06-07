@@ -2,6 +2,7 @@ import type { AppConfig } from '../config/schema.js';
 import { collectEvidence } from '../workflows/evidence.js';
 import type { Evidence, EvidenceSource } from '../workflows/types.js';
 import { loadMemory } from '../storage/memory.js';
+import { addDays } from '../utils/date.js';
 
 export type ChatSuggestionKind =
   | 'new_task'
@@ -30,20 +31,26 @@ export interface ChatContextSuggestion {
 
 export interface ChatContextAnalysisResult {
   date: string;
+  mode: ChatAnalysisMode;
+  window_label: string;
   suggestions: ChatContextSuggestion[];
   inspected_messages: number;
   unavailable_sources: string[];
 }
 
+export type ChatAnalysisMode = 'manual' | 'todo' | 'review';
+
 interface ChatMessageSignal {
   id: string;
   text: string;
   source: string;
+  createdAt?: Date;
 }
 
-export async function analyzeChatContext(config: AppConfig, date: string): Promise<ChatContextAnalysisResult> {
+export async function analyzeChatContext(config: AppConfig, date: string, mode = config.chat_analysis.default_mode): Promise<ChatContextAnalysisResult> {
   const evidence = await collectEvidence(config, date);
-  const messages = extractFeishuMessages(evidence).slice(0, config.chat_analysis.lookback_messages);
+  const window = chatAnalysisWindow(config, date, mode);
+  const messages = filterMessagesByWindow(extractFeishuMessages(evidence), window).slice(0, chatAnalysisMessageLimit(config));
   const context = buildContextIndex(evidence, config);
   const suggestions = messages
     .flatMap((message) => suggestionsFromMessage(message, context))
@@ -53,6 +60,8 @@ export async function analyzeChatContext(config: AppConfig, date: string): Promi
 
   return {
     date,
+    mode,
+    window_label: window.label,
     suggestions,
     inspected_messages: messages.length,
     unavailable_sources: unavailableSources(evidence),
@@ -60,7 +69,13 @@ export async function analyzeChatContext(config: AppConfig, date: string): Promi
 }
 
 export function formatChatContextAnalysis(result: ChatContextAnalysisResult): string {
-  const lines = [`# 聊天上下文建议 - ${result.date}`, '', `已检查最近 ${result.inspected_messages} 条飞书消息。`];
+  const lines = [
+    `# 聊天上下文建议 - ${result.date}`,
+    '',
+    `模式：${modeLabel(result.mode)}`,
+    `时间窗：${result.window_label}`,
+    `已检查 ${result.inspected_messages} 条飞书消息。`,
+  ];
 
   if (result.suggestions.length === 0) {
     lines.push('', '暂时没有识别到需要调整 todo、日历或文档的聊天信号。');
@@ -140,14 +155,66 @@ function extractFeishuMessages(evidence: Evidence): ChatMessageSignal[] {
     for (const raw of collectMessageRecords(source.data)) {
       const text = extractText(raw);
       if (!text.trim()) continue;
+      const createdAt = extractTimestamp(raw);
       out.push({
         id: extractId(raw) || suggestionId(`${sourceName}:${text}`),
         text,
         source: sourceName,
+        ...(createdAt ? { createdAt } : {}),
       });
     }
   }
   return out;
+}
+
+interface ChatWindow {
+  label: string;
+  start?: Date;
+  end?: Date;
+  requireTimestamp: boolean;
+}
+
+function chatAnalysisWindow(config: AppConfig, date: string, mode: ChatAnalysisMode): ChatWindow {
+  if (mode === 'todo') {
+    const start = zonedDateTime(addDays(date, -1), '00:00', config.user.timezone);
+    const plan = zonedDateTime(date, config.workflows.daily_plan.time, config.user.timezone);
+    return {
+      start,
+      end: plan,
+      requireTimestamp: true,
+      label: `${addDays(date, -1)} 00:00 -> ${date} ${config.workflows.daily_plan.time} (${config.user.timezone})`,
+    };
+  }
+  if (mode === 'review') {
+    const start = zonedDateTime(date, config.workflows.daily_plan.time, config.user.timezone);
+    const review = zonedDateTime(date, config.workflows.daily_review.time, config.user.timezone);
+    const now = new Date();
+    const end = now < review ? now : review;
+    return {
+      start,
+      end,
+      requireTimestamp: true,
+      label: `${date} ${config.workflows.daily_plan.time} -> ${formatWindowEnd(end, config.user.timezone)} (${config.user.timezone})`,
+    };
+  }
+  return {
+    requireTimestamp: false,
+    label: `最近 ${chatAnalysisMessageLimit(config)} 条已配置 IM history 消息`,
+  };
+}
+
+function filterMessagesByWindow(messages: ChatMessageSignal[], window: ChatWindow): ChatMessageSignal[] {
+  return messages.filter((message) => {
+    if (!window.start && !window.end) return true;
+    if (!message.createdAt) return !window.requireTimestamp;
+    if (window.start && message.createdAt < window.start) return false;
+    if (window.end && message.createdAt > window.end) return false;
+    return true;
+  });
+}
+
+function chatAnalysisMessageLimit(config: AppConfig): number {
+  return config.chat_analysis.lookback_messages || config.chat_analysis.max_messages;
 }
 
 function collectMessageRecords(value: unknown): unknown[] {
@@ -369,6 +436,30 @@ function extractId(raw: unknown): string {
   return '';
 }
 
+function extractTimestamp(raw: unknown): Date | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const record = raw as Record<string, unknown>;
+  for (const key of ['create_time', 'createTime', 'created_at', 'createdAt', 'timestamp', 'send_time', 'update_time']) {
+    const date = dateFromTimestampValue(record[key]);
+    if (date) return date;
+  }
+  return undefined;
+}
+
+function dateFromTimestampValue(value: unknown): Date | undefined {
+  if (typeof value === 'number') {
+    const ms = value < 10_000_000_000 ? value * 1000 : value;
+    const date = new Date(ms);
+    return Number.isNaN(date.getTime()) ? undefined : date;
+  }
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (/^\d+$/.test(trimmed)) return dateFromTimestampValue(Number(trimmed));
+  const date = new Date(trimmed);
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
 function extractText(value: unknown): string {
   if (typeof value === 'string') {
     const parsed = tryParseJson(value);
@@ -438,4 +529,46 @@ function confidenceLabel(confidence: 'low' | 'medium' | 'high'): string {
   if (confidence === 'high') return '高';
   if (confidence === 'medium') return '中';
   return '低';
+}
+
+function modeLabel(mode: ChatAnalysisMode): string {
+  if (mode === 'todo') return '制定 Todo';
+  if (mode === 'review') return '日复盘';
+  return '手动分析';
+}
+
+function formatWindowEnd(date: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date);
+}
+
+function zonedDateTime(date: string, time: string, timeZone: string): Date {
+  const [year, month, day] = date.split('-').map(Number);
+  const [hour, minute] = time.split(':').map(Number);
+  const desired = Date.UTC(year, month - 1, day, hour || 0, minute || 0, 0);
+  const utcGuess = new Date(desired);
+  const actual = zonedPartsAsUtc(utcGuess, timeZone);
+  return new Date(utcGuess.getTime() - (actual - desired));
+}
+
+function zonedPartsAsUtc(date: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const part = (type: string): number => Number(parts.find((item) => item.type === type)?.value || 0);
+  return Date.UTC(part('year'), part('month') - 1, part('day'), part('hour'), part('minute'), part('second'));
 }

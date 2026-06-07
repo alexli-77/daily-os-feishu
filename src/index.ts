@@ -20,7 +20,7 @@ import {
   confirmedEntriesFromCandidates,
   formatProgressCandidates,
 } from './progress/capture.js';
-import { analyzeChatContext, formatChatContextAnalysis } from './chat/context-analysis.js';
+import { analyzeChatContext, formatChatContextAnalysis, type ChatAnalysisMode } from './chat/context-analysis.js';
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
@@ -66,7 +66,7 @@ async function main(): Promise<void> {
         break;
       }
       const date = todayInTimezone(config);
-      console.log(formatChatContextAnalysis(await analyzeChatContext(config, date)));
+      console.log(formatChatContextAnalysis(await analyzeChatContext(config, date, parseChatAnalysisMode(subcommand, config.chat_analysis.default_mode))));
       break;
     }
     case 'progress': {
@@ -239,6 +239,12 @@ function requireValue(args: string[], index: number, flag: string): string {
   return value;
 }
 
+function parseChatAnalysisMode(value: string | undefined, fallback: ChatAnalysisMode): ChatAnalysisMode {
+  if (!value) return fallback;
+  if (value === 'manual' || value === 'todo' || value === 'review') return value;
+  throw new Error(`Invalid chat analysis mode: ${value}. Use manual, todo, or review.`);
+}
+
 async function runAndPrint(config: ReturnType<typeof loadConfig>, workflow: WorkflowName, send: boolean): Promise<void> {
   const text = await runWorkflow(config, workflow, { send });
   console.log(text);
@@ -283,7 +289,7 @@ Commands:
   setup              Create local config files and data directories
   doctor             Check local dependencies and required env vars
   collect            Print collected evidence as JSON
-  chat               Analyze Feishu chat context and print update suggestions
+  chat [mode]        Analyze Feishu chat context. mode: manual | todo | review
   progress           Print today's progress candidates
   progress confirm   Confirm all current progress candidates into the daily ledger
   ui                 Open a local setup and trigger dashboard
