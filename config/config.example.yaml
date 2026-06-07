@@ -87,7 +87,11 @@ progress:
 
 chat_analysis:
   enabled: true
-  lookback_messages: 40
+  # manual: latest configured messages
+  # todo: yesterday 00:00 -> today's daily_plan time
+  # review: today's daily_plan time -> now / daily_review time
+  default_mode: "manual" # manual | todo | review
+  max_messages: 80
   max_suggestions: 8
 
 sources:
@@ -139,7 +143,7 @@ sources:
         im_history:
           enabled: false
           chat_id_env: "FEISHU_CHAT_ID"
-          limit: 30
+          limit: 80
     calendar:
       enabled: true
       days: 1
@@ -155,7 +159,7 @@ sources:
     im_history:
       enabled: false
       chat_id_env: "FEISHU_CHAT_ID"
-      limit: 30
+      limit: 80
 
   github:
     enabled: false

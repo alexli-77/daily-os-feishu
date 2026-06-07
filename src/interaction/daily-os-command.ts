@@ -12,7 +12,7 @@ import { decideFeishuControl, type FeishuAccessDecision, type FeishuControlEffec
 import { clearFeishuSession } from './session-catalog.js';
 import { collectProgressCandidates, formatProgressCandidates } from '../progress/capture.js';
 import { todayInTimezone } from '../utils/date.js';
-import { analyzeChatContext, formatChatContextAnalysis } from '../chat/context-analysis.js';
+import { analyzeChatContext, formatChatContextAnalysis, type ChatAnalysisMode } from '../chat/context-analysis.js';
 
 export type ParsedDailyOsCommand =
   | { type: 'ignore' }
@@ -21,7 +21,7 @@ export type ParsedDailyOsCommand =
   | { type: 'policy_candidates' }
   | { type: 'new_session' }
   | { type: 'stop_agent' }
-  | { type: 'chat_analysis' }
+  | { type: 'chat_analysis'; mode?: ChatAnalysisMode }
   | { type: 'progress' }
   | { type: 'confirm_policy_candidate'; id: string }
   | { type: 'reject_policy_candidate'; id: string; reason?: string }
@@ -79,8 +79,9 @@ export function parseDailyOsCommand(text: string, prefix: string): ParsedDailyOs
   if (['help', 'status', '状态', '帮助'].includes(lower)) return { type: 'status' };
   if (['new', 'new session', '新会话', '重开会话'].includes(lower)) return { type: 'new_session' };
   if (['stop', '停止', '停止当前任务'].includes(lower)) return { type: 'stop_agent' };
-  if (['chat', 'chat analysis', 'context', 'context analysis', '聊天分析', '上下文分析', '变更建议'].includes(lower)) {
-    return { type: 'chat_analysis' };
+  const chatCommand = parseChatAnalysisCommand(normalized);
+  if (chatCommand) {
+    return chatCommand;
   }
   if (['progress', '进展', '今日进展', '进展确认'].includes(lower)) return { type: 'progress' };
   if (['policy', 'decision policy', '规则', '决策规则'].includes(lower)) return { type: 'policy' };
@@ -114,7 +115,7 @@ export function dailyOsStatusText(prefix: string): string {
     `- ${prefix} status`,
     `- ${prefix} new`,
     `- ${prefix} stop`,
-    `- ${prefix} chat`,
+    `- ${prefix} chat [todo|review]`,
     `- ${prefix} progress`,
     `- ${prefix} remember <text>`,
     `- ${prefix} feedback <text>`,
@@ -159,7 +160,7 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
         return;
       }
       const date = todayInTimezone(context.config);
-      await context.reply(formatChatContextAnalysis(await analyzeChatContext(context.config, date)));
+      await context.reply(formatChatContextAnalysis(await analyzeChatContext(context.config, date, command.mode || context.config.chat_analysis.default_mode)));
       return;
     }
     case 'progress': {
@@ -219,6 +220,23 @@ function splitCandidateIdAndReason(text: string): { id: string; reason?: string 
   const [id = '', ...rest] = text.trim().split(/\s+/);
   const reason = rest.join(' ').replace(/^(?:because|原因[:：]?)/i, '').trim();
   return { id, ...(reason ? { reason } : {}) };
+}
+
+function parseChatAnalysisCommand(text: string): ParsedDailyOsCommand | null {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  const lower = normalized.toLowerCase();
+  const match =
+    lower.match(/^(?:chat|chat analysis|context|context analysis)(?:\s+(manual|todo|review))?$/) ||
+    normalized.match(/^(?:聊天分析|上下文分析|变更建议)(?:\s*(手动|todo|待办|计划|review|复盘))?$/);
+  if (!match) return null;
+  return { type: 'chat_analysis', ...(match[1] ? { mode: normalizeChatAnalysisMode(match[1]) } : {}) };
+}
+
+function normalizeChatAnalysisMode(value: string): ChatAnalysisMode {
+  const normalized = value.toLowerCase();
+  if (normalized === 'todo' || normalized === '待办' || normalized === '计划') return 'todo';
+  if (normalized === 'review' || normalized === '复盘') return 'review';
+  return 'manual';
 }
 
 function authorizeRemoteCommand(context: DailyOsCommandContext, command: ParsedDailyOsCommand): { ok: boolean; reason?: string } {

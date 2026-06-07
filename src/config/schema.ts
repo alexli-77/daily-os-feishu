@@ -16,7 +16,7 @@ const feishuProfile = enabled.extend({
   }),
   im_history: enabled.extend({
     chat_id_env: z.string().default('FEISHU_CHAT_ID'),
-    limit: z.number().int().positive().default(30),
+    limit: z.number().int().positive().default(80),
   }),
 });
 
@@ -197,12 +197,15 @@ export const AppConfigSchema = z.object({
   chat_analysis: z
     .object({
       enabled: z.boolean().default(true),
-      lookback_messages: z.number().int().positive().default(40),
+      default_mode: z.enum(['manual', 'todo', 'review']).default('manual'),
+      max_messages: z.number().int().positive().default(80),
       max_suggestions: z.number().int().positive().default(8),
+      lookback_messages: z.number().int().positive().optional(),
     })
     .default({
       enabled: true,
-      lookback_messages: 40,
+      default_mode: 'manual',
+      max_messages: 80,
       max_suggestions: 8,
     }),
   sources: z.object({
@@ -244,7 +247,7 @@ export const AppConfigSchema = z.object({
       }),
       im_history: enabled.extend({
         chat_id_env: z.string().default('FEISHU_CHAT_ID'),
-        limit: z.number().int().positive().default(30),
+        limit: z.number().int().positive().default(80),
       }),
     }),
     github: enabled,
