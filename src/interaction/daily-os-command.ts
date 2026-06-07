@@ -12,6 +12,7 @@ import { decideFeishuControl, type FeishuAccessDecision, type FeishuControlEffec
 import { clearFeishuSession } from './session-catalog.js';
 import { collectProgressCandidates, formatProgressCandidates } from '../progress/capture.js';
 import { todayInTimezone } from '../utils/date.js';
+import { analyzeChatContext, formatChatContextAnalysis } from '../chat/context-analysis.js';
 
 export type ParsedDailyOsCommand =
   | { type: 'ignore' }
@@ -20,6 +21,7 @@ export type ParsedDailyOsCommand =
   | { type: 'policy_candidates' }
   | { type: 'new_session' }
   | { type: 'stop_agent' }
+  | { type: 'chat_analysis' }
   | { type: 'progress' }
   | { type: 'confirm_policy_candidate'; id: string }
   | { type: 'reject_policy_candidate'; id: string; reason?: string }
@@ -77,6 +79,9 @@ export function parseDailyOsCommand(text: string, prefix: string): ParsedDailyOs
   if (['help', 'status', '状态', '帮助'].includes(lower)) return { type: 'status' };
   if (['new', 'new session', '新会话', '重开会话'].includes(lower)) return { type: 'new_session' };
   if (['stop', '停止', '停止当前任务'].includes(lower)) return { type: 'stop_agent' };
+  if (['chat', 'chat analysis', 'context', 'context analysis', '聊天分析', '上下文分析', '变更建议'].includes(lower)) {
+    return { type: 'chat_analysis' };
+  }
   if (['progress', '进展', '今日进展', '进展确认'].includes(lower)) return { type: 'progress' };
   if (['policy', 'decision policy', '规则', '决策规则'].includes(lower)) return { type: 'policy' };
   if (['candidates', 'policy candidates', '候选规则', '待确认规则'].includes(lower)) return { type: 'policy_candidates' };
@@ -109,6 +114,7 @@ export function dailyOsStatusText(prefix: string): string {
     `- ${prefix} status`,
     `- ${prefix} new`,
     `- ${prefix} stop`,
+    `- ${prefix} chat`,
     `- ${prefix} progress`,
     `- ${prefix} remember <text>`,
     `- ${prefix} feedback <text>`,
@@ -145,6 +151,15 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
     case 'stop_agent': {
       const stopped = context.stopAgentRun ? await context.stopAgentRun() : false;
       await context.reply(stopped ? '已停止当前 Codex 任务。' : '当前没有正在运行的 Codex 任务。');
+      return;
+    }
+    case 'chat_analysis': {
+      if (!context.config.chat_analysis.enabled) {
+        await context.reply('chat_analysis.enabled=false；聊天上下文分析已禁用。');
+        return;
+      }
+      const date = todayInTimezone(context.config);
+      await context.reply(formatChatContextAnalysis(await analyzeChatContext(context.config, date)));
       return;
     }
     case 'progress': {
@@ -221,6 +236,7 @@ function commandEffect(command: ParsedDailyOsCommand): FeishuControlEffect {
     case 'new_session':
     case 'stop_agent':
     case 'progress':
+    case 'chat_analysis':
       return 'read';
     case 'workflow':
       return 'workflow_trigger';

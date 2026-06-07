@@ -85,6 +85,11 @@ progress:
   no_progress_reminder_time: "16:30"
   max_candidates: 12
 
+chat_analysis:
+  enabled: true
+  lookback_messages: 40
+  max_suggestions: 8
+
 sources:
   # User knowledge-base vault used as an evidence source.
   # This is separate from memory.repository_path below.
