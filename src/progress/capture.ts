@@ -2,7 +2,6 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { AppConfig } from '../config/schema.js';
-import { loadMemory } from '../storage/memory.js';
 import { collectEvidence } from '../workflows/evidence.js';
 import type { Evidence, EvidenceSource } from '../workflows/types.js';
 
@@ -48,12 +47,11 @@ const PROGRESS_WORDS = [
 ];
 
 export async function collectProgressCandidates(config: AppConfig, date: string): Promise<ProgressCaptureResult> {
-  const [evidence, memory] = await Promise.all([collectEvidence(config, date), Promise.resolve(loadMemory(config))]);
+  const evidence = await collectEvidence(config, date);
   const candidates = dedupeCandidates([
     ...extractLinearCandidates(evidence, date),
     ...extractGitHubCandidates(evidence, date),
     ...extractFeishuCandidates(evidence),
-    ...extractDailyMemoryCandidates(memory.recentDaily, date),
     ...extractLocalFileCandidates(evidence),
   ]).slice(0, config.progress.max_candidates);
 
@@ -96,6 +94,10 @@ export function appendConfirmedProgress(config: AppConfig, date: string, entries
 export function readProgressLedger(config: AppConfig, date: string): string {
   const ledgerPath = progressLedgerPath(config, date);
   return fs.existsSync(ledgerPath) ? fs.readFileSync(ledgerPath, 'utf8') : '';
+}
+
+export function hasConfirmedProgress(config: AppConfig, date: string): boolean {
+  return readProgressLedger(config, date).trim().length > 0;
 }
 
 export function formatProgressCandidates(result: ProgressCaptureResult): string {
@@ -181,6 +183,7 @@ function extractFeishuCandidates(evidence: Evidence): ProgressCandidate[] {
     if (!sourceName.includes('im_history') || source.state !== 'available') continue;
     for (const text of collectTexts(source.data)) {
       const normalized = text.replace(/\s+/g, ' ').trim();
+      if (isDailyOsGeneratedText(normalized)) continue;
       if (!looksLikeProgress(normalized)) continue;
       out.push(
         candidate({
@@ -194,24 +197,6 @@ function extractFeishuCandidates(evidence: Evidence): ProgressCandidate[] {
     }
   }
   return out;
-}
-
-function extractDailyMemoryCandidates(recentDaily: Array<{ path: string; content: string }>, date: string): ProgressCandidate[] {
-  const today = recentDaily.find((entry) => path.basename(entry.path) === `${date}.md`);
-  if (!today?.content.trim()) return [];
-  const sections = today.content
-    .split(/\n##\s+/)
-    .map((section) => section.trim())
-    .filter(Boolean);
-  return sections.slice(-3).map((section) =>
-    candidate({
-      title: `Daily OS workflow output: ${truncate(section.split('\n')[0] || 'today', 80)}`,
-      source: 'daily_memory',
-      evidence: `memory daily file: ${path.basename(today.path)}`,
-      confidence: 'medium',
-      reason: 'Daily OS generated workflow output today.',
-    }),
-  );
 }
 
 function extractLocalFileCandidates(evidence: Evidence): ProgressCandidate[] {
@@ -286,6 +271,17 @@ function textFromMaybeJson(value: string): string {
 function looksLikeProgress(text: string): boolean {
   const lower = text.toLowerCase();
   return text.length >= 4 && PROGRESS_WORDS.some((word) => lower.includes(word.toLowerCase()));
+}
+
+function isDailyOsGeneratedText(text: string): boolean {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  return (
+    /^(#\s*)?(今日计划|日复盘|周复盘|聊天上下文建议|今日进展候选|Daily OS 正在运行|Codex 正在处理)/i.test(normalized) ||
+    /^\d{4}-\d{2}-\d{2}\s+(今日计划|日复盘|周复盘|周复盘 \+ 下周计划|聊天上下文建议|今日进展候选)/.test(normalized) ||
+    /\*\*(MIT|Main Plan|Missing Sources|Weekly summary|What changed today)\*\*/i.test(normalized) ||
+    /这些只是建议，不会自动修改任务、日历、文档或 Linear/.test(normalized) ||
+    /确认后才会写入今日进展账本/.test(normalized)
+  );
 }
 
 function isSameDate(value: string, date: string): boolean {
