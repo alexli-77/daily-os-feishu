@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import type { AppConfig } from '../config/schema.js';
 import { commandExists, runCommand } from '../utils/command.js';
 import { checkLarkCli } from '../connectors/lark-cli.js';
+import { feishuSdkStatus } from '../connectors/feishu-sdk.js';
 import { defaultMemoryRepositoryPath, resolveMemoryRepositoryPath } from '../storage/memory.js';
 import { feishuSafetyWarnings, hasAnyAccessRule, summarizeFeishuAccess } from '../interaction/access-policy.js';
 import { decisionPolicyFiles } from '../decision/policy.js';
@@ -18,7 +19,17 @@ export async function runDoctor(config: AppConfig, configPath = 'config/config.y
   const checks: DoctorCheck[] = [];
 
   checks.push({ name: configPath, ok: fs.existsSync(configPath) });
-  checks.push({ name: 'lark-cli', ...(await toCheck('lark-cli', checkLarkCli())) });
+  const needsLarkCli = usesLarkCliFeishu(config);
+  if (needsLarkCli) {
+    checks.push({ name: 'lark-cli', ...(await toCheck('lark-cli', checkLarkCli())) });
+  } else {
+    checks.push({
+      name: 'lark-cli',
+      ok: true,
+      level: 'warning',
+      detail: 'not required for the currently enabled Feishu SDK-only features',
+    });
+  }
 
   if (config.llm.provider === 'codex') {
     const codexBin = process.env.CODEX_BIN || 'codex';
@@ -34,7 +45,7 @@ export async function runDoctor(config: AppConfig, configPath = 'config/config.y
     checks.push({ name: 'OPENAI_API_KEY', ok: Boolean(process.env.OPENAI_API_KEY) });
   }
 
-  if (usesLarkCliFeishu(config)) {
+  if (needsLarkCli) {
     checks.push(await larkCliAuthCheck());
   }
 
@@ -84,6 +95,15 @@ export async function runDoctor(config: AppConfig, configPath = 'config/config.y
 
   if (config.output.feishu.enabled) {
     checks.push({ name: config.output.feishu.chat_id_env, ok: Boolean(process.env[config.output.feishu.chat_id_env]) });
+    if (config.output.feishu.provider === 'sdk' || config.output.feishu.provider === 'auto') {
+      const status = feishuSdkStatus();
+      checks.push({
+        name: 'Feishu SDK output',
+        ok: status.ok || config.output.feishu.provider === 'auto',
+        level: status.ok ? 'ok' : config.output.feishu.provider === 'auto' ? 'warning' : 'missing',
+        detail: status.ok ? 'will send through official Feishu SDK' : `${status.detail}; ${config.output.feishu.provider === 'auto' ? 'will fall back to lark-cli' : 'required by output.feishu.provider=sdk'}`,
+      });
+    }
   }
 
   const memoryRepositoryPath = resolveMemoryRepositoryPath(config);
@@ -105,12 +125,21 @@ export async function runDoctor(config: AppConfig, configPath = 'config/config.y
     });
     if (config.decision.onboarding.enabled) {
       const statePath = config.decision.onboarding.state_path;
+      const hasDecisionChat = Boolean(process.env[config.decision.onboarding.chat_id_env]) || fs.existsSync(statePath);
       checks.push({
         name: config.decision.onboarding.chat_id_env,
-        ok: Boolean(process.env[config.decision.onboarding.chat_id_env]) || fs.existsSync(statePath),
-        level: Boolean(process.env[config.decision.onboarding.chat_id_env]) || fs.existsSync(statePath) ? 'ok' : 'warning',
+        ok: hasDecisionChat,
+        level: hasDecisionChat ? 'ok' : 'warning',
         detail: '开始决策校准前不是必填项',
       });
+      if (!hasDecisionChat && !feishuSdkStatus().ok) {
+        checks.push({
+          name: 'decision onboarding transport',
+          ok: true,
+          level: 'warning',
+          detail: 'configure LARK_APP_ID/LARK_APP_SECRET for SDK group creation, or keep lark-cli available for the fallback path',
+        });
+      }
     }
   }
 
@@ -185,7 +214,8 @@ async function codexLoginCheck(codexBin: string, env: NodeJS.ProcessEnv): Promis
 }
 
 function usesLarkCliFeishu(config: AppConfig): boolean {
-  return Boolean(config.output.feishu.enabled || config.feedback.feishu.enabled || config.sources.feishu.enabled || config.decision.onboarding.enabled);
+  const outputNeedsLarkCli = config.output.feishu.enabled && config.output.feishu.provider !== 'sdk' && !feishuSdkStatus().ok;
+  return Boolean(outputNeedsLarkCli || config.feedback.feishu.enabled || config.sources.feishu.enabled);
 }
 
 async function larkCliAuthCheck(): Promise<DoctorCheck> {

@@ -427,6 +427,11 @@ async function handleCardAction(input: {
     await handleAgentRunCardAction({ ...input, action: agentAction });
     return;
   }
+  const commandAction = parseWorkflowCardCommand(input.event.action.value);
+  if (commandAction) {
+    await handleWorkflowCardCommand({ ...input, command: commandAction });
+    return;
+  }
   const action = parseCardAction(input.event.action.value);
   if (!action) return;
   const access = decideFeishuAccess(input.config, {
@@ -447,6 +452,37 @@ async function handleCardAction(input: {
   await input.channel.send(input.event.chatId, { text: `正在运行 ${action.replaceAll('_', ' ')}...` }, { replyTo: input.event.messageId });
   const output = await runWorkflow(input.config, action, { send: false });
   await input.channel.send(input.event.chatId, toSendInput(output, input.config.interaction.feishu.reply_mode), { replyTo: input.event.messageId });
+}
+
+async function handleWorkflowCardCommand(input: {
+  config: AppConfig;
+  channel: LarkChannel;
+  event: CardActionEvent;
+  activeAgentRuns: Map<string, ActiveAgentRun>;
+  command: 'details' | 'progress' | 'chat todo' | 'chat review';
+}): Promise<void> {
+  const access = decideFeishuAccess(input.config, {
+    senderOpenId: input.event.operator.openId,
+    chatId: input.event.chatId,
+    chatType: 'group',
+  });
+  const result = await handleDailyOsCommand({
+    config: input.config,
+    messageId: input.event.messageId,
+    text: `${input.config.interaction.feishu.command_prefix} ${input.command}`,
+    source: `feishu-card:${input.event.chatId}`,
+    prefix: input.config.interaction.feishu.command_prefix,
+    sendWorkflowOutput: false,
+    accessDecision: access,
+    sessionScopeId: input.event.chatId,
+    stopAgentRun: async () => stopAgentRun(input.activeAgentRuns, input.event.chatId),
+    reply: async (reply) => {
+      await input.channel.send(input.event.chatId, toSendInput(reply, input.config.interaction.feishu.reply_mode), {
+        replyTo: input.event.messageId,
+      });
+    },
+  });
+  if (result.handled) console.log(`[interaction] handled ${input.event.chatId}; card-command=${result.command.type}`);
 }
 
 async function handleProgressCardAction(input: {
@@ -605,6 +641,13 @@ function parseCardAction(value: unknown): WorkflowName | null {
   if (!value || typeof value !== 'object') return null;
   const raw = (value as { daily_os_action?: unknown }).daily_os_action;
   if (raw === 'daily_plan' || raw === 'daily_review' || raw === 'weekly_review') return raw;
+  return null;
+}
+
+function parseWorkflowCardCommand(value: unknown): 'details' | 'progress' | 'chat todo' | 'chat review' | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = (value as { daily_os_command?: unknown }).daily_os_command;
+  if (raw === 'details' || raw === 'progress' || raw === 'chat todo' || raw === 'chat review') return raw;
   return null;
 }
 

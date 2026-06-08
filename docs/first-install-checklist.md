@@ -22,6 +22,7 @@ Install and sign in to the local tools:
 ```bash
 codex --version
 codex login status
+# Required when using Feishu source collection or lark-cli fallback:
 lark-cli --help
 ```
 
@@ -69,9 +70,9 @@ For a Feishu-only alpha, configure:
 
 - `FEISHU_CHAT_ID` in `.env`
 - `LARK_APP_ID` and `LARK_APP_SECRET` in `.env`
-- `lark-cli doctor` passing locally
+- `output.feishu.provider` in `config/config.yaml`; use `auto` or `sdk` for official Feishu SDK output
+- `lark-cli doctor` passing locally only when Feishu source collection, feedback polling, decision chat creation, or lark-cli output fallback is enabled
 - Codex CLI signed in locally, or `OPENAI_API_KEY`
-- `output.feishu.identity` in `config/config.yaml`
 - any enabled source credentials, such as `GITHUB_TOKEN`; `LINEAR_API_KEY` is preferred but optional when Codex Linear fallback is available
 
 Leave unsupported sources disabled for the first run.

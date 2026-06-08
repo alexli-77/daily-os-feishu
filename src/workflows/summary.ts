@@ -13,10 +13,11 @@ export function formatWorkflowSummaryForFeishu(workflow: WorkflowName, date: str
   ];
   const uniqueBullets = dedupe(bullets).slice(0, 6);
   const fallback = sentencePreview(clean, 420);
+  const fallbackLines = normalizedTextKey(fallback) === normalizedTextKey(intro) ? [] : [fallback];
   const lines = [
     intro,
     '',
-    ...(uniqueBullets.length > 0 ? ['我先把关键事项压缩成一屏：', '', ...uniqueBullets.map((item, index) => `${index + 1}. ${item}`)] : [fallback]),
+    ...(uniqueBullets.length > 0 ? ['我先把关键事项压缩成一屏：', '', ...uniqueBullets.map((item, index) => `${index + 1}. ${item}`)] : fallbackLines),
     '',
     '完整内容我已经保存。需要展开时，请回复：`daily-os details`。',
     '请您批示。',
@@ -128,6 +129,10 @@ function dedupe(values: string[]): string[] {
     out.push(value);
   }
   return out;
+}
+
+function normalizedTextKey(value: string): string {
+  return stripMarkdown(value).replace(/\s+/g, '').toLowerCase();
 }
 
 function workflowLabel(workflow: WorkflowName): string {

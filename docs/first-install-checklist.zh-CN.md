@@ -20,6 +20,7 @@ npm run alpha:smoke:ci
 ```bash
 codex --version
 codex login status
+# 使用飞书数据源采集或 lark-cli 回退时需要：
 lark-cli --help
 ```
 
@@ -62,9 +63,9 @@ Feishu-only alpha 至少需要：
 
 - `.env` 中的 `FEISHU_CHAT_ID`
 - `.env` 中的 `LARK_APP_ID` 和 `LARK_APP_SECRET`
-- 本机 `lark-cli doctor` 通过
+- `config/config.yaml` 中的 `output.feishu.provider`；推荐 `auto`，也可以用 `sdk` 强制官方 SDK 输出
+- 只有启用飞书数据源采集、反馈轮询、决策校准拉群，或 lark-cli 输出回退时，才需要本机 `lark-cli doctor` 通过
 - 本机已登录 Codex CLI，或配置 `OPENAI_API_KEY`
-- `config/config.yaml` 中的 `output.feishu.identity`
 - 已启用数据源所需的凭证，例如 `GITHUB_TOKEN`；`LINEAR_API_KEY` 推荐填写，但如果可用 Codex Linear fallback，则不是必填
 
 第一次运行时，把暂不支持或暂未配置的数据源保持 disabled。

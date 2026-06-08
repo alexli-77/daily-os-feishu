@@ -1,6 +1,6 @@
 # Daily OS Feishu
 
-Daily OS Feishu 是一个优先支持 Mac、本地优先、只集成飞书的个人工作流 Agent。它会采集你配置的数据源，调用本机 Codex CLI 或 OpenAI API 生成日计划、日复盘、周复盘，然后通过 `lark-cli` 发送到飞书。
+Daily OS Feishu 是一个优先支持 Mac、本地优先、只集成飞书的个人工作流 Agent。它会采集你配置的数据源，调用本机 Codex CLI 或 OpenAI API 生成日计划、日复盘、周复盘，然后通过飞书官方 SDK 或兼容的 `lark-cli` 路径发送到飞书。
 
 这个仓库是通用版本，不包含任何个人 token、私人知识库内容、浏览器数据、个人 memory 或飞书 ID。仓库只包含一个通用 memory vault 模板。所有私密配置都放在 `.env`、`config/config.yaml` 和被 git 忽略的 `data/` 目录中。
 
@@ -8,7 +8,7 @@ Daily OS Feishu 是一个优先支持 Mac、本地优先、只集成飞书的个
 
 - 在 macOS 上以 CLI 或 `launchd` 后台服务运行。
 - 提供本地浏览器 UI，用于配置、数据源开关、环境检查和手动触发。
-- 通过 `lark-cli` 发送飞书消息。
+- 配置 `LARK_APP_ID` 和 `LARK_APP_SECRET` 后，通过飞书官方 SDK 发送 workflow 输出；缺少 SDK 凭证时可回退到 `lark-cli`。
 - 可选 Feishu websocket interaction layer，用于直接在聊天里发命令和点操作卡片。
 - 默认使用本机已登录的 Codex CLI，也支持 OpenAI API 作为 fallback。
 - 支持可配置数据源：
@@ -24,7 +24,8 @@ Daily OS Feishu 是一个优先支持 Mac、本地优先、只集成飞书的个
 - macOS
 - Node.js 22+
 - 本机已登录 Codex CLI，或配置 `OPENAI_API_KEY`
-- 已安装并登录 `lark-cli`
+- 使用 SDK 输出或飞书实时交互层时，需要配置 `LARK_APP_ID` 和 `LARK_APP_SECRET`
+- 采集飞书日历/任务/文档/IM 历史，或使用 lark-cli 输出回退时，需要已安装并登录 `lark-cli`
 - 如果要发送飞书输出、轮询反馈或采集 IM history，需要在 `.env` 中配置飞书 chat ID
 
 ## 快速开始
@@ -323,17 +324,30 @@ npm run dev -- onboarding start
 
 ## 飞书集成
 
-本项目通过 `lark-cli` 调用飞书能力。目标会话通过 `.env` 配置：
+Workflow 输出可以使用飞书官方 SDK，和 `lark-coding-agent-bridge` 的交互层思路一致。目标会话和应用凭证通过 `.env` 配置：
 
 ```env
 FEISHU_CHAT_ID=
+LARK_APP_ID=
+LARK_APP_SECRET=
 ```
 
-先在 UI 中运行 **Auto configure from lark-cli**。普通的 lark-cli 采集和消息发送可以复用
-lark-cli 本机认证状态。只有启用 websocket interaction layer 时，才需要额外配置
-`LARK_APP_ID` 和 `LARK_APP_SECRET`。
+然后在 `config/config.yaml` 或 UI 里选择输出通道：
 
-可以用 `output.feishu.identity` 选择 `bot` 或 `user` 身份。
+```yaml
+output:
+  feishu:
+    enabled: true
+    provider: "auto" # auto | sdk | lark_cli
+    chat_id_env: "FEISHU_CHAT_ID"
+    send_mode: "markdown"
+```
+
+推荐默认使用 `auto`：如果 `LARK_APP_ID` 和 `LARK_APP_SECRET` 已配置，就走官方 SDK；否则回退到 `lark-cli`。如果想强制 bot SDK 输出，选 `sdk`；如果想保持旧路径，选 `lark_cli`。
+
+使用 SDK 输出且 `send_mode: "markdown"` 时，计划/复盘摘要会以飞书可交互卡片发送，卡片上有「展开完整内容」「确认今日进展」「生成复盘」「重新生成」等按钮。按钮回调需要飞书 interaction layer 正在运行，并且飞书应用已启用卡片 callback 事件。
+
+当前版本中，飞书日历、任务、文档、IM 历史采集仍然走 `lark-cli`。这样第一步迁移只聚焦消息交互层，不会一次性要求客户开所有飞书 scope。
 
 ## Feishu Interaction Layer
 

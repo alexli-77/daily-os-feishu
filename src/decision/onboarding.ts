@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import type { AppConfig } from '../config/schema.js';
+import { createFeishuSdkPrivateChat, feishuSdkStatus, sendFeishuSdkMessage } from '../connectors/feishu-sdk.js';
 import { runCommand } from '../utils/command.js';
 import { decisionCalibrationPrompt, ensureDecisionPolicyFiles } from './policy.js';
 
@@ -38,7 +39,13 @@ export async function startDecisionOnboarding(
 
   const chatId = options.channel
     ? await createDecisionChatWithChannel(options.channel, chatName, ownerOpenId)
-    : await createDecisionChatWithLarkCli(chatName, ownerOpenId);
+    : feishuSdkStatus().ok
+      ? await createFeishuSdkPrivateChat({
+          name: chatName,
+          description: 'Daily OS 决策校准群',
+          ownerOpenId,
+        })
+      : await createDecisionChatWithLarkCli(chatName, ownerOpenId);
 
   process.env[chatEnv] = chatId;
   writeOnboardingState(config, { chatId, chatName, ownerOpenId, createdAt: new Date().toISOString() });
@@ -152,6 +159,10 @@ async function createDecisionChatWithLarkCli(name: string, ownerOpenId: string):
 async function sendWelcomeMessage(chatId: string, welcomeText: string, channel?: LarkChannel): Promise<void> {
   if (channel) {
     await channel.send(chatId, { markdown: welcomeText });
+    return;
+  }
+  if (feishuSdkStatus().ok) {
+    await sendFeishuSdkMessage({ chatId, text: welcomeText, mode: 'markdown' });
     return;
   }
 
