@@ -2,7 +2,7 @@ import type { AppConfig, WorkflowName } from '../config/schema.js';
 import { runAgent } from '../agent/index.js';
 import { collectEvidence } from './evidence.js';
 import { todayInTimezone } from '../utils/date.js';
-import { appendDailyMemory, loadMemory, writeLatestWorkflowOutput } from '../storage/memory.js';
+import { appendDailyMemory, loadMemory, writeLatestWorkflowOutput, writeWorkflowDetailCache } from '../storage/memory.js';
 import { sendFeishuMessage } from '../connectors/lark-cli.js';
 import { formatWorkflowSummaryForFeishu } from './summary.js';
 
@@ -14,8 +14,9 @@ export async function runWorkflow(config: AppConfig, workflow: WorkflowName, opt
 
   appendDailyMemory(config, workflow, date, text);
   writeLatestWorkflowOutput(config, workflow, date, text);
+  const detail = writeWorkflowDetailCache(config, workflow, date, text);
   if (options.send ?? true) {
-    await sendFeishuMessage(config, formatWorkflowSummaryForFeishu(workflow, date, text), { workflow, date });
+    await sendFeishuMessage(config, formatWorkflowSummaryForFeishu(workflow, date, text), { workflow, date, detailId: detail.id });
   }
   return text;
 }

@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AppConfig, WorkflowName } from '../config/schema.js';
@@ -20,6 +21,10 @@ export interface LatestWorkflowOutput {
   date: string;
   generated_at: string;
   content: string;
+}
+
+export interface WorkflowDetailCache extends LatestWorkflowOutput {
+  id: string;
 }
 
 export function loadMemory(config: AppConfig): MemoryBundle {
@@ -63,12 +68,40 @@ export function writeLatestWorkflowOutput(config: AppConfig, workflow: WorkflowN
   return filePath;
 }
 
+export function writeWorkflowDetailCache(config: AppConfig, workflow: WorkflowName, date: string, content: string): WorkflowDetailCache {
+  const cacheDir = workflowDetailCacheDir(config);
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const payload: WorkflowDetailCache = {
+    id: crypto.randomUUID(),
+    workflow,
+    date,
+    generated_at: new Date().toISOString(),
+    content: content.trim(),
+  };
+  fs.writeFileSync(path.join(cacheDir, `${payload.id}.json`), JSON.stringify(payload, null, 2), 'utf8');
+  pruneWorkflowDetailCache(cacheDir);
+  return payload;
+}
+
 export function readLatestWorkflowOutput(config: AppConfig): LatestWorkflowOutput | null {
   const filePath = latestWorkflowOutputPath(config);
   if (!fs.existsSync(filePath)) return null;
   try {
     const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as LatestWorkflowOutput;
     if (!parsed || typeof parsed.content !== 'string') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function readWorkflowDetailCache(config: AppConfig, id: string): WorkflowDetailCache | null {
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
+  const filePath = path.join(workflowDetailCacheDir(config), `${id}.json`);
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as WorkflowDetailCache;
+    if (!parsed || parsed.id !== id || typeof parsed.content !== 'string') return null;
     return parsed;
   } catch {
     return null;
@@ -104,6 +137,21 @@ export function ensureMemoryFiles(config: AppConfig): void {
 
 function latestWorkflowOutputPath(config: AppConfig): string {
   return path.resolve(config.memory.daily_dir, '_latest-workflow.json');
+}
+
+function workflowDetailCacheDir(config: AppConfig): string {
+  return path.resolve(config.memory.daily_dir, '.workflow-detail-cache');
+}
+
+function pruneWorkflowDetailCache(cacheDir: string): void {
+  const maxAgeMs = 7 * 24 * 60 * 60 * 1000;
+  const cutoff = Date.now() - maxAgeMs;
+  for (const entry of fs.readdirSync(cacheDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    const filePath = path.join(cacheDir, entry.name);
+    const stat = fs.statSync(filePath);
+    if (stat.mtimeMs < cutoff) fs.rmSync(filePath, { force: true });
+  }
 }
 
 export function resolveMemoryRepositoryPath(config: AppConfig): string {

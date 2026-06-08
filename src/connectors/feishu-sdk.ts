@@ -6,6 +6,7 @@ export type FeishuSdkSendMode = 'markdown' | 'text';
 export interface FeishuSdkMessageOptions {
   workflow?: WorkflowName;
   date?: string;
+  detailId?: string;
 }
 
 export interface FeishuSdkStatus {
@@ -101,7 +102,7 @@ function sdkMessagePayload(text: string, mode: FeishuSdkSendMode, options?: Feis
 
 function workflowCard(text: string, options?: FeishuSdkMessageOptions): object {
   const workflow = options?.workflow;
-  const actions = workflow ? workflowActions(workflow) : [];
+  const actions = workflow ? workflowActions(workflow, options) : [];
   return {
     config: { wide_screen_mode: true },
     header: {
@@ -113,14 +114,20 @@ function workflowCard(text: string, options?: FeishuSdkMessageOptions): object {
         tag: 'markdown',
         content: stripTextOnlyInstructions(text),
       },
-      ...(actions.length > 0 ? [{ tag: 'hr' }, { tag: 'action', actions }] : []),
+      ...(actions.length > 0
+        ? [
+            { tag: 'hr' },
+            { tag: 'action', actions },
+            { tag: 'note', elements: [{ tag: 'plain_text', content: '如果按钮不可用，请直接回复 daily-os details。' }] },
+          ]
+        : []),
     ],
   };
 }
 
-function workflowActions(workflow: WorkflowName): object[] {
+function workflowActions(workflow: WorkflowName, options?: FeishuSdkMessageOptions): object[] {
   const actions: object[] = [
-    cardButton('展开完整内容', { daily_os_command: 'details' }, 'primary'),
+    cardButton('展开完整内容', { daily_os_command: 'details', ...(options?.detailId ? { detail_id: options.detailId } : {}) }, 'primary'),
     cardButton('确认今日进展', { daily_os_command: 'progress' }, 'default'),
   ];
   if (workflow === 'daily_plan') {
