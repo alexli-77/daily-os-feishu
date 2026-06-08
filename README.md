@@ -110,6 +110,10 @@ Configure `chat_analysis.default_mode`, `chat_analysis.max_messages`, and
 `chat_analysis.max_suggestions`. The Feishu source profile `im_history.limit`
 should be at least as large as `chat_analysis.max_messages`.
 
+Workflow outputs sent to Feishu are compact by default. Daily OS stores the full
+latest plan/review/weekly output locally; send `daily-os details` to expand the
+latest full message on demand.
+
 ## Daily Progress Capture
 
 Daily OS can collect confirmable progress candidates before the evening review.
@@ -419,6 +423,7 @@ Supported messages are the same as feedback polling:
 
 - `daily-os status` returns an action card with Plan, Review, and Weekly buttons.
 - `/new` or `daily-os new` clears the current Feishu chat/topic session.
+- `daily-os details` expands the latest full plan/review/weekly output.
 - `daily-os chat [todo|review]` analyzes Feishu chat context and suggests todo,
   calendar, document, and plan updates.
 - `daily-os remember <text>` appends to long-term memory.
