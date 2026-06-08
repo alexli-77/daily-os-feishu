@@ -1,6 +1,6 @@
 # Daily OS Feishu
 
-Daily OS Feishu is a Mac-first, Feishu-only personal workflow agent. It collects configurable local and remote signals, asks your local Codex CLI or OpenAI API to prepare a daily/weekly message, and sends the result to Feishu through `lark-cli`.
+Daily OS Feishu is a Mac-first, Feishu-only personal workflow agent. It collects configurable local and remote signals, asks your local Codex CLI or OpenAI API to prepare a daily/weekly message, and sends the result to Feishu through the official Feishu SDK or the legacy `lark-cli` path.
 
 This repository is intentionally generic. It does not include personal tokens, private vault content, browser data, personal memory, or Feishu identifiers. It ships only a generic memory vault template. All private values live in `.env`, `config/config.yaml`, and ignored `data/` files.
 
@@ -8,7 +8,7 @@ This repository is intentionally generic. It does not include personal tokens, p
 
 - Runs on macOS as a CLI or a `launchd` background service.
 - Includes a local browser UI for setup, source toggles, checks, and manual triggers.
-- Sends output to Feishu through `lark-cli`.
+- Sends workflow output to Feishu through the official Feishu SDK when `LARK_APP_ID` and `LARK_APP_SECRET` are configured, with `lark-cli` as a compatibility fallback.
 - Optional Feishu websocket interaction layer for direct chat commands and action cards.
 - Uses local Codex CLI by default, with OpenAI API as an optional fallback.
 - Supports configurable sources:
@@ -24,7 +24,8 @@ This repository is intentionally generic. It does not include personal tokens, p
 - macOS
 - Node.js 22+
 - Codex CLI signed in locally, or `OPENAI_API_KEY`
-- `lark-cli` installed and authenticated
+- `LARK_APP_ID` and `LARK_APP_SECRET` when using SDK output or the Feishu interaction layer
+- `lark-cli` installed and authenticated when collecting Feishu calendar/tasks/docs/IM history or using lark-cli output fallback
 - A Feishu chat ID configured in `.env` when sending output, polling feedback, or collecting IM history
 
 ## Quick Start
@@ -366,18 +367,34 @@ the user explicitly wants startup to create the group automatically.
 
 ## Feishu Integration
 
-This project shells out to `lark-cli` for Feishu capabilities. Configure the target chat with:
+Workflow output can use the official Feishu SDK, matching the interaction-layer pattern used by `lark-coding-agent-bridge`. Configure the target chat with:
 
 ```env
 FEISHU_CHAT_ID=
+LARK_APP_ID=
+LARK_APP_SECRET=
 ```
 
-Run **Auto configure from lark-cli** in the UI first. For normal lark-cli-based
-collection and message sending, the app can use lark-cli's local auth state. Add
-`LARK_APP_ID` and `LARK_APP_SECRET` only when enabling the websocket interaction
-layer.
+Then choose the output provider in `config/config.yaml` or the UI:
 
-Use `output.feishu.identity` to choose `bot` or `user`.
+```yaml
+output:
+  feishu:
+    enabled: true
+    provider: "auto" # auto | sdk | lark_cli
+    chat_id_env: "FEISHU_CHAT_ID"
+    send_mode: "markdown"
+```
+
+`auto` is the recommended default: Daily OS sends through the official SDK when
+`LARK_APP_ID` and `LARK_APP_SECRET` are present, and falls back to `lark-cli`
+otherwise. Use `sdk` to require bot SDK output, or `lark_cli` to force the old
+CLI path.
+
+Feishu source collection still uses `lark-cli` in this version for calendar,
+tasks, docs, and IM history. This keeps the first SDK migration focused on the
+message interaction layer and avoids asking customers for every Feishu scope at
+once.
 
 ## Feishu Interaction Layer
 

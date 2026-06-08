@@ -838,6 +838,7 @@ const HTML = String.raw`<!doctype html>
                 <label for="secret-OPENAI_API_KEY">OpenAI API key</label>
                 <div class="secret-control"><input id="secret-OPENAI_API_KEY" type="password" autocomplete="new-password" /><button type="button" class="icon-button" data-toggle-secret="OPENAI_API_KEY" aria-label="Show OpenAI API key">&#128065;</button></div>
               </div>
+              <label>Feishu output provider<select id="output-provider"><option>auto</option><option>sdk</option><option>lark_cli</option></select></label>
               <label>Feishu send mode<select id="output-send-mode"><option>markdown</option><option>text</option></select></label>
               <label>Feedback prefix<input id="feedback-prefix" /></label>
               <label>Feedback poll limit<input id="feedback-poll-limit" type="number" min="1" max="100" /></label>
@@ -924,7 +925,7 @@ const HTML = String.raw`<!doctype html>
                 </div>
                 <details class="advanced-settings">
                   <summary>Manual Feishu credentials</summary>
-                  <p class="hint">App ID is usually discovered from lark-cli. App Secret is only required for the websocket interaction layer; normal lark-cli collection can run without pasting it here.</p>
+                  <p class="hint">App ID and App Secret are used by the official Feishu SDK for bot output and the websocket interaction layer. If output provider is <code>auto</code>, Daily OS uses SDK when both are configured and falls back to lark-cli otherwise.</p>
                   <label>Feishu App ID<input id="env-LARK_APP_ID" placeholder="cli_xxx" /></label>
                   <div class="form-field">
                     <label for="secret-LARK_APP_SECRET">Feishu App Secret</label>
@@ -938,7 +939,7 @@ const HTML = String.raw`<!doctype html>
                 </div>
                 <details class="advanced-settings">
                   <summary>Feishu interaction layer</summary>
-                  <p class="hint">Optional websocket listener for remote commands in Feishu. This is the only Feishu mode that requires App Secret in this UI.</p>
+                  <p class="hint">Optional websocket listener for remote commands in Feishu. It uses the same official SDK credentials as SDK output.</p>
                   <label><input id="interaction-feishu-enabled" type="checkbox" /> Feishu interaction layer</label>
                   <label>Interaction prefix<input id="interaction-feishu-prefix" /></label>
                   <label>Reply mode<select id="interaction-feishu-reply-mode"><option>markdown</option><option>text</option></select></label>
@@ -1601,6 +1602,7 @@ function render() {
   set('env-FEISHU_CHAT_ID', state.env.FEISHU_CHAT_ID);
   set('env-DAILY_OS_DECISION_CHAT_ID', state.env.DAILY_OS_DECISION_CHAT_ID);
   set('env-FEISHU_OWNER_OPEN_ID', state.env.FEISHU_OWNER_OPEN_ID);
+  set('output-provider', config.output.feishu.provider || 'auto');
   set('output-send-mode', config.output.feishu.send_mode);
   checked('output-feishu-enabled', config.output.feishu.enabled);
   checked('feedback-feishu-enabled', config.feedback.feishu.enabled);
@@ -1701,6 +1703,7 @@ async function saveAll() {
   next.llm.provider = value('llm-provider');
   next.llm.model = value('llm-model');
   next.output.feishu.enabled = isChecked('output-feishu-enabled');
+  next.output.feishu.provider = value('output-provider');
   next.output.feishu.send_mode = value('output-send-mode');
   next.feedback.feishu.enabled = isChecked('feedback-feishu-enabled');
   next.feedback.feishu.command_prefix = value('feedback-prefix');

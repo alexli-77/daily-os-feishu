@@ -1,4 +1,5 @@
 import type { AppConfig } from '../config/schema.js';
+import { feishuSdkStatus, sendFeishuSdkMessage } from './feishu-sdk.js';
 import { addDays } from '../utils/date.js';
 import { commandExists, runCommand } from '../utils/command.js';
 import type { EvidenceSource } from '../workflows/types.js';
@@ -251,6 +252,27 @@ function tryParseJson(value: string): unknown | null {
 export async function sendFeishuMessage(config: AppConfig, text: string): Promise<void> {
   const output = config.output.feishu;
   if (!output.enabled) return;
+  const chatId = process.env[output.chat_id_env];
+  if (!chatId) throw new Error(`${output.chat_id_env} is required to send Feishu output`);
+  if (shouldUseSdkOutput(output.provider)) {
+    await sendFeishuSdkMessage({ chatId, text, mode: output.send_mode });
+    return;
+  }
+  if (output.provider === 'sdk') {
+    const status = feishuSdkStatus();
+    throw new Error(status.detail || 'Feishu SDK output is not configured');
+  }
+  await sendFeishuMessageViaLarkCli(config, text);
+}
+
+function shouldUseSdkOutput(provider: AppConfig['output']['feishu']['provider']): boolean {
+  if (provider === 'sdk') return true;
+  if (provider === 'lark_cli') return false;
+  return feishuSdkStatus().ok;
+}
+
+async function sendFeishuMessageViaLarkCli(config: AppConfig, text: string): Promise<void> {
+  const output = config.output.feishu;
   const chatId = process.env[output.chat_id_env];
   if (!chatId) throw new Error(`${output.chat_id_env} is required to send Feishu output`);
   const flag = output.send_mode === 'markdown' ? '--markdown' : '--text';

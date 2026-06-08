@@ -46,6 +46,7 @@ export const AppConfigSchema = z.object({
   output: z.object({
     feishu: z.object({
       enabled: z.boolean().default(true),
+      provider: z.enum(['auto', 'sdk', 'lark_cli']).default('auto'),
       identity: z.enum(['bot', 'user']).default('bot'),
       chat_id_env: z.string().default('FEISHU_CHAT_ID'),
       send_mode: z.enum(['markdown', 'text']).default('markdown'),
