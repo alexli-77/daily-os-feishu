@@ -252,7 +252,7 @@ function tryParseJson(value: string): unknown | null {
 export async function sendFeishuMessage(
   config: AppConfig,
   text: string,
-  options: { workflow?: WorkflowName; date?: string } = {},
+  options: { workflow?: WorkflowName; date?: string; detailId?: string } = {},
 ): Promise<void> {
   const output = config.output.feishu;
   if (!output.enabled) return;

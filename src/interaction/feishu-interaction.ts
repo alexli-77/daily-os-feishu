@@ -30,6 +30,8 @@ import {
 } from '../progress/capture.js';
 import { parseProgressCardAction, renderProgressConfirmationCard } from '../progress/card.js';
 import { todayInTimezone } from '../utils/date.js';
+import { readLatestWorkflowOutput, readWorkflowDetailCache } from '../storage/memory.js';
+import { formatLatestWorkflowDetails } from '../workflows/summary.js';
 
 interface FeishuInteractionControls {
   stop: () => Promise<void>;
@@ -42,6 +44,11 @@ interface ActiveAgentRun {
   card?: AgentRunCardController;
   scopeId: string;
 }
+
+type WorkflowCardCommand = {
+  command: 'details' | 'progress' | 'chat todo' | 'chat review';
+  detailId?: string;
+};
 
 export async function startFeishuInteraction(config: AppConfig): Promise<FeishuInteractionControls> {
   const cfg = config.interaction.feishu;
@@ -459,17 +466,31 @@ async function handleWorkflowCardCommand(input: {
   channel: LarkChannel;
   event: CardActionEvent;
   activeAgentRuns: Map<string, ActiveAgentRun>;
-  command: 'details' | 'progress' | 'chat todo' | 'chat review';
+  command: WorkflowCardCommand;
 }): Promise<void> {
   const access = decideFeishuAccess(input.config, {
     senderOpenId: input.event.operator.openId,
     chatId: input.event.chatId,
     chatType: 'group',
   });
+  if (!access.ok) {
+    console.warn(`[interaction] denied card command ${input.event.chatId}; operator=${input.event.operator.openId.slice(-6)}; reason=${access.reason}`);
+    return;
+  }
+  if (input.command.command === 'details') {
+    const detail = input.command.detailId ? readWorkflowDetailCache(input.config, input.command.detailId) : readLatestWorkflowOutput(input.config);
+    await input.channel.send(
+      input.event.chatId,
+      toSendInput(detail ? formatLatestWorkflowDetails(detail) : '老板，目前还没有可展开的最近一次计划/复盘详情。', input.config.interaction.feishu.reply_mode),
+      { replyTo: input.event.messageId },
+    );
+    console.log(`[interaction] handled ${input.event.chatId}; card-command=details; cached=${Boolean(input.command.detailId)}`);
+    return;
+  }
   const result = await handleDailyOsCommand({
     config: input.config,
     messageId: input.event.messageId,
-    text: `${input.config.interaction.feishu.command_prefix} ${input.command}`,
+    text: `${input.config.interaction.feishu.command_prefix} ${input.command.command}`,
     source: `feishu-card:${input.event.chatId}`,
     prefix: input.config.interaction.feishu.command_prefix,
     sendWorkflowOutput: false,
@@ -644,10 +665,13 @@ function parseCardAction(value: unknown): WorkflowName | null {
   return null;
 }
 
-function parseWorkflowCardCommand(value: unknown): 'details' | 'progress' | 'chat todo' | 'chat review' | null {
+function parseWorkflowCardCommand(value: unknown): WorkflowCardCommand | null {
   if (!value || typeof value !== 'object') return null;
   const raw = (value as { daily_os_command?: unknown }).daily_os_command;
-  if (raw === 'details' || raw === 'progress' || raw === 'chat todo' || raw === 'chat review') return raw;
+  if (raw === 'details' || raw === 'progress' || raw === 'chat todo' || raw === 'chat review') {
+    const detailId = (value as { detail_id?: unknown }).detail_id;
+    return { command: raw, ...(typeof detailId === 'string' && detailId ? { detailId } : {}) };
+  }
   return null;
 }
 

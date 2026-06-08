@@ -394,7 +394,11 @@ CLI path.
 When SDK output is used with `send_mode: "markdown"`, workflow summaries are
 sent as interactive Feishu cards with buttons for details, progress, review, and
 rerun actions. Button callbacks require the Feishu interaction layer to be
-running and the card callback event to be enabled in the Feishu app.
+running and the card callback event to be enabled in the Feishu app. If Feishu
+shows "card callback is not configured", open the Feishu Developer Console for
+the same app ID, enable the interactive card callback/event delivery, then keep
+`npm run start` running locally. The card also includes a text fallback:
+`daily-os details`.
 
 Feishu source collection still uses `lark-cli` in this version for calendar,
 tasks, docs, and IM history. This keeps the first SDK migration focused on the
