@@ -419,9 +419,16 @@ function normalizeText(text: string): string {
 function isDailyOsGeneratedText(text: string): boolean {
   const normalized = text.replace(/\s+/g, ' ').trim();
   return (
-    /^(#\s*)?(今日计划|日复盘|聊天上下文建议|Daily OS 正在运行|Codex 正在处理)/i.test(normalized) ||
+    /^(?:\/?daily-os|@daily-os)\b/i.test(normalized) ||
+    /^(#\s*)?(今日计划|日复盘|周复盘|聊天上下文建议|今日进展候选|Daily OS 正在运行|Codex 正在处理)/i.test(normalized) ||
+    /^老板[，,]?(?:您好)?[，,]?我帮您(?:整理|检查|看了|确认|分析)/.test(normalized) ||
+    /^老板[，,]?这是最近一次\s*(今日计划|日复盘|周复盘)/.test(normalized) ||
     /^\d{4}-\d{2}-\d{2}\s+(今日计划|日复盘|聊天上下文建议)/.test(normalized) ||
     /\*\*(MIT|Main Plan|Missing Sources|What changed today)\*\*/i.test(normalized) ||
+    /完整内容我已经保存/.test(normalized) ||
+    /需要展开时[，,]?请回复/.test(normalized) ||
+    /今天还没有确认过的进展记录/.test(normalized) ||
+    /这些还不能直接当事实[，,]?需要您批示确认/.test(normalized) ||
     /这些只是建议，不会自动修改任务、日历、文档或 Linear/.test(normalized)
   );
 }
