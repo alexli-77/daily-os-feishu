@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { AppConfig, WorkflowName } from '../config/schema.js';
 import { runCommand } from '../utils/command.js';
 import { runWorkflow } from '../workflows/run-workflow.js';
-import { collectProgressCandidates } from '../progress/capture.js';
+import { collectProgressCandidates, hasConfirmedProgress, type ProgressCandidate } from '../progress/capture.js';
 import { sendFeishuMessage } from '../connectors/lark-cli.js';
 
 const LABEL = 'com.daily-os-feishu.agent';
@@ -93,25 +93,38 @@ async function tick(config: AppConfig, fired: Set<string>): Promise<void> {
     if (!fired.has(key)) {
       fired.add(key);
       try {
-        const result = await collectProgressCandidates(config, date);
-        if (result.candidates.length === 0) {
-          await sendFeishuMessage(
-            config,
-            [
-              '今天暂时没有看到可靠的进展证据。',
-              '',
-              '如果你已经推进了事情，可以直接回复：',
-              '`daily-os remember 今天进展：...`',
-              '',
-              '也可以发送 `daily-os progress` 重新查看候选进展。',
-            ].join('\n'),
-          );
+        if (!hasConfirmedProgress(config, date)) {
+          const result = await collectProgressCandidates(config, date);
+          await sendFeishuMessage(config, progressReminderText(result.candidates));
         }
       } catch (error) {
         console.error(error instanceof Error ? error.stack || error.message : String(error));
       }
     }
   }
+}
+
+function progressReminderText(candidates: ProgressCandidate[]): string {
+  if (candidates.length > 0) {
+    return [
+      '老板，我帮您看了一下，今天还没有确认过的进展记录。',
+      '',
+      '我发现了几条可能算作今日进展的线索，但这些还不能直接当事实，需要您批示确认：',
+      '',
+      ...candidates.slice(0, 5).map((candidate, index) => `${index + 1}. ${candidate.title}`),
+      '',
+      '您可以在飞书里发送：`daily-os progress`，我会把候选项发出来让您确认写入。',
+    ].join('\n');
+  }
+
+  return [
+    '老板，我帮您检查了一下，今天还没有看到已确认的进展记录。',
+    '',
+    '如果今天已经推进了事情，请您直接回复一句，例如：',
+    '`daily-os remember 今天进展：完成了 XXX，下一步是 XXX`',
+    '',
+    '我会把它作为后续日复盘和周复盘的依据。请您批示。',
+  ].join('\n');
 }
 
 function launchAgentPath(): string {

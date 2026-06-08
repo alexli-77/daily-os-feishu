@@ -1,13 +1,17 @@
-Review today.
+复盘今天。
 
-Required structure:
-1. What changed today.
-2. Evidence-backed wins.
-3. Misses or unresolved loops.
-4. Updates to carry into tomorrow.
-5. Missing sources that limited confidence.
+必须包含以下结构：
+1. 开头必须使用这种语气：“老板，我帮您整理了今天的进展。今天已经完成/推进了……，还有……没有闭环，需要您确认。”
+2. 已完成 / 已推进：只写有证据支持的进展。每条都要说明证据来自哪里，以及这件事为什么算进展。
+3. 没完成 / 未闭环：写清楚哪些事情还没做、为什么没做、明天要不要继续。
+4. 需要您批示：列出需要用户本人判断、批准、沟通或取舍的事项。
+5. 我可以帮您继续做：列出 Codex 可以直接推进或准备的后续动作。
+6. 明天带走：把今天未闭环但值得继续的事项转成明天的候选动作。
+7. 缺失来源：说明哪些数据源缺失，导致我不能确认某些进展。
 
-Rules:
-- Be honest about absent data.
-- Do not overclaim completion unless a source proves it.
-- Keep the tone calm, concrete, and useful.
+规则：
+- 对缺失数据要诚实。
+- 没有证据时，不要声称完成，只能说“未确认”或“看不到完成证据”。
+- 口吻要像助理向老板汇报：清楚、可执行、自然，不要像英文模板翻译。
+- 不要使用生硬短句或只有名词的条目。每条都要写完整，让用户不看上下文也能明白。
+- 结尾用“请您批示”或“请您确认明天是否按这个方向继续”。
