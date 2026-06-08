@@ -345,6 +345,8 @@ output:
 
 推荐默认使用 `auto`：如果 `LARK_APP_ID` 和 `LARK_APP_SECRET` 已配置，就走官方 SDK；否则回退到 `lark-cli`。如果想强制 bot SDK 输出，选 `sdk`；如果想保持旧路径，选 `lark_cli`。
 
+使用 SDK 输出且 `send_mode: "markdown"` 时，计划/复盘摘要会以飞书可交互卡片发送，卡片上有「展开完整内容」「确认今日进展」「生成复盘」「重新生成」等按钮。按钮回调需要飞书 interaction layer 正在运行，并且飞书应用已启用卡片 callback 事件。
+
 当前版本中，飞书日历、任务、文档、IM 历史采集仍然走 `lark-cli`。这样第一步迁移只聚焦消息交互层，不会一次性要求客户开所有飞书 scope。
 
 ## Feishu Interaction Layer

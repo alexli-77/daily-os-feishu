@@ -391,6 +391,11 @@ output:
 otherwise. Use `sdk` to require bot SDK output, or `lark_cli` to force the old
 CLI path.
 
+When SDK output is used with `send_mode: "markdown"`, workflow summaries are
+sent as interactive Feishu cards with buttons for details, progress, review, and
+rerun actions. Button callbacks require the Feishu interaction layer to be
+running and the card callback event to be enabled in the Feishu app.
+
 Feishu source collection still uses `lark-cli` in this version for calendar,
 tasks, docs, and IM history. This keeps the first SDK migration focused on the
 message interaction layer and avoids asking customers for every Feishu scope at

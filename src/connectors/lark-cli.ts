@@ -1,4 +1,4 @@
-import type { AppConfig } from '../config/schema.js';
+import type { AppConfig, WorkflowName } from '../config/schema.js';
 import { feishuSdkStatus, sendFeishuSdkMessage } from './feishu-sdk.js';
 import { addDays } from '../utils/date.js';
 import { commandExists, runCommand } from '../utils/command.js';
@@ -249,13 +249,17 @@ function tryParseJson(value: string): unknown | null {
   }
 }
 
-export async function sendFeishuMessage(config: AppConfig, text: string): Promise<void> {
+export async function sendFeishuMessage(
+  config: AppConfig,
+  text: string,
+  options: { workflow?: WorkflowName; date?: string } = {},
+): Promise<void> {
   const output = config.output.feishu;
   if (!output.enabled) return;
   const chatId = process.env[output.chat_id_env];
   if (!chatId) throw new Error(`${output.chat_id_env} is required to send Feishu output`);
   if (shouldUseSdkOutput(output.provider)) {
-    await sendFeishuSdkMessage({ chatId, text, mode: output.send_mode });
+    await sendFeishuSdkMessage({ chatId, text, mode: output.send_mode, options });
     return;
   }
   if (output.provider === 'sdk') {

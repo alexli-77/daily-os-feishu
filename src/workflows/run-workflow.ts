@@ -14,6 +14,8 @@ export async function runWorkflow(config: AppConfig, workflow: WorkflowName, opt
 
   appendDailyMemory(config, workflow, date, text);
   writeLatestWorkflowOutput(config, workflow, date, text);
-  if (options.send ?? true) await sendFeishuMessage(config, formatWorkflowSummaryForFeishu(workflow, date, text));
+  if (options.send ?? true) {
+    await sendFeishuMessage(config, formatWorkflowSummaryForFeishu(workflow, date, text), { workflow, date });
+  }
   return text;
 }
