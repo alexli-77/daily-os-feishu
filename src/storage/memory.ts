@@ -15,6 +15,13 @@ export interface MemoryBundle {
   recentDaily: Array<{ path: string; content: string }>;
 }
 
+export interface LatestWorkflowOutput {
+  workflow: WorkflowName;
+  date: string;
+  generated_at: string;
+  content: string;
+}
+
 export function loadMemory(config: AppConfig): MemoryBundle {
   const repositoryPath = resolveMemoryRepositoryPath(config);
   const longTermPath = path.resolve(config.memory.long_term_path);
@@ -43,6 +50,31 @@ export function appendDailyMemory(config: AppConfig, workflow: WorkflowName, dat
   fs.appendFileSync(filePath, `\n\n## ${title}\n\n${content.trim()}\n`);
 }
 
+export function writeLatestWorkflowOutput(config: AppConfig, workflow: WorkflowName, date: string, content: string): string {
+  const filePath = latestWorkflowOutputPath(config);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const payload: LatestWorkflowOutput = {
+    workflow,
+    date,
+    generated_at: new Date().toISOString(),
+    content: content.trim(),
+  };
+  fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf8');
+  return filePath;
+}
+
+export function readLatestWorkflowOutput(config: AppConfig): LatestWorkflowOutput | null {
+  const filePath = latestWorkflowOutputPath(config);
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as LatestWorkflowOutput;
+    if (!parsed || typeof parsed.content !== 'string') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 export function appendLongTermMemory(config: AppConfig, content: string, source = 'manual'): void {
   const longTermPath = path.resolve(config.memory.long_term_path);
   fs.mkdirSync(path.dirname(longTermPath), { recursive: true });
@@ -68,6 +100,10 @@ export function ensureMemoryFiles(config: AppConfig): void {
   if (!fs.existsSync(longTermPath)) {
     fs.writeFileSync(longTermPath, '# Long-term Memory\n\nKeep durable preferences, standing goals, and recurring constraints here.\n');
   }
+}
+
+function latestWorkflowOutputPath(config: AppConfig): string {
+  return path.resolve(config.memory.daily_dir, '_latest-workflow.json');
 }
 
 export function resolveMemoryRepositoryPath(config: AppConfig): string {

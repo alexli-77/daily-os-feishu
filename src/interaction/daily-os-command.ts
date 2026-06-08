@@ -1,6 +1,7 @@
 import type { AppConfig, WorkflowName } from '../config/schema.js';
-import { appendFeedbackLog, appendLongTermMemory } from '../storage/memory.js';
+import { appendFeedbackLog, appendLongTermMemory, readLatestWorkflowOutput } from '../storage/memory.js';
 import { runWorkflow } from '../workflows/run-workflow.js';
+import { formatLatestWorkflowDetails, formatWorkflowSummaryForFeishu } from '../workflows/summary.js';
 import { decisionCalibrationPrompt, decisionPolicyStatusText } from '../decision/policy.js';
 import {
   confirmPolicyCandidate,
@@ -21,6 +22,7 @@ export type ParsedDailyOsCommand =
   | { type: 'policy_candidates' }
   | { type: 'new_session' }
   | { type: 'stop_agent' }
+  | { type: 'details' }
   | { type: 'chat_analysis'; mode?: ChatAnalysisMode }
   | { type: 'progress' }
   | { type: 'confirm_policy_candidate'; id: string }
@@ -79,6 +81,7 @@ export function parseDailyOsCommand(text: string, prefix: string): ParsedDailyOs
   if (['help', 'status', '状态', '帮助'].includes(lower)) return { type: 'status' };
   if (['new', 'new session', '新会话', '重开会话'].includes(lower)) return { type: 'new_session' };
   if (['stop', '停止', '停止当前任务'].includes(lower)) return { type: 'stop_agent' };
+  if (['details', 'detail', '全文', '完整内容', '查看详情'].includes(lower)) return { type: 'details' };
   const chatCommand = parseChatAnalysisCommand(normalized);
   if (chatCommand) {
     return chatCommand;
@@ -115,6 +118,7 @@ export function dailyOsStatusText(prefix: string): string {
     `- ${prefix} status`,
     `- ${prefix} new`,
     `- ${prefix} stop`,
+    `- ${prefix} details`,
     `- ${prefix} chat [todo|review]`,
     `- ${prefix} progress`,
     `- ${prefix} remember <text>`,
@@ -152,6 +156,11 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
     case 'stop_agent': {
       const stopped = context.stopAgentRun ? await context.stopAgentRun() : false;
       await context.reply(stopped ? '已停止当前 Codex 任务。' : '当前没有正在运行的 Codex 任务。');
+      return;
+    }
+    case 'details': {
+      const latest = readLatestWorkflowOutput(context.config);
+      await context.reply(latest ? formatLatestWorkflowDetails(latest) : '老板，目前还没有可展开的最近一次计划/复盘详情。');
       return;
     }
     case 'chat_analysis': {
@@ -208,7 +217,9 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
     case 'workflow': {
       await context.reply(`Running ${command.workflow.replaceAll('_', ' ')}...`);
       const output = await runWorkflow(context.config, command.workflow, { send: context.sendWorkflowOutput ?? false });
-      if (!(context.sendWorkflowOutput ?? false)) await context.reply(output);
+      if (!(context.sendWorkflowOutput ?? false)) {
+        await context.reply(formatWorkflowSummaryForFeishu(command.workflow, todayInTimezone(context.config), output));
+      }
       return;
     }
     case 'ignore':
@@ -253,6 +264,7 @@ function commandEffect(command: ParsedDailyOsCommand): FeishuControlEffect {
     case 'policy_candidates':
     case 'new_session':
     case 'stop_agent':
+    case 'details':
     case 'progress':
     case 'chat_analysis':
       return 'read';

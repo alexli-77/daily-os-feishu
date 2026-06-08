@@ -105,6 +105,9 @@ daily-os chat review
 `chat_analysis.max_suggestions`。Feishu source profile 里的 `im_history.limit`
 建议不小于 `chat_analysis.max_messages`。
 
+计划、复盘和周报发送到飞书时默认会压缩成一屏摘要。完整内容仍然保存在本地；
+需要展开最近一次完整内容时，在飞书里发送 `daily-os details`。
+
 ## 今日进展捕获
 
 Daily OS 可以在晚间复盘前先收集“可能的今日进展”。这些候选只来自证据源，不会直接当成事实；
@@ -375,6 +378,7 @@ npm run interaction:feishu
 
 - `daily-os status`：返回带 Plan、Review、Weekly 按钮的操作卡片。
 - `/new` 或 `daily-os new`：清除当前飞书 chat/topic 的远程会话。
+- `daily-os details`：展开最近一次计划、日复盘或周复盘的完整内容。
 - `daily-os chat [todo|review]`：按场景分析飞书聊天上下文，提出 todo、日历、文档和计划变更建议。
 - `daily-os remember <text>`：写入 long-term memory。
 - `daily-os feedback <text>`：写入本地 feedback log。
