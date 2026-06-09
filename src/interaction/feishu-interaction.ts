@@ -46,7 +46,7 @@ interface ActiveAgentRun {
 }
 
 type WorkflowCardCommand = {
-  command: 'details' | 'progress' | 'chat todo' | 'chat review' | 'confirm_todo';
+  command: 'details' | 'progress' | 'chat todo' | 'chat review' | 'confirm_todo' | 'revise_todo';
   detailId?: string;
 };
 
@@ -494,6 +494,24 @@ async function handleWorkflowCardCommand(input: {
     console.log(`[interaction] handled ${input.event.chatId}; card-command=confirm_todo`);
     return;
   }
+  if (input.command.command === 'revise_todo') {
+    await input.channel.send(
+      input.event.chatId,
+      {
+        text: [
+          '可以，您直接回复修改意见即可。',
+          '',
+          '格式示例：',
+          'daily-os 修改今日安排：把 LEO-12 降到 P1，今天优先处理导师联系邮件；Codex 先帮我准备邮件草稿。',
+          '',
+          '我会把修改意见写入今天的上下文。之后点「重新生成」或发送 daily-os plan，就会按新意见重排。',
+        ].join('\n'),
+      },
+      { replyTo: input.event.messageId },
+    );
+    console.log(`[interaction] handled ${input.event.chatId}; card-command=revise_todo`);
+    return;
+  }
   if (input.command.command === 'progress') {
     const date = todayInTimezone(input.config);
     const progress = await collectProgressCandidates(input.config, date);
@@ -682,7 +700,7 @@ function parseCardAction(value: unknown): WorkflowName | null {
 function parseWorkflowCardCommand(value: unknown): WorkflowCardCommand | null {
   if (!value || typeof value !== 'object') return null;
   const raw = (value as { daily_os_command?: unknown }).daily_os_command;
-  if (raw === 'details' || raw === 'progress' || raw === 'chat todo' || raw === 'chat review' || raw === 'confirm_todo') {
+  if (raw === 'details' || raw === 'progress' || raw === 'chat todo' || raw === 'chat review' || raw === 'confirm_todo' || raw === 'revise_todo') {
     const detailId = (value as { detail_id?: unknown }).detail_id;
     return { command: raw, ...(typeof detailId === 'string' && detailId ? { detailId } : {}) };
   }

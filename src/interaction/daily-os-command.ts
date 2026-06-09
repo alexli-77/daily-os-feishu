@@ -1,5 +1,5 @@
 import type { AppConfig, WorkflowName } from '../config/schema.js';
-import { appendFeedbackLog, appendLongTermMemory, readLatestWorkflowOutput } from '../storage/memory.js';
+import { appendDailyMemory, appendFeedbackLog, appendLongTermMemory, readLatestWorkflowOutput } from '../storage/memory.js';
 import { runWorkflow } from '../workflows/run-workflow.js';
 import { formatLatestWorkflowDetails, formatWorkflowSummaryForFeishu } from '../workflows/summary.js';
 import { decisionCalibrationPrompt, decisionPolicyStatusText } from '../decision/policy.js';
@@ -30,6 +30,7 @@ export type ParsedDailyOsCommand =
   | { type: 'calibrate' }
   | { type: 'remember'; text: string }
   | { type: 'feedback'; text: string }
+  | { type: 'revision_request'; workflow: WorkflowName; text: string }
   | { type: 'workflow'; workflow: WorkflowName };
 
 export interface DailyOsCommandContext {
@@ -77,6 +78,9 @@ export function parseDailyOsCommand(text: string, prefix: string): ParsedDailyOs
       return { type: 'feedback', text: normalized.slice(marker.length).trim() };
     }
   }
+
+  const revision = parseRevisionRequest(normalized);
+  if (revision) return revision;
 
   if (['help', 'status', '状态', '帮助'].includes(lower)) return { type: 'status' };
   if (['new', 'new session', '新会话', '重开会话'].includes(lower)) return { type: 'new_session' };
@@ -214,6 +218,13 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
       appendFeedbackLog(context.config, command.text, { message_id: context.messageId, source: context.source });
       await context.reply('Feedback saved.');
       return;
+    case 'revision_request': {
+      appendDailyMemory(context.config, command.workflow, todayInTimezone(context.config), `用户提出修改意见：${command.text}`);
+      appendFeedbackLog(context.config, command.text, { message_id: context.messageId, source: context.source, workflow: command.workflow });
+      const nextCommand = command.workflow === 'daily_plan' ? 'plan' : command.workflow === 'daily_review' ? 'review' : 'weekly';
+      await context.reply(`收到，我已记录这条修改意见。请点卡片里的「重新生成」，或发送 ${context.prefix} ${nextCommand}，我会按这条意见重新整理。`);
+      return;
+    }
     case 'workflow': {
       await context.reply(`Running ${command.workflow.replaceAll('_', ' ')}...`);
       const output = await runWorkflow(context.config, command.workflow, { send: context.sendWorkflowOutput ?? false });
@@ -225,6 +236,20 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
     case 'ignore':
       return;
   }
+}
+
+function parseRevisionRequest(text: string): Extract<ParsedDailyOsCommand, { type: 'revision_request' }> | null {
+  const patterns: Array<[RegExp, WorkflowName]> = [
+    [/^(?:修改|调整)(?:今日安排|今天安排|日计划|今日计划)[:：\s]*(.+)$/i, 'daily_plan'],
+    [/^(?:修改|调整)(?:今日复盘|日复盘)[:：\s]*(.+)$/i, 'daily_review'],
+    [/^(?:修改|调整)(?:周计划|周复盘|下周安排)[:：\s]*(.+)$/i, 'weekly_review'],
+  ];
+  for (const [pattern, workflow] of patterns) {
+    const match = text.match(pattern);
+    const body = match?.[1]?.trim();
+    if (body) return { type: 'revision_request', workflow, text: body };
+  }
+  return null;
 }
 
 function splitCandidateIdAndReason(text: string): { id: string; reason?: string } {
@@ -272,6 +297,7 @@ function commandEffect(command: ParsedDailyOsCommand): FeishuControlEffect {
       return 'workflow_trigger';
     case 'remember':
     case 'feedback':
+    case 'revision_request':
       return 'memory_write';
     case 'confirm_policy_candidate':
     case 'reject_policy_candidate':
