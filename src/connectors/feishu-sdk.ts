@@ -144,6 +144,7 @@ function workflowActions(workflow: WorkflowName, options?: FeishuSdkMessageOptio
   const actions: object[] = [cardButton('展开完整内容', { daily_os_command: 'details', ...(options?.detailId ? { detail_id: options.detailId } : {}) }, 'primary')];
   if (workflow === 'daily_plan') {
     actions.push(cardButton('确认今日安排', { daily_os_command: 'confirm_todo' }, 'default'));
+    actions.push(cardButton('我要调整', { daily_os_command: 'revise_todo' }, 'default'));
     actions.push(cardButton('生成今日复盘', { daily_os_action: 'daily_review' }, 'default'));
   }
   actions.push(cardButton('重新生成', { daily_os_action: workflow }, 'default'));
