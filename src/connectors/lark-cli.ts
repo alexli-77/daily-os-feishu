@@ -1,5 +1,5 @@
 import type { AppConfig, WorkflowName } from '../config/schema.js';
-import { feishuSdkStatus, sendFeishuSdkMessage } from './feishu-sdk.js';
+import { feishuSdkStatus, sendFeishuSdkCard, sendFeishuSdkMessage } from './feishu-sdk.js';
 import { addDays } from '../utils/date.js';
 import { commandExists, runCommand } from '../utils/command.js';
 import type { EvidenceSource } from '../workflows/types.js';
@@ -267,6 +267,18 @@ export async function sendFeishuMessage(
     throw new Error(status.detail || 'Feishu SDK output is not configured');
   }
   await sendFeishuMessageViaLarkCli(config, text);
+}
+
+export async function sendFeishuCard(config: AppConfig, card: object, fallbackText: string): Promise<void> {
+  const output = config.output.feishu;
+  if (!output.enabled) return;
+  const chatId = process.env[output.chat_id_env];
+  if (!chatId) throw new Error(`${output.chat_id_env} is required to send Feishu output`);
+  if (shouldUseSdkOutput(output.provider)) {
+    await sendFeishuSdkCard({ chatId, card });
+    return;
+  }
+  await sendFeishuMessage(config, fallbackText);
 }
 
 function shouldUseSdkOutput(provider: AppConfig['output']['feishu']['provider']): boolean {
