@@ -5,7 +5,8 @@ import type { AppConfig, WorkflowName } from '../config/schema.js';
 import { runCommand } from '../utils/command.js';
 import { runWorkflow } from '../workflows/run-workflow.js';
 import { collectProgressCandidates, hasConfirmedProgress, type ProgressCandidate } from '../progress/capture.js';
-import { sendFeishuMessage } from '../connectors/lark-cli.js';
+import { renderProgressConfirmationCard } from '../progress/card.js';
+import { sendFeishuCard } from '../connectors/lark-cli.js';
 
 const LABEL = 'com.daily-os-feishu.agent';
 
@@ -95,7 +96,7 @@ async function tick(config: AppConfig, fired: Set<string>): Promise<void> {
       try {
         if (!hasConfirmedProgress(config, date)) {
           const result = await collectProgressCandidates(config, date);
-          await sendFeishuMessage(config, progressReminderText(result.candidates));
+          await sendFeishuCard(config, renderProgressConfirmationCard(config, result), progressReminderText(result.candidates));
         }
       } catch (error) {
         console.error(error instanceof Error ? error.stack || error.message : String(error));

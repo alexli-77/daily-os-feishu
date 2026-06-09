@@ -48,6 +48,21 @@ export async function sendFeishuSdkMessage(input: {
   }
 }
 
+export async function sendFeishuSdkCard(input: { chatId: string; card: object }): Promise<void> {
+  const client = createFeishuClient();
+  const result = await client.im.v1.message.create({
+    params: { receive_id_type: 'chat_id' },
+    data: {
+      receive_id: input.chatId,
+      msg_type: 'interactive',
+      content: JSON.stringify(input.card),
+    },
+  });
+  if (result.code && result.code !== 0) {
+    throw new Error(`Feishu SDK card send failed: ${result.code} ${result.msg || ''}`.trim());
+  }
+}
+
 export async function createFeishuSdkPrivateChat(input: {
   name: string;
   description: string;
@@ -126,11 +141,9 @@ function workflowCard(text: string, options?: FeishuSdkMessageOptions): object {
 }
 
 function workflowActions(workflow: WorkflowName, options?: FeishuSdkMessageOptions): object[] {
-  const actions: object[] = [
-    cardButton('展开完整内容', { daily_os_command: 'details', ...(options?.detailId ? { detail_id: options.detailId } : {}) }, 'primary'),
-    cardButton('确认今日进展', { daily_os_command: 'progress' }, 'default'),
-  ];
+  const actions: object[] = [cardButton('展开完整内容', { daily_os_command: 'details', ...(options?.detailId ? { detail_id: options.detailId } : {}) }, 'primary')];
   if (workflow === 'daily_plan') {
+    actions.push(cardButton('确认今日安排', { daily_os_command: 'confirm_todo' }, 'default'));
     actions.push(cardButton('生成今日复盘', { daily_os_action: 'daily_review' }, 'default'));
   }
   actions.push(cardButton('重新生成', { daily_os_action: workflow }, 'default'));

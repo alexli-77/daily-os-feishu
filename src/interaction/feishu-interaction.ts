@@ -30,7 +30,7 @@ import {
 } from '../progress/capture.js';
 import { parseProgressCardAction, renderProgressConfirmationCard } from '../progress/card.js';
 import { todayInTimezone } from '../utils/date.js';
-import { readLatestWorkflowOutput, readWorkflowDetailCache } from '../storage/memory.js';
+import { appendDailyMemory, readLatestWorkflowOutput, readWorkflowDetailCache } from '../storage/memory.js';
 import { formatLatestWorkflowDetails } from '../workflows/summary.js';
 
 interface FeishuInteractionControls {
@@ -46,7 +46,7 @@ interface ActiveAgentRun {
 }
 
 type WorkflowCardCommand = {
-  command: 'details' | 'progress' | 'chat todo' | 'chat review';
+  command: 'details' | 'progress' | 'chat todo' | 'chat review' | 'confirm_todo';
   detailId?: string;
 };
 
@@ -487,6 +487,20 @@ async function handleWorkflowCardCommand(input: {
     console.log(`[interaction] handled ${input.event.chatId}; card-command=details; cached=${Boolean(input.command.detailId)}`);
     return;
   }
+  if (input.command.command === 'confirm_todo') {
+    const date = todayInTimezone(input.config);
+    appendDailyMemory(input.config, 'daily_plan', date, '用户已确认今日安排。日复盘时需要用最近一次今日计划作为对照依据。');
+    await input.channel.send(input.event.chatId, { text: '收到，今日安排已确认。我会在今日复盘时按这张计划对照完成情况。' }, { replyTo: input.event.messageId });
+    console.log(`[interaction] handled ${input.event.chatId}; card-command=confirm_todo`);
+    return;
+  }
+  if (input.command.command === 'progress') {
+    const date = todayInTimezone(input.config);
+    const progress = await collectProgressCandidates(input.config, date);
+    await input.channel.send(input.event.chatId, { card: renderProgressConfirmationCard(input.config, progress) }, { replyTo: input.event.messageId });
+    console.log(`[interaction] handled ${input.event.chatId}; card-command=progress-card`);
+    return;
+  }
   const result = await handleDailyOsCommand({
     config: input.config,
     messageId: input.event.messageId,
@@ -668,7 +682,7 @@ function parseCardAction(value: unknown): WorkflowName | null {
 function parseWorkflowCardCommand(value: unknown): WorkflowCardCommand | null {
   if (!value || typeof value !== 'object') return null;
   const raw = (value as { daily_os_command?: unknown }).daily_os_command;
-  if (raw === 'details' || raw === 'progress' || raw === 'chat todo' || raw === 'chat review') {
+  if (raw === 'details' || raw === 'progress' || raw === 'chat todo' || raw === 'chat review' || raw === 'confirm_todo') {
     const detailId = (value as { detail_id?: unknown }).detail_id;
     return { command: raw, ...(typeof detailId === 'string' && detailId ? { detailId } : {}) };
   }
