@@ -43,6 +43,13 @@ export const AppConfigSchema = z.object({
       time: z.string().default('20:00'),
     }),
   }),
+  service: z
+    .object({
+      prevent_sleep: enabled.default({ enabled: false }),
+    })
+    .default({
+      prevent_sleep: { enabled: false },
+    }),
   output: z.object({
     feishu: z.object({
       enabled: z.boolean().default(true),

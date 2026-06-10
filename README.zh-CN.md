@@ -52,7 +52,7 @@ npm run start
 
 它会打开本地 UI，启动 plan/review/weekly 的前台 scheduler，并在
 `interaction.feishu.enabled=true` 时启动飞书 websocket 实时交互层。保持这个终端窗口运行即可。
-如果你在 UI 里修改了 scheduler 或 interaction 配置，重启 `npm run start` 让前台服务重新读取配置。
+如果 Mac 进入睡眠，本地进程和飞书长连接也会暂停；醒来后，scheduler 会在 3 小时窗口内补跑错过的任务。
 
 检查环境：
 
@@ -221,8 +221,11 @@ Linear API 直连和 Codex Linear fallback。
 `Allowed projects` 或 `Allowed teams` 后，应用会抓这些范围下的未完成 issue，
 即使它们尚未分配 assignee，然后再执行本地 allow/block 过滤。
 
-Service 里的按钮只管理 macOS 定时任务。`Install` 是创建 `launchd` 后台定时任务；
-`Uninstall` 是删除这个定时任务。它们不是安装或卸载整个项目。
+Service 里的按钮只管理 macOS 后台服务。`Install` 会创建 `launchd` 任务，用来运行本地 UI、scheduler 和飞书实时长连接；
+`Uninstall` 只删除这个后台任务。它们不是安装或卸载整个项目。launchd 后台服务会使用随机本地 UI 端口，避免和前台配置页冲突。
+
+`service.prevent_sleep.enabled=true` 时，Daily OS 运行期间会启动 `caffeinate -i`，防止 Mac 因为空闲进入睡眠。
+但 macOS 仍可能在 MacBook 盒盖、尤其是电池状态下强制睡眠。想要稳定常驻，建议接电保持唤醒，或部署到常开机器。
 
 Vault 的 local 模式提供 `Choose folder` 按钮，会打开 macOS 文件夹选择器，
 并把选中的路径写入本地配置。顶部的状态例如 `Checks 4/4 OK` 表示本地环境检查结果；

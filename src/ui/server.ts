@@ -1029,7 +1029,9 @@ const HTML = String.raw`<!doctype html>
               </fieldset>
               <fieldset>
                 <legend>Service</legend>
-                <p class="hint">Install creates the macOS launchd scheduler. Uninstall removes only that scheduler.</p>
+                <p class="hint">Install creates a macOS launchd background service for the UI, scheduler, and Feishu realtime connection.</p>
+                <label><input id="service-prevent-sleep" type="checkbox" /> Prevent idle sleep while Daily OS is running</label>
+                <p class="hint">Uses macOS caffeinate. Closing a MacBook lid, especially on battery, can still force sleep.</p>
                 <div class="service-status" id="service-status" aria-live="polite"></div>
                 <button type="button" id="service-install-button" data-action="service_install">Install</button>
                 <button type="button" id="service-uninstall-button" class="secondary" data-action="service_uninstall">Uninstall</button>
@@ -1651,6 +1653,7 @@ function render() {
   checked('workflow-weekly-enabled', config.workflows.weekly_review.enabled);
   set('workflow-weekly-weekday', config.workflows.weekly_review.weekday);
   set('workflow-weekly-time', config.workflows.weekly_review.time);
+  checked('service-prevent-sleep', config.service?.prevent_sleep?.enabled);
 
   for (const key of ['OPENAI_API_KEY', 'LARK_APP_SECRET', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'VAULT_GATE_TOKEN']) renderSecret(key);
 
@@ -1671,10 +1674,10 @@ function renderServiceStatus(service) {
   uninstallButton.disabled = !registered && !service?.installed;
   status.className = 'service-status ' + (registered ? 'registered' : '');
   status.textContent = registered
-    ? 'Registered with macOS launchd. Scheduled workflows can run in the background.'
+    ? 'Registered with macOS launchd. UI, scheduler, and Feishu realtime connection can run in the background.'
     : service?.installed
-      ? 'Plist exists, but launchd is not registered. Click Install to register it again.'
-      : 'Not registered. Click Install to create and register the macOS scheduler.';
+      ? 'Plist exists, but launchd is not registered. Click Install to register the full background service again.'
+      : 'Not registered. Click Install to create and register the full macOS background service.';
 }
 
 function renderChecks(checks) {
@@ -1760,6 +1763,8 @@ async function saveAll() {
   next.workflows.weekly_review.enabled = isChecked('workflow-weekly-enabled');
   next.workflows.weekly_review.weekday = value('workflow-weekly-weekday');
   next.workflows.weekly_review.time = value('workflow-weekly-time');
+  next.service = next.service || {};
+  next.service.prevent_sleep = { enabled: isChecked('service-prevent-sleep') };
 
   await post('/api/config', { config: next });
   const envValues = {

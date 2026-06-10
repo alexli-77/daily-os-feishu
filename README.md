@@ -53,9 +53,9 @@ npm run start
 
 This opens the local UI, starts the scheduler for plan/review/weekly, and starts
 the Feishu websocket interaction layer when `interaction.feishu.enabled` is
-true. Keep the terminal window running. If you change scheduler or interaction
-settings in the UI, restart `npm run start` so the foreground services reload
-the updated config.
+true. Keep the terminal window running. If the Mac sleeps, the local process and
+Feishu websocket pause too; after wake, the scheduler catches up missed runs
+within a three-hour window.
 
 Then check the installation:
 
@@ -140,7 +140,7 @@ If the scheduler reaches `progress.no_progress_reminder_time` and sees no
 candidate progress, it sends a lightweight reminder instead of waiting until the
 nightly review.
 
-Install the macOS scheduler:
+Install the full macOS background service:
 
 ```bash
 npm run build
@@ -249,9 +249,16 @@ you. When `Allowed projects` or `Allowed teams` is configured, the app collects
 open issues in those scopes even if they are unassigned, then applies local
 allow/block filters.
 
-The Service buttons only manage the macOS scheduler. `Install` creates the
-`launchd` job that runs the workflow on schedule; `Uninstall` removes that job.
-They do not install or remove the project itself.
+The Service buttons only manage the macOS background service. `Install` creates the
+`launchd` job that runs the local UI, scheduler, and Feishu realtime connection;
+`Uninstall` removes only that job. They do not install or remove the project
+itself. The launchd service uses a random local UI port to avoid colliding with
+a foreground setup window.
+
+`service.prevent_sleep.enabled=true` starts `caffeinate -i` while Daily OS is
+running. This prevents idle sleep, but macOS can still force sleep when a
+MacBook lid is closed, especially on battery. For reliable always-on behavior,
+keep the Mac awake on power or run Daily OS on an always-on machine.
 
 Vault local mode has a `Choose folder` button that opens the macOS folder
 picker and writes the selected path into the local config. The top status shows
