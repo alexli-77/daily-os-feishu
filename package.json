@@ -17,6 +17,7 @@
     "review": "tsx src/index.ts review",
     "weekly": "tsx src/index.ts weekly",
     "collect": "tsx src/index.ts collect",
+    "chrome:collect": "tsx src/index.ts chrome collect",
     "chat": "tsx src/index.ts chat",
     "progress": "tsx src/index.ts progress",
     "progress:confirm": "tsx src/index.ts progress confirm",

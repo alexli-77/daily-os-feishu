@@ -15,6 +15,8 @@ import { startFeishuInteraction } from './interaction/feishu-interaction.js';
 import { startDecisionOnboarding } from './decision/onboarding.js';
 import { ensureDecisionPolicyFiles } from './decision/policy.js';
 import { startPreventSleep } from './service/prevent-sleep.js';
+import { startChromeSnapshotService } from './service/chrome-snapshot.js';
+import { captureChromeSnapshot } from './connectors/chrome-collector.js';
 import {
   appendConfirmedProgress,
   collectProgressCandidates,
@@ -59,6 +61,14 @@ async function main(): Promise<void> {
     }
     case 'collect': {
       console.log(JSON.stringify(await collectEvidence(config, todayInTimezone(config)), null, 2));
+      break;
+    }
+    case 'chrome': {
+      if (subcommand === 'collect') {
+        console.log(JSON.stringify(await captureChromeSnapshot(config), null, 2));
+      } else {
+        usage(1);
+      }
       break;
     }
     case 'chat': {
@@ -154,6 +164,7 @@ async function startAll(options: CliOptions): Promise<void> {
   await runScheduler(config);
   console.log('daily-os-feishu scheduler 已启动。');
   const sleepControls = startPreventSleep(config.service.prevent_sleep.enabled);
+  const chromeControls = startChromeSnapshotService(config);
 
   let interactionControls: Awaited<ReturnType<typeof startFeishuInteraction>> | null = null;
   if (config.interaction.feishu.enabled) {
@@ -168,6 +179,7 @@ async function startAll(options: CliOptions): Promise<void> {
 
   await waitForShutdown(async () => {
     if (interactionControls) await interactionControls.stop();
+    await chromeControls.stop();
     await sleepControls.stop();
     await ui.stop();
   });
@@ -292,6 +304,7 @@ Commands:
   setup              Create local config files and data directories
   doctor             Check local dependencies and required env vars
   collect            Print collected evidence as JSON
+  chrome collect     Refresh local Chrome tab/status snapshots
   chat [mode]        Analyze Feishu chat context. mode: manual | todo | review
   progress           Print today's progress candidates
   progress confirm   Confirm all current progress candidates into the daily ledger

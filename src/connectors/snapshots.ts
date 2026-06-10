@@ -1,4 +1,5 @@
 import type { AppConfig } from '../config/schema.js';
+import { captureChromeSnapshot } from './chrome-collector.js';
 import { readJsonIfExists, readTextIfExists } from './file.js';
 import { sourceFromResult, type EvidenceSource } from '../workflows/types.js';
 
@@ -6,6 +7,9 @@ export async function collectSnapshots(config: AppConfig): Promise<Record<string
   const out: Record<string, EvidenceSource> = {};
 
   if (config.sources.chrome_snapshot.enabled) {
+    if (config.sources.chrome_snapshot.capture.enabled && config.sources.chrome_snapshot.capture.refresh_on_collect) {
+      await captureChromeSnapshot(config);
+    }
     const tabs = readTextIfExists(config.sources.chrome_snapshot.tabs_path);
     const status = readJsonIfExists(config.sources.chrome_snapshot.status_path);
     out.chrome_snapshot = sourceFromResult({

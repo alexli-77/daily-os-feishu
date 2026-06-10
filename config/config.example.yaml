@@ -125,6 +125,17 @@ sources:
     enabled: false
     tabs_path: "./data/snapshots/chrome/current-tabs.txt"
     status_path: "./data/snapshots/chrome/status.json"
+    tabs_json_path: "./data/snapshots/chrome/tabs.json"
+    capture:
+      enabled: true
+      method: osascript
+      refresh_on_collect: true
+      background_interval_minutes: 15
+      timeout_ms: 5000
+      max_tabs: 80
+      include_url_query: false
+      allowlist: []
+      blocklist: []
 
   apple_calendar_snapshot:
     enabled: false
