@@ -100,8 +100,16 @@ export async function startFeishuInteraction(config: AppConfig): Promise<FeishuI
     message: async (message) => {
       await intakeMessage({ config, channel, message, queue, chatModes, activeAgentRuns });
     },
-    cardAction: async (event) => {
-      await handleCardAction({ config, channel, event, queue, chatModes, activeAgentRuns });
+    cardAction: (event) => {
+      void handleCardAction({ config, channel, event, queue, chatModes, activeAgentRuns }).catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[interaction] card action failed ${event.chatId}/${event.messageId}: ${message}`);
+        void channel
+          .send(event.chatId, { text: `卡片操作执行失败：${message}` }, { replyTo: event.messageId })
+          .catch((sendError) => {
+            console.error(`[interaction] failed to report card action error: ${sendError instanceof Error ? sendError.message : String(sendError)}`);
+          });
+      });
     },
     reject: (event) => {
       console.warn(`[interaction] rejected ${event.chatId}/${event.messageId}: ${event.reason}`);
