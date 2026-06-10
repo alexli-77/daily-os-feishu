@@ -239,6 +239,30 @@ export const AppConfigSchema = z.object({
     chrome_snapshot: enabled.extend({
       tabs_path: z.string().default('./data/snapshots/chrome/current-tabs.txt'),
       status_path: z.string().default('./data/snapshots/chrome/status.json'),
+      tabs_json_path: z.string().default('./data/snapshots/chrome/tabs.json'),
+      capture: z
+        .object({
+          enabled: z.boolean().default(true),
+          method: z.enum(['osascript']).default('osascript'),
+          refresh_on_collect: z.boolean().default(true),
+          background_interval_minutes: z.number().int().positive().default(15),
+          timeout_ms: z.number().int().positive().default(5000),
+          max_tabs: z.number().int().positive().default(80),
+          include_url_query: z.boolean().default(false),
+          allowlist: z.array(z.string()).default([]),
+          blocklist: z.array(z.string()).default([]),
+        })
+        .default({
+          enabled: true,
+          method: 'osascript',
+          refresh_on_collect: true,
+          background_interval_minutes: 15,
+          timeout_ms: 5000,
+          max_tabs: 80,
+          include_url_query: false,
+          allowlist: [],
+          blocklist: [],
+        }),
     }),
     apple_calendar_snapshot: enabled.extend({
       path: z.string().default('./data/snapshots/calendar/apple-today.json'),
