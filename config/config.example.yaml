@@ -181,6 +181,8 @@ sources:
 
   github:
     enabled: false
+    repositories: []
+    per_repo_limit: 20
 
   linear:
     enabled: false

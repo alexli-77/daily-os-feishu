@@ -12,7 +12,7 @@ export async function collectEvidence(config: AppConfig, date: string): Promise<
     collectVault(config),
     collectSnapshots(config),
     collectFeishu(config, date),
-    collectGitHub(config.sources.github.enabled),
+    collectGitHub(config),
     collectLinear(config),
   ]);
 

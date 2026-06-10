@@ -282,7 +282,10 @@ export const AppConfigSchema = z.object({
         limit: z.number().int().positive().default(80),
       }),
     }),
-    github: enabled,
+    github: enabled.extend({
+      repositories: z.array(z.string()).default([]),
+      per_repo_limit: z.number().int().positive().max(100).default(20),
+    }),
     linear: enabled.extend({
       query: z.string().default("assignee = me and state.type != 'completed'"),
       projects_allowlist: z.array(z.string()).default([]),
