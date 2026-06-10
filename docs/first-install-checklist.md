@@ -42,6 +42,10 @@ Edit only local ignored files:
 The local UI can edit the common config and `.env` values directly. Secret
 fields are saved locally and are not echoed back in the page.
 
+After installing the background service, the UI should be reachable at
+`http://127.0.0.1:14573`. If that port is occupied, run `npm run ui:open`; it
+opens the URL saved by the running service in `data/runtime/ui.json`.
+
 Use Setup -> Codex to configure the customer's Codex installation:
 
 - Click `Find Codex CLI` first.

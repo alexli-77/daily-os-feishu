@@ -11,6 +11,7 @@
     "dev": "tsx src/index.ts",
     "start": "tsx src/index.ts start",
     "ui": "tsx src/index.ts ui",
+    "ui:open": "tsx src/index.ts ui open",
     "setup": "tsx src/index.ts setup",
     "doctor": "tsx src/index.ts doctor",
     "plan": "tsx src/index.ts plan",
