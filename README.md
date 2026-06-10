@@ -317,6 +317,23 @@ Remote vault mode is optional for later versions. When enabled, it expects a vau
 - `GET /read?path=...`
 
 Local vault mode reads configured markdown files directly from `sources.vault.local_path`.
+It also scans Markdown notes under the configured Vault, skipping hidden/system
+folders such as `.obsidian`, `.git`, templates, logs, archived, done, and
+abandoned paths. The local scan produces a `vault_scan` evidence source with
+ranked candidates:
+
+- frontmatter fields such as `status`, `priority`, `due`, `deadline`,
+  `next_review`, and `trigger_condition`
+- open Markdown todos
+- notes modified recently
+- configured meta files such as todos, routing, and watch-list
+- matches against confirmed decision policy terms from the Daily OS memory
+  repository
+
+This means Vault evidence is not selected by recency alone. The collector
+prefers items that match explicit deadlines, priorities, active/watching status,
+open todos, or the user's confirmed decision policy. Workflow prompts still
+decide whether a candidate enters the main plan, follow-up, or background.
 
 The agent treats missing vault data as missing evidence. It does not write directly to your vault.
 

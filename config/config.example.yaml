@@ -112,6 +112,8 @@ sources:
       base_url_env: "VAULT_GATE_URL"
       token_env: "VAULT_GATE_TOKEN"
       scan:
+        # Used by both remote vault-gate scan and local Vault markdown scan.
+        # Local scan also ranks candidates against confirmed decision policy terms.
         enabled: true
         statuses: ["active", "watching", "considering"]
         due_within_days: 7
