@@ -12,7 +12,7 @@
 9. 缺失来源：说明哪些数据源缺失，导致我不能确认某些进展。
 
 规则：
-- Vault scan candidates must match an OKR, KR, deadline, or explicit priority before entering the main plan.
+- Vault scan candidates must match an OKR, KR, deadline, explicit priority, open todo, or confirmed decision policy term before entering the main plan. Use `vault_scan.reasons` and `matched_policy_terms` when explaining the choice.
 - Vault main-plan items are capped at two.
 - Todo/follow-up items from vault are capped at two.
 - If Feishu, calendar, GitHub, Linear, or vault data is missing, say so plainly.

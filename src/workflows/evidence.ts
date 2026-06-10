@@ -9,7 +9,7 @@ import type { Evidence } from './types.js';
 
 export async function collectEvidence(config: AppConfig, date: string): Promise<Evidence> {
   const [vault, snapshots, feishu, github, linear] = await Promise.all([
-    collectVault(config),
+    collectVault(config, date),
     collectSnapshots(config),
     collectFeishu(config, date),
     collectGitHub(config),
