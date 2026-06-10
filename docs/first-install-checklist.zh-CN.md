@@ -40,6 +40,9 @@ npm run ui
 本地 UI 可以直接编辑常用配置和 `.env` 值。密钥字段只会保存在本地，
 页面不会回显原文。
 
+安装后台服务后，UI 默认可以从 `http://127.0.0.1:14573` 打开。如果这个端口被占用，
+运行 `npm run ui:open`，它会打开后台服务保存到 `data/runtime/ui.json` 的实际 URL。
+
 在 Setup -> Codex 配置客户电脑上的 Codex：
 
 - 先点击 `Find Codex CLI`。

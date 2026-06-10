@@ -174,6 +174,12 @@ For day-to-day use, prefer `npm run start`. Use `npm run ui` only when you want
 the dashboard without starting the foreground scheduler or Feishu interaction
 service.
 
+When the background service is installed, the UI is available at the stable
+local address `http://127.0.0.1:14573` by default. If that port is already in
+use, Daily OS falls back to another local port and writes the actual URL to
+`data/runtime/ui.json`. Run `npm run ui:open` to open the currently running UI
+from that saved runtime URL.
+
 The Setup tab includes Codex configuration:
 
 - `Find Codex CLI`: searches the customer's local PATH and common install
@@ -252,8 +258,9 @@ allow/block filters.
 The Service buttons only manage the macOS background service. `Install` creates the
 `launchd` job that runs the local UI, scheduler, and Feishu realtime connection;
 `Uninstall` removes only that job. They do not install or remove the project
-itself. The launchd service uses a random local UI port to avoid colliding with
-a foreground setup window.
+itself. The launchd service uses the stable local UI port `14573` by default;
+if the port is occupied, the UI falls back to a random local port and records it
+in `data/runtime/ui.json`.
 
 `service.prevent_sleep.enabled=true` starts `caffeinate -i` while Daily OS is
 running. This prevents idle sleep, but macOS can still force sleep when a

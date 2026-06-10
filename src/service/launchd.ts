@@ -204,8 +204,6 @@ function buildPlist(repoRoot: string, scriptPath: string, logsDir: string): stri
     <string>${scriptPath}</string>
     <string>start</string>
     <string>--no-open</string>
-    <string>--port</string>
-    <string>0</string>
   </array>
   <key>RunAtLoad</key>
   <true/>

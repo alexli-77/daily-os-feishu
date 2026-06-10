@@ -10,7 +10,7 @@ import { ensureMemoryFiles } from './storage/memory.js';
 import { formatDoctor, runDoctor } from './cli/doctor.js';
 import { installLaunchAgent, runScheduler, uninstallLaunchAgent } from './service/launchd.js';
 import { pollFeishuFeedback } from './feedback/feishu-feedback.js';
-import { startUiServer } from './ui/server.js';
+import { readUiRuntimeUrl, startUiServer } from './ui/server.js';
 import { startFeishuInteraction } from './interaction/feishu-interaction.js';
 import { startDecisionOnboarding } from './decision/onboarding.js';
 import { ensureDecisionPolicyFiles } from './decision/policy.js';
@@ -36,6 +36,10 @@ async function main(): Promise<void> {
   if (command === 'help' || command === '--help' || command === '-h') usage(0);
 
   if (command === 'ui') {
+    if (subcommand === 'open') {
+      await openExistingUi();
+      return;
+    }
     await startUiServer({
       configPath: options.configPath,
       envPath: options.envPath,
@@ -143,6 +147,13 @@ async function main(): Promise<void> {
     default:
       usage(command === 'help' ? 0 : 1);
   }
+}
+
+async function openExistingUi(): Promise<void> {
+  const url = readUiRuntimeUrl() || `http://${process.env.DAILY_OS_UI_HOST || '127.0.0.1'}:${process.env.DAILY_OS_UI_PORT || '14573'}`;
+  const opened = await import('./utils/command.js').then(({ runCommand }) => runCommand('open', [url], { timeoutMs: 5000 }));
+  if (!opened.ok) throw new Error(`Could not open Daily OS UI at ${url}: ${opened.stderr || opened.stdout}`);
+  console.log(`Opened Daily OS UI: ${url}`);
 }
 
 async function startAll(options: CliOptions): Promise<void> {
@@ -308,7 +319,8 @@ Commands:
   chat [mode]        Analyze Feishu chat context. mode: manual | todo | review
   progress           Print today's progress candidates
   progress confirm   Confirm all current progress candidates into the daily ledger
-  ui                 Open a local setup and trigger dashboard
+  ui                 Start a local setup and trigger dashboard
+  ui open            Open the running Daily OS UI from the saved runtime URL
   plan [--no-send]   Run daily planning workflow now
   review [--no-send] Run daily review workflow now
   weekly [--no-send] Run weekly review workflow now

@@ -20,6 +20,7 @@ import { collectProgressCandidates, formatProgressCandidates } from '../progress
 import { analyzeChatContext, formatChatContextAnalysis } from '../chat/context-analysis.js';
 
 const SECRET_ENV_KEYS = new Set(['OPENAI_API_KEY', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'VAULT_GATE_TOKEN', 'LARK_APP_SECRET']);
+const UI_RUNTIME_PATH = './data/runtime/ui.json';
 const PLAIN_ENV_KEYS = [
   'FEISHU_CHAT_ID',
   'DAILY_OS_DECISION_CHAT_ID',
@@ -52,14 +53,12 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerC
     void handleRequest(request, response, options);
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(options.port, options.host, resolve);
-  });
+  await listenWithFallback(server, options);
 
   const address = server.address();
   const port = typeof address === 'object' && address ? address.port : options.port;
   const url = `http://${options.host === '0.0.0.0' ? '127.0.0.1' : options.host}:${port}`;
+  writeUiRuntime(url);
   console.log(`daily-os-feishu UI running at ${url}`);
   console.log('Press Ctrl+C to stop.');
 
@@ -79,6 +78,53 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerC
       });
     },
   };
+}
+
+export function readUiRuntimeUrl(): string | null {
+  const filePath = path.resolve(UI_RUNTIME_PATH);
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as { url?: unknown };
+    return typeof parsed.url === 'string' && parsed.url.trim() ? parsed.url : null;
+  } catch {
+    return null;
+  }
+}
+
+async function listenWithFallback(server: http.Server, options: UiServerOptions): Promise<void> {
+  try {
+    await listen(server, options.port, options.host);
+  } catch (error) {
+    if (!isAddressInUse(error) || options.port === 0) throw error;
+    console.warn(`daily-os-feishu UI port ${options.port} is already in use. Falling back to a random local port.`);
+    await listen(server, 0, options.host);
+  }
+}
+
+function listen(server: http.Server, port: number, host: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const onError = (error: Error): void => {
+      server.off('listening', onListening);
+      reject(error);
+    };
+    const onListening = (): void => {
+      server.off('error', onError);
+      resolve();
+    };
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(port, host);
+  });
+}
+
+function isAddressInUse(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && 'code' in error && (error as { code?: unknown }).code === 'EADDRINUSE');
+}
+
+function writeUiRuntime(url: string): void {
+  const filePath = path.resolve(UI_RUNTIME_PATH);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify({ url, pid: process.pid, updated_at: new Date().toISOString() }, null, 2), 'utf8');
 }
 
 async function handleRequest(request: http.IncomingMessage, response: http.ServerResponse, options: UiServerOptions): Promise<void> {
