@@ -970,6 +970,8 @@ const HTML = String.raw`<!doctype html>
                     <label for="secret-GITHUB_TOKEN">GitHub token</label>
                     <div class="secret-control"><input id="secret-GITHUB_TOKEN" type="password" autocomplete="new-password" /><button type="button" class="icon-button" data-toggle-secret="GITHUB_TOKEN" aria-label="Show GitHub token">&#128065;</button></div>
                   </div>
+                  <label>GitHub repositories<textarea id="github-repositories" rows="4" spellcheck="false" placeholder="owner/repo, one per line"></textarea></label>
+                  <label>Per repo limit<input id="github-per-repo-limit" type="number" min="1" max="100" /></label>
                   <p class="hint status-line" id="github-token-status"></p>
                 </div>
                 <div class="source-block">
@@ -1635,6 +1637,8 @@ function render() {
   config.sources.feishu.profiles = getFeishuProfilesForUi(config);
   renderFeishuProfiles(config.sources.feishu.profiles);
   checked('source-github', config.sources.github.enabled);
+  set('github-repositories', (config.sources.github.repositories || []).join('\n'));
+  set('github-per-repo-limit', config.sources.github.per_repo_limit || 20);
   checked('source-linear', config.sources.linear.enabled);
   set('linear-query', config.sources.linear.query || '');
   set('linear-projects-allowlist', (config.sources.linear.projects_allowlist || []).join('\n'));
@@ -1742,6 +1746,8 @@ async function saveAll() {
     next.sources.feishu.im_history = first.im_history;
   }
   next.sources.github.enabled = isChecked('source-github');
+  next.sources.github.repositories = parseLines(value('github-repositories'));
+  next.sources.github.per_repo_limit = Number(value('github-per-repo-limit') || 20);
   next.sources.linear.enabled = isChecked('source-linear');
   next.sources.linear.query = value('linear-query') || "assignee = me and state.type != 'completed'";
   next.sources.linear.projects_allowlist = parseLines(value('linear-projects-allowlist'));
