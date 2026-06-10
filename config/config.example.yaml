@@ -23,6 +23,12 @@ workflows:
     weekday: "SUN"
     time: "20:00"
 
+service:
+  prevent_sleep:
+    # Uses macOS `caffeinate -i` while `npm run start` or the launchd service is running.
+    # Closing a MacBook lid, especially on battery, can still force sleep.
+    enabled: false
+
 output:
   feishu:
     enabled: true

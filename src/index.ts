@@ -14,6 +14,7 @@ import { startUiServer } from './ui/server.js';
 import { startFeishuInteraction } from './interaction/feishu-interaction.js';
 import { startDecisionOnboarding } from './decision/onboarding.js';
 import { ensureDecisionPolicyFiles } from './decision/policy.js';
+import { startPreventSleep } from './service/prevent-sleep.js';
 import {
   appendConfirmedProgress,
   collectProgressCandidates,
@@ -152,6 +153,7 @@ async function startAll(options: CliOptions): Promise<void> {
 
   await runScheduler(config);
   console.log('daily-os-feishu scheduler 已启动。');
+  const sleepControls = startPreventSleep(config.service.prevent_sleep.enabled);
 
   let interactionControls: Awaited<ReturnType<typeof startFeishuInteraction>> | null = null;
   if (config.interaction.feishu.enabled) {
@@ -166,6 +168,7 @@ async function startAll(options: CliOptions): Promise<void> {
 
   await waitForShutdown(async () => {
     if (interactionControls) await interactionControls.stop();
+    await sleepControls.stop();
     await ui.stop();
   });
 }
@@ -296,9 +299,9 @@ Commands:
   plan [--no-send]   Run daily planning workflow now
   review [--no-send] Run daily review workflow now
   weekly [--no-send] Run weekly review workflow now
-  service install    Install macOS launchd scheduler
-  service uninstall  Remove macOS launchd scheduler
-  service run        Run scheduler in the foreground
+  service install    Install full macOS launchd background service
+  service uninstall  Remove macOS launchd background service
+  service run        Run scheduler-only compatibility mode in the foreground
   feedback poll      Poll Feishu for daily-os commands and feedback
   interaction feishu Run the Feishu websocket interaction layer
   onboarding start   Create or reuse the Feishu decision calibration chat
