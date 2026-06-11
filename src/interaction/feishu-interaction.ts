@@ -46,9 +46,11 @@ interface ActiveAgentRun {
 }
 
 type WorkflowCardCommand = {
-  command: 'details' | 'progress' | 'chat todo' | 'chat review' | 'confirm_todo' | 'revise_todo';
+  command: 'details' | 'progress' | 'chat todo' | 'chat review' | 'confirm_todo' | 'confirm_review' | 'revise_todo';
   detailId?: string;
 };
+
+const CARD_ACTION_DEDUPE_MS = 30_000;
 
 export async function startFeishuInteraction(config: AppConfig): Promise<FeishuInteractionControls> {
   const cfg = config.interaction.feishu;
@@ -84,6 +86,7 @@ export async function startFeishuInteraction(config: AppConfig): Promise<FeishuI
 
   const chatModes = new Map<string, ChatMode>();
   const activeAgentRuns = new Map<string, ActiveAgentRun>();
+  const recentCardActions = new Map<string, number>();
   const queue = new PendingQueue<NormalizedMessage>(cfg.debounce_ms, (scope, batch) => {
     queue.block(scope);
     void runBatch({ config, channel, batch, scope, chatModes, activeAgentRuns })
@@ -101,6 +104,10 @@ export async function startFeishuInteraction(config: AppConfig): Promise<FeishuI
       await intakeMessage({ config, channel, message, queue, chatModes, activeAgentRuns });
     },
     cardAction: (event) => {
+      if (!claimCardAction(recentCardActions, event)) {
+        console.log(`[interaction] skipped duplicate card action ${event.chatId}/${event.messageId}`);
+        return;
+      }
       void handleCardAction({ config, channel, event, queue, chatModes, activeAgentRuns }).catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`[interaction] card action failed ${event.chatId}/${event.messageId}: ${message}`);
@@ -502,6 +509,13 @@ async function handleWorkflowCardCommand(input: {
     console.log(`[interaction] handled ${input.event.chatId}; card-command=confirm_todo`);
     return;
   }
+  if (input.command.command === 'confirm_review') {
+    const date = todayInTimezone(input.config);
+    appendDailyMemory(input.config, 'daily_review', date, '用户确认今日复盘无异议。今天的完成项、暂缓项和后续动作可以按这版记录。');
+    await input.channel.send(input.event.chatId, { text: '收到，今日复盘已确认无异议。我会按这版记录今天的进展和未闭环事项。' }, { replyTo: input.event.messageId });
+    console.log(`[interaction] handled ${input.event.chatId}; card-command=confirm_review`);
+    return;
+  }
   if (input.command.command === 'revise_todo') {
     await input.channel.send(
       input.event.chatId,
@@ -708,11 +722,40 @@ function parseCardAction(value: unknown): WorkflowName | null {
 function parseWorkflowCardCommand(value: unknown): WorkflowCardCommand | null {
   if (!value || typeof value !== 'object') return null;
   const raw = (value as { daily_os_command?: unknown }).daily_os_command;
-  if (raw === 'details' || raw === 'progress' || raw === 'chat todo' || raw === 'chat review' || raw === 'confirm_todo' || raw === 'revise_todo') {
+  if (
+    raw === 'details' ||
+    raw === 'progress' ||
+    raw === 'chat todo' ||
+    raw === 'chat review' ||
+    raw === 'confirm_todo' ||
+    raw === 'confirm_review' ||
+    raw === 'revise_todo'
+  ) {
     const detailId = (value as { detail_id?: unknown }).detail_id;
     return { command: raw, ...(typeof detailId === 'string' && detailId ? { detailId } : {}) };
   }
   return null;
+}
+
+function claimCardAction(recent: Map<string, number>, event: CardActionEvent): boolean {
+  const now = Date.now();
+  for (const [key, expiresAt] of recent) {
+    if (expiresAt <= now) recent.delete(key);
+  }
+  const key = cardActionKey(event);
+  if (recent.has(key)) return false;
+  recent.set(key, now + CARD_ACTION_DEDUPE_MS);
+  return true;
+}
+
+function cardActionKey(event: CardActionEvent): string {
+  return [event.chatId, event.messageId, event.operator.openId, stableStringify(event.action.value)].join(':');
+}
+
+function stableStringify(value: unknown): string {
+  if (!value || typeof value !== 'object') return String(value);
+  const entries = Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right));
+  return JSON.stringify(Object.fromEntries(entries));
 }
 
 async function replyToMessage(channel: LarkChannel, message: NormalizedMessage, text: string, mode: 'markdown' | 'text'): Promise<void> {
