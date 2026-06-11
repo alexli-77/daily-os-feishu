@@ -375,6 +375,15 @@ interaction:
       sandbox: "read-only"
       include_memory: true
       include_evidence: false
+      context_pack:
+        enabled: true
+        include_latest_workflow: true
+        include_progress_ledger: true
+        include_decision_policy: true
+        include_evidence_summary: true
+        max_sources: 12
+        max_items_per_source: 4
+        max_chars_per_item: 900
       timeout_ms: 300000
     security:
       owner_open_id_env: "FEISHU_OWNER_OPEN_ID"
@@ -405,9 +414,15 @@ npm run interaction:feishu
 
 当 `interaction.feishu.agent_mode.enabled` 为 true 时，无法识别为 Daily OS 固定命令的消息，
 会作为自由文本输入交给 Codex。Prompt 会包含结构化 bridge context，例如 chat id、
-sender id、thread id、message id、scope id、当前 session metadata，以及可选的
-Daily OS memory/evidence context pack。本地 session catalog 会保存 Codex `thread_id`，
+sender id、thread id、message id、scope id、当前 session metadata、Daily OS memory，
+以及默认开启的精简 context pack。这个 context pack 会包含最近一次 workflow 摘要、
+今日 progress ledger、已确认决策规则、待确认规则候选、数据源健康状态和少量关键证据样本。
+原始 evidence 默认不传，只有设置 `agent_mode.include_evidence=true` 时才会传完整 evidence。
+本地 session catalog 会保存 Codex `thread_id`，
 同一个飞书 scope 里的后续消息可以继续同一段 Codex 对话。
+
+这一层的目标是让飞书 agent mode 更像助手，而不是无状态聊天机器人：它能参考当前计划/复盘，
+区分“确认的 / 暂缓的 / 新增的”，并说明哪些事情可以交给 Codex 做，哪些必须由用户本人判断或沟通。
 
 Agent mode 会回复一张持续更新的飞书运行卡片，而不是一次性文本。卡片会显示运行状态、
 最近的 Codex 进度、最终成功/失败/超时状态；运行中可以直接点 **停止**。最终卡片也能把
