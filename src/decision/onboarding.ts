@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { LarkChannel } from '@larksuiteoapi/node-sdk';
 import type { AppConfig } from '../config/schema.js';
-import { createFeishuSdkPrivateChat, feishuSdkStatus, sendFeishuSdkMessage } from '../connectors/feishu-sdk.js';
+import { createFeishuSdkPrivateChat, feishuSdkStatus, sendFeishuSdkCard } from '../connectors/feishu-sdk.js';
 import { runCommand } from '../utils/command.js';
 import { decisionCalibrationPrompt, ensureDecisionPolicyFiles } from './policy.js';
 
@@ -12,7 +12,19 @@ export interface DecisionOnboardingResult {
   created: boolean;
   ownerOpenId: string;
   welcomeText: string;
+  welcomeSent: boolean;
 }
+
+interface OnboardingState {
+  chatId?: string;
+  chatName?: string;
+  ownerOpenId?: string;
+  createdAt?: string;
+  welcomeMessageSentAt?: string;
+  welcomeMessageSignature?: string;
+}
+
+const WELCOME_RESEND_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 export async function startDecisionOnboarding(
   config: AppConfig,
@@ -33,8 +45,8 @@ export async function startDecisionOnboarding(
   if (existingChatId) {
     process.env[chatEnv] = existingChatId;
     if (options.envPath) writeEnvValue(options.envPath, chatEnv, existingChatId);
-    await sendWelcomeMessage(existingChatId, welcomeText, options.channel);
-    return { chatId: existingChatId, chatName, created: false, ownerOpenId, welcomeText };
+    const welcomeSent = await sendWelcomeMessageIfDue(config, existingChatId, welcomeText, options.channel);
+    return { chatId: existingChatId, chatName, created: false, ownerOpenId, welcomeText, welcomeSent };
   }
 
   const chatId = options.channel
@@ -51,8 +63,8 @@ export async function startDecisionOnboarding(
   writeOnboardingState(config, { chatId, chatName, ownerOpenId, createdAt: new Date().toISOString() });
   if (options.envPath) writeEnvValue(options.envPath, chatEnv, chatId);
 
-  await sendWelcomeMessage(chatId, welcomeText, options.channel);
-  return { chatId, chatName, created: true, ownerOpenId, welcomeText };
+  const welcomeSent = await sendWelcomeMessageIfDue(config, chatId, welcomeText, options.channel, { force: true });
+  return { chatId, chatName, created: true, ownerOpenId, welcomeText, welcomeSent };
 }
 
 export function decisionOnboardingChatId(config: AppConfig): string {
@@ -65,26 +77,32 @@ export function isDecisionCalibrationChat(config: AppConfig, chatId: string): bo
   return Boolean(expected && expected === chatId.trim().toLowerCase());
 }
 
-function readOnboardingState(config: AppConfig): { chatId?: string } {
+function readOnboardingState(config: AppConfig): OnboardingState {
   const statePath = path.resolve(config.decision.onboarding.state_path);
   if (!fs.existsSync(statePath)) return {};
   try {
     const parsed = JSON.parse(fs.readFileSync(statePath, 'utf8')) as unknown;
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    const chatId = (parsed as { chatId?: unknown }).chatId;
-    return typeof chatId === 'string' && chatId.trim() ? { chatId: chatId.trim() } : {};
+    const state = parsed as Record<string, unknown>;
+    return {
+      ...state,
+      ...(typeof state.chatId === 'string' && state.chatId.trim() ? { chatId: state.chatId.trim() } : {}),
+      ...(typeof state.chatName === 'string' ? { chatName: state.chatName } : {}),
+      ...(typeof state.ownerOpenId === 'string' ? { ownerOpenId: state.ownerOpenId } : {}),
+      ...(typeof state.createdAt === 'string' ? { createdAt: state.createdAt } : {}),
+      ...(typeof state.welcomeMessageSentAt === 'string' ? { welcomeMessageSentAt: state.welcomeMessageSentAt } : {}),
+      ...(typeof state.welcomeMessageSignature === 'string' ? { welcomeMessageSignature: state.welcomeMessageSignature } : {}),
+    };
   } catch {
     return {};
   }
 }
 
-function writeOnboardingState(
-  config: AppConfig,
-  state: { chatId: string; chatName: string; ownerOpenId: string; createdAt: string },
-): void {
+function writeOnboardingState(config: AppConfig, state: OnboardingState): void {
   const statePath = path.resolve(config.decision.onboarding.state_path);
   fs.mkdirSync(path.dirname(statePath), { recursive: true });
-  fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  const current = readOnboardingState(config);
+  fs.writeFileSync(statePath, `${JSON.stringify({ ...current, ...state }, null, 2)}\n`, 'utf8');
 }
 
 export function onboardingWelcomeText(config: AppConfig): string {
@@ -156,13 +174,49 @@ async function createDecisionChatWithLarkCli(name: string, ownerOpenId: string):
   return chatId;
 }
 
+async function sendWelcomeMessageIfDue(
+  config: AppConfig,
+  chatId: string,
+  welcomeText: string,
+  channel?: LarkChannel,
+  options: { force?: boolean } = {},
+): Promise<boolean> {
+  const signature = welcomeSignature(config, welcomeText);
+  const state = readOnboardingState(config);
+  if (!options.force && state.welcomeMessageSignature === signature && recentlySent(state.welcomeMessageSentAt)) {
+    return false;
+  }
+
+  const lockPath = `${path.resolve(config.decision.onboarding.state_path)}.welcome.lock`;
+  const lock = claimWelcomeLock(lockPath);
+  if (!lock) return false;
+
+  try {
+    const latest = readOnboardingState(config);
+    if (!options.force && latest.welcomeMessageSignature === signature && recentlySent(latest.welcomeMessageSentAt)) {
+      return false;
+    }
+    await sendWelcomeMessage(chatId, welcomeText, channel);
+    writeOnboardingState(config, {
+      chatId,
+      chatName: config.decision.onboarding.chat_name,
+      welcomeMessageSentAt: new Date().toISOString(),
+      welcomeMessageSignature: signature,
+    });
+    return true;
+  } finally {
+    releaseWelcomeLock(lockPath, lock);
+  }
+}
+
 async function sendWelcomeMessage(chatId: string, welcomeText: string, channel?: LarkChannel): Promise<void> {
+  const card = onboardingWelcomeCard(welcomeText);
   if (channel) {
-    await channel.send(chatId, { markdown: welcomeText });
+    await channel.send(chatId, { card });
     return;
   }
   if (feishuSdkStatus().ok) {
-    await sendFeishuSdkMessage({ chatId, text: welcomeText, mode: 'markdown' });
+    await sendFeishuSdkCard({ chatId, card });
     return;
   }
 
@@ -173,6 +227,62 @@ async function sendWelcomeMessage(chatId: string, welcomeText: string, channel?:
   );
   if (!result.ok) {
     throw new Error(`决策校准群已准备好，但发送欢迎消息失败：${(result.stderr || result.stdout).slice(0, 1000)}`);
+  }
+}
+
+function onboardingWelcomeCard(welcomeText: string): object {
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      template: 'blue',
+      title: { tag: 'plain_text', content: 'Daily OS 决策校准' },
+    },
+    elements: [
+      {
+        tag: 'markdown',
+        content: welcomeText,
+      },
+      {
+        tag: 'note',
+        elements: [{ tag: 'plain_text', content: '直接在这个群里自然回复，我会把稳定偏好整理成待确认规则。' }],
+      },
+    ],
+  };
+}
+
+function welcomeSignature(config: AppConfig, welcomeText: string): string {
+  return `${config.decision.onboarding.chat_name}:${welcomeText.length}:${welcomeText.slice(0, 80)}`;
+}
+
+function recentlySent(value: string | undefined): boolean {
+  if (!value) return false;
+  const timestamp = Date.parse(value);
+  return !Number.isNaN(timestamp) && Date.now() - timestamp < WELCOME_RESEND_INTERVAL_MS;
+}
+
+function claimWelcomeLock(lockPath: string): number | null {
+  try {
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    return fs.openSync(lockPath, 'wx');
+  } catch {
+    try {
+      const stat = fs.statSync(lockPath);
+      if (Date.now() - stat.mtimeMs > 60_000) {
+        fs.rmSync(lockPath, { force: true });
+        return fs.openSync(lockPath, 'wx');
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+}
+
+function releaseWelcomeLock(lockPath: string, fd: number): void {
+  try {
+    fs.closeSync(fd);
+  } finally {
+    fs.rmSync(lockPath, { force: true });
   }
 }
 

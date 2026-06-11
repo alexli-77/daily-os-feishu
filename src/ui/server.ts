@@ -327,7 +327,7 @@ async function runActionInner(options: UiServerOptions, request: Record<string, 
         `名称：${result.chatName}`,
         `群 ID：${result.chatId}`,
         '',
-        '已发送欢迎消息。请到这个飞书群里继续校准决策规则。',
+        result.welcomeSent ? '已发送欢迎卡片。请到这个飞书群里继续校准决策规则。' : '欢迎卡片 24 小时内已经发送过，本次没有重复发送。',
       ].join('\n'),
       state: await buildState(options),
     };
