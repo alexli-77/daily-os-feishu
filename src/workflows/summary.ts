@@ -2,6 +2,8 @@ import type { WorkflowName } from '../config/schema.js';
 
 const MAX_SUMMARY_CHARS = 1800;
 const MAX_DETAIL_CHARS = 7000;
+const MAX_ROW_TITLE_CHARS = 38;
+const MAX_ROW_GOAL_CHARS = 30;
 
 export function formatWorkflowSummaryForFeishu(workflow: WorkflowName, date: string, content: string): string {
   const clean = normalize(content);
@@ -17,7 +19,7 @@ export function formatWorkflowSummaryForFeishu(workflow: WorkflowName, date: str
     actionHint(workflow),
     closingLine(workflow),
   ];
-  return truncate(lines.join('\n'), MAX_SUMMARY_CHARS);
+  return trimSummary(lines.join('\n'), MAX_SUMMARY_CHARS);
 }
 
 export function formatLatestWorkflowDetails(input: { workflow: WorkflowName; date: string; generated_at: string; content: string }): string {
@@ -135,26 +137,57 @@ function ownerFor(item: string, codexItems: string[], userItems: string[]): stri
 }
 
 function compactItem(item: string): string {
-  const clean = stripMarkdown(item)
-    .replace(/^(MIT|P[0-3]|优先级[:：]?)\s*/i, '')
-    .replace(/^(确认的|暂缓的|新增的)[:：\s]*/, '')
-    .replace(/^(?:Codex|我可以先|我可以|我|您|用户)\s*(?:可以先|可以|需要|先)?\s*/, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .split(/(?:，|。|；|;)\s*(?:完成标准|产物|预期产物|目标|今天需要|因为|依据|原因)(?:是|为|：|:)?/)[0]
-    .trim();
-  return truncate(
-    clean,
-    48,
+  const clean = completePhrase(
+    removeEvidenceTail(
+      stripMarkdown(item)
+        .replace(/^(MIT|P[0-3]|优先级[:：]?)\s*/i, '')
+        .replace(/^(确认的|暂缓的|新增的)[:：\s]*/, '')
+        .replace(/^(完成|已推进|未闭环|下一步|P[0-3])\s*[|｜]\s*(?:已推进|您|Codex)?\s*[:：]\s*/, '')
+        .replace(/^(?:Codex|我可以先|我可以|我|您|用户)\s*(?:可以先|可以|需要|先)?\s*/, '')
+        .replace(/^今天最大的进展是/, '')
+        .replace(/\s+/g, ' ')
+        .trim(),
+    ),
+    MAX_ROW_TITLE_CHARS,
   );
+  return clean || '需要确认这一项';
 }
 
 function goalFromItem(item: string, fallback: string): string {
   const clean = stripMarkdown(item).replace(/\s+/g, ' ').trim();
   const match =
     clean.match(/(?:完成标准|预期产物|目标|结果|产物)(?:是|为|：|:)\s*([^。；;]+)/) ||
-    clean.match(/(?:确保|形成|产出|完成|确认|决定)([^。；;]{6,60})/);
-  return truncate(match?.[1]?.trim() || fallback, 30);
+    clean.match(/(?:确保|形成|产出|完成|确认|决定)([^。；;，,]{6,60})/);
+  return completePhrase(match?.[1]?.trim() || fallback, MAX_ROW_GOAL_CHARS);
+}
+
+function removeEvidenceTail(value: string): string {
+  return value
+    .split(/(?:证据来自|证据为|依据[:：]?|来源[:：]?|Feishu IM|Linear |local files|Chrome snapshot|GitHub |Vault )/i)[0]
+    .split(/(?:。|；|;)\s*(?:证据|依据|来源|Linear|Feishu|Vault|GitHub|Chrome)/i)[0]
+    .split(/(?:，|,)\s*(?:证据|依据|来源|Linear|Feishu|Vault|GitHub|Chrome|但|不过)/i)[0]
+    .trim();
+}
+
+function completePhrase(value: string, max: number): string {
+  const clean = value
+    .replace(/^(MIT|P[0-3]|优先级[:：]?)\s*/i, '')
+    .replace(/^(确认的|暂缓的|新增的)[:：\s]*/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^[「“"']+|[」”"']+$/g, '');
+  if (clean.length <= max) return clean;
+  const explicitTask = clean.match(/(?:LEO|CUTTO|POLY|MOOSE|SWAT|PR|#)-?\d*[\w-]*\s*[^，。；;]{0,24}/i)?.[0]?.trim();
+  if (explicitTask && explicitTask.length <= max) return tidyPhrase(explicitTask);
+  for (const delimiter of ['。', '；', ';', '，', ',', '：', ':', '（', '(']) {
+    const head = clean.split(delimiter)[0]?.trim();
+    if (head && head.length >= 6 && head.length <= max) return tidyPhrase(head);
+  }
+  return tidyPhrase(clean.slice(0, max).replace(/[，,、：:｜|/\\\s-]+$/u, '').trim());
+}
+
+function tidyPhrase(value: string): string {
+  return value.replace(/^[「“"']+|[」”"']+$/g, '').trim();
 }
 
 function actionHint(workflow: WorkflowName): string {
@@ -205,14 +238,14 @@ function extractBullets(text: string): string[] {
     .filter((line) => /^[-*]\s+|^\d+[.)、]\s+/.test(line))
     .map((line) => line.replace(/^[-*]\s+|^\d+[.)、]\s+/, '').trim())
     .filter((line) => line.length >= 8)
-    .map((line) => truncate(line, 180));
+    .map((line) => completePhrase(line, 160));
   if (bullets.length > 0) return bullets;
   return text
     .split(/[。！？]\s*/)
     .map((line) => stripMarkdown(line).trim())
     .filter((line) => line.length >= 12)
     .slice(0, 2)
-    .map((line) => truncate(line, 180));
+    .map((line) => completePhrase(line, 160));
 }
 
 function sentencePreview(content: string, max: number): string {
@@ -222,7 +255,7 @@ function sentencePreview(content: string, max: number): string {
     .filter(Boolean)
     .join(' ');
   const firstSentence = stripped.match(/^.{20,}?[。！？.!?]/)?.[0] || stripped;
-  return truncate(firstSentence, max);
+  return completePhrase(firstSentence, max);
 }
 
 function normalize(content: string): string {
@@ -282,4 +315,17 @@ function workflowLabel(workflow: WorkflowName): string {
 
 function truncate(value: string, max: number): string {
   return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+}
+
+function trimSummary(value: string, max: number): string {
+  if (value.length <= max) return value;
+  const lines = value.split('\n');
+  const kept: string[] = [];
+  let length = 0;
+  for (const line of lines) {
+    if (length + line.length + 1 > max - 24) break;
+    kept.push(line);
+    length += line.length + 1;
+  }
+  return [...kept, '', '更多内容请点「看详情」。'].join('\n').trim();
 }
