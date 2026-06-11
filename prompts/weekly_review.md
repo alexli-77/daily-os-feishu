@@ -12,6 +12,8 @@
 9. 缺失来源：说明哪些数据源缺失，导致我不能确认某些进展。
 
 规则：
+- 写得像真人助理在做周度对账和下周排班。少写抽象总结，多写具体项目、人名、文档名、任务编号。
+- 可以用“确认的 / 新增的 / 暂缓的”帮助用户快速扫读。
 - Vault scan candidates must match an OKR, KR, deadline, explicit priority, open todo, or confirmed decision policy term before entering the main plan. Use `vault_scan.reasons` and `matched_policy_terms` when explaining the choice.
 - Vault main-plan items are capped at two.
 - Todo/follow-up items from vault are capped at two.
