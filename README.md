@@ -460,6 +460,15 @@ interaction:
       sandbox: "read-only"
       include_memory: true
       include_evidence: false
+      context_pack:
+        enabled: true
+        include_latest_workflow: true
+        include_progress_ledger: true
+        include_decision_policy: true
+        include_evidence_summary: true
+        max_sources: 12
+        max_items_per_source: 4
+        max_chars_per_item: 900
       timeout_ms: 300000
     security:
       owner_open_id_env: "FEISHU_OWNER_OPEN_ID"
@@ -493,9 +502,17 @@ Supported messages are the same as feedback polling:
 When `interaction.feishu.agent_mode.enabled` is true, messages that are not
 recognized Daily OS commands are routed to Codex as free-form agent input. The
 prompt includes structured bridge context such as chat id, sender id, thread id,
-message ids, scope id, active session metadata, and optional Daily OS
-memory/evidence packs. The local session catalog stores the Codex `thread_id`
+message ids, scope id, active session metadata, Daily OS memory, and a compact
+context pack. The context pack includes the latest workflow summary, today's
+progress ledger, confirmed decision policy, pending policy candidates, source
+health, and short evidence samples. Raw evidence stays off by default unless
+`agent_mode.include_evidence=true`. The local session catalog stores the Codex `thread_id`
 so later messages in the same Feishu scope can resume the conversation.
+
+This is the piece that lets Feishu agent mode answer like an assistant instead
+of a stateless chat bot: it can refer to the current plan/review, separate
+confirmed, paused, and new items, and suggest what Codex can do versus what the
+user must decide personally.
 
 Agent mode replies with an updating Feishu run card instead of a one-shot
 message. The card shows the running state, recent Codex progress events, final

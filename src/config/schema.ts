@@ -96,6 +96,27 @@ export const AppConfigSchema = z.object({
             sandbox: z.enum(['read-only', 'workspace-write', 'danger-full-access']).default('read-only'),
             include_memory: z.boolean().default(true),
             include_evidence: z.boolean().default(false),
+            context_pack: z
+              .object({
+                enabled: z.boolean().default(true),
+                include_latest_workflow: z.boolean().default(true),
+                include_progress_ledger: z.boolean().default(true),
+                include_decision_policy: z.boolean().default(true),
+                include_evidence_summary: z.boolean().default(true),
+                max_sources: z.number().int().positive().max(30).default(12),
+                max_items_per_source: z.number().int().positive().max(20).default(4),
+                max_chars_per_item: z.number().int().positive().max(4000).default(900),
+              })
+              .default({
+                enabled: true,
+                include_latest_workflow: true,
+                include_progress_ledger: true,
+                include_decision_policy: true,
+                include_evidence_summary: true,
+                max_sources: 12,
+                max_items_per_source: 4,
+                max_chars_per_item: 900,
+              }),
             timeout_ms: z.number().int().positive().default(300000),
           })
           .default({
@@ -104,6 +125,16 @@ export const AppConfigSchema = z.object({
             sandbox: 'read-only',
             include_memory: true,
             include_evidence: false,
+            context_pack: {
+              enabled: true,
+              include_latest_workflow: true,
+              include_progress_ledger: true,
+              include_decision_policy: true,
+              include_evidence_summary: true,
+              max_sources: 12,
+              max_items_per_source: 4,
+              max_chars_per_item: 900,
+            },
             timeout_ms: 300000,
           }),
         security: z
@@ -139,6 +170,16 @@ export const AppConfigSchema = z.object({
           sandbox: 'read-only',
           include_memory: true,
           include_evidence: false,
+          context_pack: {
+            enabled: true,
+            include_latest_workflow: true,
+            include_progress_ledger: true,
+            include_decision_policy: true,
+            include_evidence_summary: true,
+            max_sources: 12,
+            max_items_per_source: 4,
+            max_chars_per_item: 900,
+          },
           timeout_ms: 300000,
         },
         security: {

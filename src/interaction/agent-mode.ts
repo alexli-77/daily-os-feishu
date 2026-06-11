@@ -6,6 +6,7 @@ import type { AppConfig } from '../config/schema.js';
 import { collectEvidence } from '../workflows/evidence.js';
 import { todayInTimezone } from '../utils/date.js';
 import { loadMemory } from '../storage/memory.js';
+import { buildFeishuAgentContextPack } from './context-pack.js';
 import type { FeishuAccessDecision } from './access-policy.js';
 import type { FeishuControlEffect } from './access-policy.js';
 import type { FeishuSessionRecord } from './session-catalog.js';
@@ -178,6 +179,9 @@ async function buildFeishuAgentPrompt(input: FeishuAgentModeInput): Promise<stri
       '不要泄露 token、密钥、完整本地隐私路径或隐藏推理。',
       '如果用户要求超出当前权限，解释缺少的配置或权限，不要假装已经执行。',
       '如果你完成了可以由 Codex 代做的工作，简短说明结果、文件或下一步。',
+      '当 daily_os_context 里有 context_pack 时，把它当成当前 Daily OS 助手工作台：先看最新 workflow、progress ledger、decision policy 和 evidence summary。',
+      '回答计划/复盘/任务优先级问题时，用“确认的 / 暂缓的 / 新增的”组织，不要输出原始证据流水账。',
+      '涉及分工时明确写出“Codex 可以做”和“需要用户本人做”。',
     ]),
     context ? section('daily_os_context', context) : '',
     section('user_input', { text: input.text }),
@@ -189,8 +193,9 @@ async function buildFeishuAgentPrompt(input: FeishuAgentModeInput): Promise<stri
 async function buildOptionalContext(input: FeishuAgentModeInput): Promise<unknown> {
   const agent = input.config.interaction.feishu.agent_mode;
   const context: Record<string, unknown> = {};
+  if (agent.context_pack.enabled) context.context_pack = await buildFeishuAgentContextPack(input.config);
   if (agent.include_memory) context.memory = loadMemory(input.config);
-  if (agent.include_evidence) context.evidence = await buildEvidenceContext(input.config);
+  if (agent.include_evidence) context.raw_evidence = await buildEvidenceContext(input.config);
   return Object.keys(context).length > 0 ? context : null;
 }
 

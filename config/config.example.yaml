@@ -60,7 +60,18 @@ interaction:
       workdir: "" # Empty uses the current project root. Set a trusted workspace before enabling write-capable modes.
       sandbox: "read-only" # read-only | workspace-write | danger-full-access
       include_memory: true
+      # include_evidence=false keeps raw evidence out of the Codex prompt.
+      # context_pack below still passes a compact, decision-ready evidence summary.
       include_evidence: false
+      context_pack:
+        enabled: true
+        include_latest_workflow: true
+        include_progress_ledger: true
+        include_decision_policy: true
+        include_evidence_summary: true
+        max_sources: 12
+        max_items_per_source: 4
+        max_chars_per_item: 900
       timeout_ms: 300000
     security:
       # Safe default: interaction messages are denied until one owner/user/chat rule is configured.
