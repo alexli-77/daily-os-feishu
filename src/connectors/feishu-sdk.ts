@@ -147,6 +147,9 @@ function workflowActions(workflow: WorkflowName, options?: FeishuSdkMessageOptio
     actions.push(cardButton('我要调整', { daily_os_command: 'revise_todo' }, 'default'));
     actions.push(cardButton('今晚复盘', { daily_os_action: 'daily_review' }, 'default'));
   }
+  if (workflow === 'daily_review') {
+    actions.push(cardButton('无异议，确认复盘', { daily_os_command: 'confirm_review' }, 'default'));
+  }
   actions.push(cardButton('重排一次', { daily_os_action: workflow }, 'default'));
   return actions;
 }
