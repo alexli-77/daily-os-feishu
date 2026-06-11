@@ -133,7 +133,7 @@ function workflowCard(text: string, options?: FeishuSdkMessageOptions): object {
         ? [
             { tag: 'hr' },
             { tag: 'action', actions },
-            { tag: 'note', elements: [{ tag: 'plain_text', content: '如果按钮不可用，请直接回复 daily-os details。' }] },
+            { tag: 'note', elements: [{ tag: 'plain_text', content: '想看原因点详情；想改安排点调整；按钮不可用时直接回复 daily-os details。' }] },
           ]
         : []),
     ],
@@ -141,13 +141,13 @@ function workflowCard(text: string, options?: FeishuSdkMessageOptions): object {
 }
 
 function workflowActions(workflow: WorkflowName, options?: FeishuSdkMessageOptions): object[] {
-  const actions: object[] = [cardButton('展开完整内容', { daily_os_command: 'details', ...(options?.detailId ? { detail_id: options.detailId } : {}) }, 'primary')];
+  const actions: object[] = [cardButton('看详情', { daily_os_command: 'details', ...(options?.detailId ? { detail_id: options.detailId } : {}) }, 'primary')];
   if (workflow === 'daily_plan') {
-    actions.push(cardButton('确认今日安排', { daily_os_command: 'confirm_todo' }, 'default'));
+    actions.push(cardButton('就按这个来', { daily_os_command: 'confirm_todo' }, 'default'));
     actions.push(cardButton('我要调整', { daily_os_command: 'revise_todo' }, 'default'));
-    actions.push(cardButton('生成今日复盘', { daily_os_action: 'daily_review' }, 'default'));
+    actions.push(cardButton('今晚复盘', { daily_os_action: 'daily_review' }, 'default'));
   }
-  actions.push(cardButton('重新生成', { daily_os_action: workflow }, 'default'));
+  actions.push(cardButton('重排一次', { daily_os_action: workflow }, 'default'));
   return actions;
 }
 
@@ -161,9 +161,9 @@ function cardButton(label: string, value: Record<string, string>, type: 'primary
 }
 
 function cardTitle(workflow?: WorkflowName): string {
-  if (workflow === 'daily_plan') return '老板，今日安排已整理';
-  if (workflow === 'daily_review') return '老板，今日复盘已整理';
-  if (workflow === 'weekly_review') return '老板，周复盘已整理';
+  if (workflow === 'daily_plan') return '今日安排';
+  if (workflow === 'daily_review') return '今日复盘';
+  if (workflow === 'weekly_review') return '本周复盘';
   return 'Daily OS';
 }
 
