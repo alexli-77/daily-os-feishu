@@ -253,6 +253,77 @@ Platform credentials:
 - `Calendar`, `Tasks`, `Docs`, `IM history`: source switches. `Calendar` and `Tasks` use the selected `Access identity`; `IM history` also needs the Chat ID env value.
 - Advanced local settings: `Local source key` controls evidence names, and `Chat ID env var` names the `.env` variable containing a Feishu `Chat ID`. Most users can keep both defaults.
 
+### Feishu Account and Permission Model
+
+Daily OS supports both personal Feishu workspaces and enterprise Feishu
+tenants. The local configuration model is the same in both cases: Daily OS keeps
+account secrets in `.env`, stores source settings in `config/config.yaml`, and
+uses the identity you select on each Feishu source profile.
+
+For a personal workspace, the simplest setup is usually:
+
+- use `Auto configure from lark-cli` after `lark-cli auth login`;
+- set profile `identity` to `user` for calendar, tasks, docs, and IM history;
+- add `FEISHU_CHAT_ID` only when sending output, polling feedback, or collecting
+  IM history from a specific chat;
+- keep `LARK_APP_ID` and `LARK_APP_SECRET` empty unless SDK output or the
+  websocket interaction layer is enabled.
+
+For an enterprise tenant, an admin may need to approve app scopes before the
+same setup works. The app can still use a user login through `lark-cli`, but the
+tenant controls whether the user token can read calendar, tasks, docs, or
+messages. If the bot identity is used, the bot must be installed in the target
+chat and the Feishu app must have the matching bot or app scopes.
+
+Use this matrix when deciding which permission path to configure:
+
+| Capability | Recommended identity | Required local value | Feishu permission notes |
+| --- | --- | --- | --- |
+| Workflow output through SDK | `bot` | `LARK_APP_ID`, `LARK_APP_SECRET`, `FEISHU_CHAT_ID` | Bot must be able to send messages to the target chat. |
+| Workflow output through lark-cli fallback | `user` or `bot` | `FEISHU_CHAT_ID`, authenticated `lark-cli` | Uses the locally logged-in `lark-cli` identity. |
+| Calendar source | `user` | authenticated `lark-cli` | User token needs calendar read scope approved by the tenant. |
+| Task source | `user` | authenticated `lark-cli` | User token needs task/tasklist read scope approved by the tenant. |
+| Docs source | `user` | docs URLs/tokens in the profile | User must have document access; a chat ID is not used for document reads. |
+| IM history source | `user` for personal/private use; `bot` only when the bot is installed and scoped | chat ID env value such as `FEISHU_CHAT_ID` | Tenant must approve message read scopes. Use narrow chat allowlists where possible. |
+| Websocket interaction layer | `bot` receives events, user/admin allowlists gate actions | `LARK_APP_ID`, `LARK_APP_SECRET`, owner/admin open IDs | Configure user/chat allowlists before enabling remote commands. |
+| Decision calibration group creation | `bot` | `LARK_APP_ID`, `LARK_APP_SECRET`, owner open ID | Feishu app needs `im:chat` and message-send permission. |
+
+When a capability fails in an enterprise tenant, first check `lark-cli auth
+status` and the UI **Run Checks** output. If the local login is present but a
+source still fails, the missing piece is usually a tenant-approved scope or the
+bot not being installed in the target chat. Daily OS treats those as local setup
+issues; it does not broaden scopes automatically.
+
+Recommended diagnostics:
+
+```bash
+lark-cli auth status
+lark-cli config show
+lark-cli im +chat-list --as user --types group,p2p --format json
+```
+
+Use `lark-cli auth status` to confirm which identities are available and which
+scopes were granted. Use `lark-cli config show` to confirm the local App ID.
+Use the chat-list command only when a feature needs a chat ID, then copy the
+target `oc_xxx` value into the configured chat ID env var.
+
+Doctor checks should distinguish these cases in user-facing copy:
+
+- Missing `lark-cli`: "Install and log in to lark-cli, or disable Feishu source
+  collection and lark-cli fallback."
+- Missing user login: "Run `lark-cli auth login` for user-authorized calendar,
+  tasks, docs, or IM history."
+- Missing bot credentials: "Set `LARK_APP_ID` and `LARK_APP_SECRET` before using
+  SDK output, websocket interaction, or decision chat creation."
+- Missing chat ID: "Set `FEISHU_CHAT_ID` only for output, feedback polling, or
+  IM history sources that read a specific chat."
+- Missing tenant scope: "Ask the Feishu tenant admin to approve the required
+  scope, then re-authenticate lark-cli."
+- Bot not installed in chat: "Install the bot in the target chat or switch the
+  profile identity to `user` when reading user-accessible sources."
+- Cross-tenant access failure: "Use a Feishu app and lark-cli login from the
+  same tenant as the target chat or document."
+
 Multiple Feishu source profiles share the same `App ID` and `App Secret` in this
 version. If you need different Feishu apps or tenants, run a separate local app
 config for now.
