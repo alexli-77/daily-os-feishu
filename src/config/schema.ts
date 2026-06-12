@@ -257,6 +257,25 @@ export const AppConfigSchema = z.object({
       max_messages: 80,
       max_suggestions: 8,
     }),
+  background_suggestions: z
+    .object({
+      enabled: z.boolean().default(false),
+      mode: z.enum(['manual', 'todo', 'review']).default('review'),
+      interval_minutes: z.number().int().positive().default(120),
+      min_confidence: z.enum(['low', 'medium', 'high']).default('medium'),
+      send_to_feishu: z.boolean().default(true),
+      send_on_change_only: z.boolean().default(true),
+      state_path: z.string().default('./data/memory/background-suggestions-state.json'),
+    })
+    .default({
+      enabled: false,
+      mode: 'review',
+      interval_minutes: 120,
+      min_confidence: 'medium',
+      send_to_feishu: true,
+      send_on_change_only: true,
+      state_path: './data/memory/background-suggestions-state.json',
+    }),
   sources: z.object({
     vault: enabled.extend({
       provider: z.enum(['remote', 'local']).default('remote'),

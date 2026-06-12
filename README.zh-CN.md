@@ -55,9 +55,9 @@ npm run start
 
 UI 中保存的 source、workflow、security、agent mode 和 prompt 相关配置，会在下一次
 scheduler tick 或下一条飞书消息/卡片回调时重新读取。也就是说，修改数据源并保存后，
-新的计划、复盘、进展确认和飞书命令会使用最新配置。启动型开关仍然需要重启，例如：
-从关闭改为开启 Feishu interaction websocket、开启/关闭防睡眠服务，或调整后台服务本身的
-生命周期。
+新的计划、复盘、进展确认、后台建议和飞书命令会使用最新配置。启动型开关仍然需要重启，
+例如：从关闭改为开启 Feishu interaction websocket、开启/关闭防睡眠服务，或调整后台服务
+本身的生命周期。
 如果 Mac 进入睡眠，本地进程和飞书长连接也会暂停；醒来后，scheduler 会在 3 小时窗口内补跑错过的任务。
 
 检查环境：
@@ -111,6 +111,15 @@ daily-os chat review
 推荐只配置 `chat_analysis.default_mode`、`chat_analysis.max_messages` 和
 `chat_analysis.max_suggestions`。Feishu source profile 里的 `im_history.limit`
 建议不小于 `chat_analysis.max_messages`。
+
+### 自动后台建议
+
+设置 `background_suggestions.enabled=true` 后，scheduler 会定期在后台运行聊天上下文分析，
+不用打开 UI。发现新建议时可以发送一条压缩版飞书摘要，也可以只更新本地运行状态。
+
+UI 的 Service 面板会显示上次运行时间、下次运行时间、最近错误、已检查消息数和建议数量。
+状态文件只保存运行元数据、数量、错误和建议哈希签名；不会保存建议正文、证据、源消息、
+响应正文或密钥。
 
 计划、复盘和周报发送到飞书时默认会压缩成一屏摘要。完整内容仍然保存在本地；
 需要展开最近一次完整内容时，在飞书里发送 `daily-os details`。

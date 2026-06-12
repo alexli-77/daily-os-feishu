@@ -18,6 +18,7 @@ import { appendUiLog, clearUiLogs, readUiLogs } from '../storage/ui-log.js';
 import { startDecisionOnboarding } from '../decision/onboarding.js';
 import { collectProgressCandidates, formatProgressCandidates } from '../progress/capture.js';
 import { analyzeChatContext, formatChatContextAnalysis } from '../chat/context-analysis.js';
+import { readBackgroundSuggestionsState } from '../service/background-suggestions.js';
 
 const SECRET_ENV_KEYS = new Set(['OPENAI_API_KEY', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'VAULT_GATE_TOKEN', 'LARK_APP_SECRET']);
 const UI_RUNTIME_PATH = './data/runtime/ui.json';
@@ -193,6 +194,7 @@ async function buildState(options: UiServerOptions): Promise<Record<string, unkn
     doctor: checks,
     doctorText: formatDoctor(checks),
     service: await getLaunchAgentStatus(),
+    backgroundSuggestions: readBackgroundSuggestionsState(config),
   };
 }
 
@@ -1084,6 +1086,16 @@ const HTML = String.raw`<!doctype html>
                 <button type="button" id="service-install-button" data-action="service_install">Install</button>
                 <button type="button" id="service-uninstall-button" class="secondary" data-action="service_uninstall">Uninstall</button>
               </fieldset>
+              <fieldset>
+                <legend>Background suggestions</legend>
+                <label><input id="background-suggestions-enabled" type="checkbox" /> Enabled</label>
+                <label>Mode<select id="background-suggestions-mode"><option value="review">Review</option><option value="todo">Todo</option><option value="manual">Manual</option></select></label>
+                <label>Interval minutes<input id="background-suggestions-interval" type="number" min="1" /></label>
+                <label>Minimum confidence<select id="background-suggestions-confidence"><option value="medium">Medium</option><option value="high">High</option><option value="low">Low</option></select></label>
+                <label><input id="background-suggestions-send" type="checkbox" /> Send Feishu summary</label>
+                <label><input id="background-suggestions-change-only" type="checkbox" /> Send only when changed</label>
+                <div class="service-status" id="background-suggestions-status" aria-live="polite"></div>
+              </fieldset>
             </div>
           </section>
 
@@ -1463,6 +1475,11 @@ legend {
   border-color: #98c8aa;
   background: #edf7ef;
 }
+.service-status.error {
+  color: var(--danger);
+  border-color: #d5a4a4;
+  background: #fff0f0;
+}
 
 .manual-help {
   display: grid;
@@ -1704,11 +1721,18 @@ function render() {
   set('workflow-weekly-weekday', config.workflows.weekly_review.weekday);
   set('workflow-weekly-time', config.workflows.weekly_review.time);
   checked('service-prevent-sleep', config.service?.prevent_sleep?.enabled);
+  checked('background-suggestions-enabled', config.background_suggestions?.enabled);
+  set('background-suggestions-mode', config.background_suggestions?.mode || 'review');
+  set('background-suggestions-interval', config.background_suggestions?.interval_minutes || 120);
+  set('background-suggestions-confidence', config.background_suggestions?.min_confidence || 'medium');
+  checked('background-suggestions-send', config.background_suggestions?.send_to_feishu);
+  checked('background-suggestions-change-only', config.background_suggestions?.send_on_change_only);
 
   for (const key of ['OPENAI_API_KEY', 'LARK_APP_SECRET', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'VAULT_GATE_TOKEN']) renderSecret(key);
 
   renderChecks(state.doctor);
   renderServiceStatus(state.service);
+  renderBackgroundSuggestionsStatus(state.backgroundSuggestions, config.background_suggestions);
   $('output').textContent = state.doctorText || '';
 }
 
@@ -1728,6 +1752,25 @@ function renderServiceStatus(service) {
     : service?.installed
       ? 'Plist exists, but launchd is not registered. Click Install to register the full background service again.'
       : 'Not registered. Click Install to create and register the full macOS background service.';
+}
+
+function renderBackgroundSuggestionsStatus(background, config) {
+  const status = $('background-suggestions-status');
+  if (!status) return;
+  const enabled = Boolean(config?.enabled);
+  const stateText = background?.last_status || (enabled ? 'waiting' : 'disabled');
+  const parts = [
+    enabled ? 'Enabled' : 'Disabled',
+    'status: ' + stateText,
+    background?.last_run_at ? 'last run: ' + formatClientTime(background.last_run_at) : 'last run: never',
+    background?.next_run_at ? 'next run: ' + formatClientTime(background.next_run_at) : '',
+    typeof background?.last_suggestion_count === 'number' ? 'suggestions: ' + background.last_suggestion_count : '',
+    typeof background?.last_inspected_messages === 'number' ? 'messages: ' + background.last_inspected_messages : '',
+    background?.last_sent_at ? 'last sent: ' + formatClientTime(background.last_sent_at) : '',
+    background?.last_error ? 'error: ' + background.last_error : '',
+  ].filter(Boolean);
+  status.className = 'service-status ' + (background?.last_status === 'error' ? 'error' : enabled ? 'registered' : '');
+  status.textContent = parts.join(' | ');
 }
 
 function renderChecks(checks) {
@@ -1817,6 +1860,13 @@ async function saveAll() {
   next.workflows.weekly_review.time = value('workflow-weekly-time');
   next.service = next.service || {};
   next.service.prevent_sleep = { enabled: isChecked('service-prevent-sleep') };
+  next.background_suggestions = next.background_suggestions || {};
+  next.background_suggestions.enabled = isChecked('background-suggestions-enabled');
+  next.background_suggestions.mode = value('background-suggestions-mode');
+  next.background_suggestions.interval_minutes = Number(value('background-suggestions-interval') || 120);
+  next.background_suggestions.min_confidence = value('background-suggestions-confidence');
+  next.background_suggestions.send_to_feishu = isChecked('background-suggestions-send');
+  next.background_suggestions.send_on_change_only = isChecked('background-suggestions-change-only');
 
   await post('/api/config', { config: next });
   const envValues = {
@@ -1932,6 +1982,7 @@ async function runAction(action) {
   } finally {
     buttons.forEach((button) => button.disabled = false);
     renderServiceStatus(state?.service);
+    renderBackgroundSuggestionsStatus(state?.backgroundSuggestions, state?.config?.background_suggestions);
     if (document.querySelector('.nav-button.active')?.dataset.section === 'logs') void loadLogs();
   }
 }
@@ -1973,6 +2024,12 @@ function renderLogs(logs) {
 }
 
 function formatLogTime(timestamp) {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return timestamp || '';
+  return date.toLocaleString();
+}
+
+function formatClientTime(timestamp) {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return timestamp || '';
   return date.toLocaleString();

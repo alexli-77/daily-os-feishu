@@ -7,6 +7,7 @@ import { runWorkflow } from '../workflows/run-workflow.js';
 import { collectProgressCandidates, hasConfirmedProgress, type ProgressCandidate } from '../progress/capture.js';
 import { renderProgressConfirmationCard } from '../progress/card.js';
 import { sendFeishuCard } from '../connectors/lark-cli.js';
+import { runBackgroundSuggestions } from './background-suggestions.js';
 
 const LABEL = 'com.daily-os-feishu.agent';
 const SCHEDULER_STATE_PATH = './data/memory/scheduler-state.json';
@@ -104,6 +105,14 @@ async function tick(configProvider: ConfigProvider, fired: Set<string>): Promise
       } catch (error) {
         console.error(error instanceof Error ? error.stack || error.message : String(error));
       }
+    }
+  }
+
+  if (config.background_suggestions.enabled) {
+    try {
+      await runBackgroundSuggestions(config, now);
+    } catch (error) {
+      console.error(`[scheduler] background suggestions failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 }
