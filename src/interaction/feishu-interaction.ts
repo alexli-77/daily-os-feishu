@@ -32,6 +32,7 @@ import { parseProgressCardAction, renderProgressConfirmationCard } from '../prog
 import { todayInTimezone } from '../utils/date.js';
 import { appendDailyMemory, readLatestWorkflowOutput, readWorkflowDetailCache } from '../storage/memory.js';
 import { formatLatestWorkflowDetails } from '../workflows/summary.js';
+import { handlePendingBackgroundSuggestionReply } from '../service/background-suggestions.js';
 
 interface FeishuInteractionControls {
   stop: () => Promise<void>;
@@ -345,6 +346,16 @@ async function runBatch(input: {
     return;
   }
 
+  const suggestionReply = handlePendingBackgroundSuggestionReply(input.config, text, {
+    messageId: last.messageId,
+    source: `feishu-interaction:${input.scope}`,
+  });
+  if (suggestionReply.handled) {
+    if (suggestionReply.reply) await replyToMessage(input.channel, last, suggestionReply.reply, input.config.interaction.feishu.reply_mode);
+    console.log(`[interaction] handled ${input.scope}; command=background-suggestion-reply`);
+    return;
+  }
+
   if (input.config.interaction.feishu.agent_mode.enabled) {
     const control = decideFeishuControl(input.config, accessDecision, {
       effect: agentModeControlEffect(input.config),
@@ -574,12 +585,13 @@ async function handleWorkflowCardCommand(input: {
       input.event.chatId,
       {
         text: [
-          '可以，您直接回复修改意见即可。',
+          '可以，直接告诉我你想怎么改。',
           '',
-          '格式示例：',
-          'daily-os 修改今日安排：把 LEO-12 降到 P1，今天优先处理导师联系邮件；Codex 先帮我准备邮件草稿。',
+          '例如：',
+          '今天先不做 LEO-12，改成优先处理导师邮件。',
+          '或者：把 LEO-12 降级，明天再跟进。',
           '',
-          '我会把修改意见写入今天的上下文。之后点「重新生成」或发送 daily-os plan，就会按新意见重排。',
+          '我收到后会先回你确认，并把修改意见写入今天的上下文。之后点「重新生成」或发送 daily-os plan，我会按新意见重排。',
         ].join('\n'),
       },
       { replyTo: input.event.messageId },

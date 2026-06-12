@@ -11,6 +11,7 @@ import { runBackgroundSuggestions } from './background-suggestions.js';
 
 const LABEL = 'com.daily-os-feishu.agent';
 const SCHEDULER_STATE_PATH = './data/memory/scheduler-state.json';
+const SCHEDULER_LOCK_DIR = './data/runtime/scheduler-locks';
 const RETRY_DELAY_MINUTES = 15;
 
 export interface LaunchAgentStatus {
@@ -93,11 +94,12 @@ async function tick(configProvider: ConfigProvider, state: SchedulerRuntimeState
     if (item.weekday && item.weekday.slice(0, 3).toUpperCase() !== weekday) continue;
     const key = `${date}:${item.workflow}:${item.time}`;
     if (state.fired.has(key) || isRetryBlocked(state, key, now)) continue;
+    if (!claimFired(state, key)) continue;
     try {
       await runWorkflow(config, item.workflow);
-      markFired(state.fired, key);
       clearRetry(state, key);
     } catch (error) {
+      unmarkFired(state, key);
       scheduleRetry(state, key, now);
       console.error(error instanceof Error ? error.stack || error.message : String(error));
     }
@@ -106,16 +108,18 @@ async function tick(configProvider: ConfigProvider, state: SchedulerRuntimeState
   if (config.progress.enabled && isProgressReminderDue(config, time)) {
     const key = `${date}:progress_reminder:${config.progress.no_progress_reminder_time}`;
     if (!state.fired.has(key) && !isRetryBlocked(state, key, now)) {
-      try {
-        if (!hasConfirmedProgress(config, date)) {
-          const result = await collectProgressCandidates(config, date);
-          await sendFeishuCard(config, renderProgressConfirmationCard(config, result), progressReminderText(result.candidates));
+      if (claimFired(state, key)) {
+        try {
+          if (!hasConfirmedProgress(config, date)) {
+            const result = await collectProgressCandidates(config, date);
+            await sendFeishuCard(config, renderProgressConfirmationCard(config, result), progressReminderText(result.candidates));
+          }
+          clearRetry(state, key);
+        } catch (error) {
+          unmarkFired(state, key);
+          scheduleRetry(state, key, now);
+          console.error(error instanceof Error ? error.stack || error.message : String(error));
         }
-        markFired(state.fired, key);
-        clearRetry(state, key);
-      } catch (error) {
-        scheduleRetry(state, key, now);
-        console.error(error instanceof Error ? error.stack || error.message : String(error));
       }
     }
   }
@@ -188,11 +192,75 @@ function readSchedulerState(): Set<string> {
   }
 }
 
-function markFired(fired: Set<string>, key: string): void {
-  fired.add(key);
+function claimFired(state: SchedulerRuntimeState, key: string): boolean {
+  if (state.fired.has(key)) return false;
+
+  const lockPath = acquireSchedulerLock(key);
+  if (!lockPath) return false;
+  try {
+    const fired = readSchedulerState();
+    if (fired.has(key)) {
+      state.fired = fired;
+      return false;
+    }
+    fired.add(key);
+    writeSchedulerState(fired);
+    state.fired = fired;
+    return true;
+  } finally {
+    releaseSchedulerLock(lockPath);
+  }
+}
+
+function unmarkFired(state: SchedulerRuntimeState, key: string): void {
+  const lockPath = acquireSchedulerLock(key);
+  if (!lockPath) {
+    state.fired.delete(key);
+    return;
+  }
+  try {
+    const fired = readSchedulerState();
+    fired.delete(key);
+    writeSchedulerState(fired);
+    state.fired = fired;
+  } finally {
+    releaseSchedulerLock(lockPath);
+  }
+}
+
+function writeSchedulerState(fired: Set<string>): void {
   const recent = [...fired].filter((item) => isRecentSchedulerKey(item));
   fs.mkdirSync(path.dirname(SCHEDULER_STATE_PATH), { recursive: true });
   fs.writeFileSync(SCHEDULER_STATE_PATH, JSON.stringify({ fired: recent }, null, 2), 'utf8');
+}
+
+function acquireSchedulerLock(key: string): string | null {
+  fs.mkdirSync(SCHEDULER_LOCK_DIR, { recursive: true });
+  const lockPath = path.join(SCHEDULER_LOCK_DIR, `${hashSchedulerKey(key)}.lock`);
+  try {
+    const fd = fs.openSync(lockPath, 'wx');
+    fs.closeSync(fd);
+    return lockPath;
+  } catch (error) {
+    if (isFileExistsError(error)) return null;
+    throw error;
+  }
+}
+
+function releaseSchedulerLock(lockPath: string): void {
+  fs.rmSync(lockPath, { force: true });
+}
+
+function hashSchedulerKey(key: string): string {
+  let hash = 0;
+  for (let index = 0; index < key.length; index += 1) {
+    hash = (hash * 31 + key.charCodeAt(index)) >>> 0;
+  }
+  return hash.toString(16).padStart(8, '0');
+}
+
+function isFileExistsError(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && 'code' in error && (error as { code?: unknown }).code === 'EEXIST');
 }
 
 function isRetryBlocked(state: SchedulerRuntimeState, key: string, now: Date): boolean {
