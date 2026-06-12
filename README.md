@@ -125,10 +125,19 @@ Enable `background_suggestions.enabled=true` to let the scheduler periodically
 run chat context analysis without opening the UI. It can send a compact Feishu
 summary when new suggestions are found, or only update local run status.
 
+When `interaction.feishu.agent_mode.enabled=true`, users can reply to the
+background suggestion message in natural language, such as "write item 2 into
+today's progress", "ignore the third one", or "move that to tomorrow morning".
+Daily OS passes the recent pending suggestions into the Feishu agent context so
+the agent can resolve references like "item 2" without requiring a fixed command.
+
 The UI Service panel shows the last run time, next run time, recent error,
 inspected message count, and suggestion count. The state file stores only run
 metadata, counts, errors, and a hashed suggestion signature; it does not store
 suggestion bodies, evidence, source messages, response bodies, or secrets.
+Pending suggestions are stored separately for a short TTL so natural-language
+follow-ups can refer to them; that file contains the generated suggestion
+summary fields, not raw evidence.
 
 Workflow outputs sent to Feishu are compact by default. Daily OS stores the full
 latest plan/review/weekly output locally; send `daily-os details` to expand the

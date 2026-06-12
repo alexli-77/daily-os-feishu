@@ -8,6 +8,7 @@ import { readLatestWorkflowOutput } from '../storage/memory.js';
 import { todayInTimezone } from '../utils/date.js';
 import { collectEvidence } from '../workflows/evidence.js';
 import type { Evidence, EvidenceSource } from '../workflows/types.js';
+import { readPendingBackgroundSuggestions, type PendingBackgroundSuggestion } from '../service/background-suggestions.js';
 
 export interface FeishuAgentContextPack {
   generated_at: string;
@@ -44,6 +45,14 @@ export interface FeishuAgentContextPack {
     available_sources: ContextEvidenceSource[];
     missing_or_empty_sources: Array<{ name: string; state: string; detail?: string }>;
   };
+  pending_background_suggestions?: {
+    created_at: string;
+    expires_at: string;
+    date: string;
+    mode: string;
+    window_label: string;
+    suggestions: PendingBackgroundSuggestion[];
+  };
   assistant_guidance: string[];
 }
 
@@ -72,6 +81,8 @@ export async function buildFeishuAgentContextPack(config: AppConfig): Promise<Fe
       '明确说明哪些事情可以由 Codex 做，哪些需要用户本人判断、沟通或批准。',
       '如果证据不足，说明缺哪类证据，并给出一个最小可执行下一步。',
       '不要把候选规则写成长期规则；长期规则必须由用户确认。',
+      '如果用户说“第 N 条”“刚才那条”“忽略/写入/修改”，优先对照 pending_background_suggestions 理解他的自然语言指令。',
+      '处理 pending_background_suggestions 时，不要要求用户使用固定命令；能执行就执行，不能执行就说明还缺什么权限或信息。',
     ],
   };
 
@@ -105,6 +116,11 @@ export async function buildFeishuAgentContextPack(config: AppConfig): Promise<Fe
       maxItemsPerSource: packConfig.max_items_per_source,
       maxCharsPerItem: packConfig.max_chars_per_item,
     });
+  }
+
+  const pending = readPendingBackgroundSuggestions(config);
+  if (pending) {
+    pack.pending_background_suggestions = pending;
   }
 
   return pack;

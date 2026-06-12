@@ -194,7 +194,7 @@ async function intakeMessage(input: {
     input.message.chatType !== 'p2p' &&
     input.config.interaction.feishu.require_mention_in_groups &&
     !input.message.mentionedBot &&
-    !shouldAcceptUnmentionedGroupMessage(input.message, input.config.interaction.feishu.command_prefix)
+    !shouldAcceptUnmentionedGroupMessage(input.message, input.config.interaction.feishu.command_prefix, input.config.interaction.feishu.agent_mode.enabled)
   ) {
     return;
   }
@@ -429,11 +429,12 @@ function isStopText(text: string): boolean {
   return normalized === '/stop' || normalized === 'stop' || normalized === 'daily-os stop' || normalized === '停止' || normalized === '停止当前任务';
 }
 
-function shouldAcceptUnmentionedGroupMessage(message: NormalizedMessage, prefix: string): boolean {
+function shouldAcceptUnmentionedGroupMessage(message: NormalizedMessage, prefix: string, allowFreeformReplies: boolean): boolean {
   const normalized = message.content.replace(/\s+/g, ' ').trim();
   if (!normalized) return false;
   if (normalized.toLowerCase().startsWith(`${prefix.toLowerCase()} `) || normalized.toLowerCase() === prefix.toLowerCase()) return true;
   if (!message.replyToMessageId && !message.threadId) return false;
+  if (allowFreeformReplies) return true;
   return isProgressConfirmationReply(normalized) || isDetailReply(normalized);
 }
 
