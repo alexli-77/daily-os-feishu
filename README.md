@@ -60,10 +60,10 @@ within a three-hour window.
 Source, workflow, security, agent mode, and prompt-related settings saved in the
 UI are reloaded on the next scheduler tick or the next Feishu message/card
 callback. In practice, newly saved sources affect the next plan, review, progress
-confirmation, and Feishu command without restarting. Startup-level switches still
-require a restart, such as turning the Feishu interaction websocket on after it
-was disabled, toggling the prevent-sleep service, or changing service lifecycle
-settings.
+confirmation, background suggestion run, and Feishu command without restarting.
+Startup-level switches still require a restart, such as turning the Feishu
+interaction websocket on after it was disabled, toggling the prevent-sleep
+service, or changing service lifecycle settings.
 
 Then check the installation:
 
@@ -118,6 +118,17 @@ The scan window is mode-based:
 Configure `chat_analysis.default_mode`, `chat_analysis.max_messages`, and
 `chat_analysis.max_suggestions`. The Feishu source profile `im_history.limit`
 should be at least as large as `chat_analysis.max_messages`.
+
+### Automatic Background Suggestions
+
+Enable `background_suggestions.enabled=true` to let the scheduler periodically
+run chat context analysis without opening the UI. It can send a compact Feishu
+summary when new suggestions are found, or only update local run status.
+
+The UI Service panel shows the last run time, next run time, recent error,
+inspected message count, and suggestion count. The state file stores only run
+metadata, counts, errors, and a hashed suggestion signature; it does not store
+suggestion bodies, evidence, source messages, response bodies, or secrets.
 
 Workflow outputs sent to Feishu are compact by default. Daily OS stores the full
 latest plan/review/weekly output locally; send `daily-os details` to expand the

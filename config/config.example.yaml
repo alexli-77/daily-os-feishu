@@ -112,6 +112,17 @@ chat_analysis:
   max_messages: 80
   max_suggestions: 8
 
+background_suggestions:
+  # Runs from the macOS launchd service / `npm run start` scheduler.
+  # It only stores run status, counts, errors, and a hashed signature; suggestion bodies and evidence stay out of logs/state.
+  enabled: false
+  mode: "review" # manual | todo | review
+  interval_minutes: 120
+  min_confidence: "medium" # low | medium | high
+  send_to_feishu: true
+  send_on_change_only: true
+  state_path: "./data/memory/background-suggestions-state.json"
+
 sources:
   # User knowledge-base vault used as an evidence source.
   # This is separate from memory.repository_path below.
