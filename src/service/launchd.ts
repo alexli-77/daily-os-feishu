@@ -19,6 +19,8 @@ export interface LaunchAgentStatus {
   registered: boolean;
 }
 
+type ConfigProvider = AppConfig | (() => AppConfig);
+
 export async function installLaunchAgent(repoRoot = process.cwd()): Promise<string> {
   const plistPath = launchAgentPath();
   const logsDir = path.join(repoRoot, 'logs');
@@ -50,13 +52,22 @@ export async function getLaunchAgentStatus(): Promise<LaunchAgentStatus> {
   };
 }
 
-export async function runScheduler(config: AppConfig): Promise<void> {
+export async function runScheduler(config: ConfigProvider): Promise<void> {
   const fired = readSchedulerState();
-  await tick(config, fired);
-  setInterval(() => void tick(config, fired), 60_000);
+  await safeTick(config, fired);
+  setInterval(() => void safeTick(config, fired), 60_000);
 }
 
-async function tick(config: AppConfig, fired: Set<string>): Promise<void> {
+async function safeTick(configProvider: ConfigProvider, fired: Set<string>): Promise<void> {
+  try {
+    await tick(configProvider, fired);
+  } catch (error) {
+    console.error(`[scheduler] tick failed: ${error instanceof Error ? error.stack || error.message : String(error)}`);
+  }
+}
+
+async function tick(configProvider: ConfigProvider, fired: Set<string>): Promise<void> {
+  const config = readRuntimeConfig(configProvider);
   const now = new Date();
   const time = timeInZone(now, config.user.timezone);
   const date = dateInZone(now, config.user.timezone);
@@ -95,6 +106,10 @@ async function tick(config: AppConfig, fired: Set<string>): Promise<void> {
       }
     }
   }
+}
+
+function readRuntimeConfig(config: ConfigProvider): AppConfig {
+  return typeof config === 'function' ? config() : config;
 }
 
 function timeInZone(date: Date, timezone: string): string {

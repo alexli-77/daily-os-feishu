@@ -274,10 +274,13 @@ function looksLikeProgress(text: string): boolean {
 }
 
 function isDailyOsGeneratedText(text: string): boolean {
-  const normalized = text.replace(/\s+/g, ' ').trim();
+  const normalized = stripGeneratedCardPrefix(text.replace(/\s+/g, ' ').trim());
   return (
     /^(?:\/?daily-os|@daily-os)\b/i.test(normalized) ||
     /^(#\s*)?(今日计划|日复盘|周复盘|聊天上下文建议|今日进展候选|Daily OS 正在运行|Codex 正在处理)/i.test(normalized) ||
+    /^老板[，,]?我把今天的进展先分好类了/.test(normalized) ||
+    /^老板[，,]?今天我先帮您压成一张清单/.test(normalized) ||
+    /^老板[，,]?我把本周总结和下周安排先压成重点版/.test(normalized) ||
     /^老板[，,]?(?:您好)?[，,]?我帮您(?:整理|检查|看了|确认|分析)/.test(normalized) ||
     /^老板[，,]?这是最近一次\s*(今日计划|日复盘|周复盘)/.test(normalized) ||
     /^\d{4}-\d{2}-\d{2}\s+(今日计划|日复盘|周复盘|周复盘 \+ 下周计划|聊天上下文建议|今日进展候选)/.test(normalized) ||
@@ -287,8 +290,13 @@ function isDailyOsGeneratedText(text: string): boolean {
     /今天还没有确认过的进展记录/.test(normalized) ||
     /这些还不能直接当事实[，,]?需要您批示确认/.test(normalized) ||
     /这些只是建议，不会自动修改任务、日历、文档或 Linear/.test(normalized) ||
-    /确认后才会写入今日进展账本/.test(normalized)
+    /确认后才会写入今日进展账本/.test(normalized) ||
+    /^已确认\s*\d+\s*条今日进展/.test(normalized)
   );
+}
+
+function stripGeneratedCardPrefix(text: string): string {
+  return text.replace(/^<card\s+title="[^"]*">\s*/i, '').trim();
 }
 
 function isSameDate(value: string, date: string): boolean {

@@ -45,6 +45,8 @@ interface ActiveAgentRun {
   scopeId: string;
 }
 
+type ConfigProvider = AppConfig | (() => AppConfig);
+
 type WorkflowCardCommand = {
   command: 'details' | 'progress' | 'chat todo' | 'chat review' | 'confirm_todo' | 'confirm_review' | 'revise_todo';
   detailId?: string;
@@ -52,8 +54,13 @@ type WorkflowCardCommand = {
 
 const CARD_ACTION_DEDUPE_MS = 30_000;
 
-export async function startFeishuInteraction(config: AppConfig): Promise<FeishuInteractionControls> {
-  const cfg = config.interaction.feishu;
+function runtimeConfigReader(config: ConfigProvider): () => AppConfig {
+  return typeof config === 'function' ? config : () => config;
+}
+
+export async function startFeishuInteraction(configProvider: ConfigProvider): Promise<FeishuInteractionControls> {
+  const getConfig = runtimeConfigReader(configProvider);
+  const cfg = getConfig().interaction.feishu;
   if (!cfg.enabled) {
     throw new Error('interaction.feishu.enabled is false. Enable it in config/config.yaml before starting the Feishu interaction layer.');
   }
@@ -89,7 +96,7 @@ export async function startFeishuInteraction(config: AppConfig): Promise<FeishuI
   const recentCardActions = new Map<string, number>();
   const queue = new PendingQueue<NormalizedMessage>(cfg.debounce_ms, (scope, batch) => {
     queue.block(scope);
-    void runBatch({ config, channel, batch, scope, chatModes, activeAgentRuns })
+    void runBatch({ config: getConfig(), channel, batch, scope, chatModes, activeAgentRuns })
       .catch(async (error) => {
         const last = batch[batch.length - 1];
         const message = error instanceof Error ? error.message : String(error);
@@ -101,14 +108,14 @@ export async function startFeishuInteraction(config: AppConfig): Promise<FeishuI
 
   channel.on({
     message: async (message) => {
-      await intakeMessage({ config, channel, message, queue, chatModes, activeAgentRuns });
+      await intakeMessage({ config: getConfig(), channel, message, queue, chatModes, activeAgentRuns });
     },
     cardAction: (event) => {
       if (!claimCardAction(recentCardActions, event)) {
         console.log(`[interaction] skipped duplicate card action ${event.chatId}/${event.messageId}`);
         return;
       }
-      void handleCardAction({ config, channel, event, queue, chatModes, activeAgentRuns }).catch((error) => {
+      void handleCardAction({ config: getConfig(), channel, event, queue, chatModes, activeAgentRuns }).catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`[interaction] card action failed ${event.chatId}/${event.messageId}: ${message}`);
         void channel
@@ -134,9 +141,9 @@ export async function startFeishuInteraction(config: AppConfig): Promise<FeishuI
 
   await channel.connect();
   console.log('daily-os-feishu 飞书交互层已启动。');
-  if (config.decision.onboarding.auto_create_on_setup) {
+  if (getConfig().decision.onboarding.auto_create_on_setup) {
     try {
-      const result = await startDecisionOnboarding(config, { channel });
+      const result = await startDecisionOnboarding(getConfig(), { channel });
       console.log(`[interaction] 决策校准群${result.created ? '已创建' : '已准备好'}：${result.chatId}`);
     } catch (error) {
       console.warn(`[interaction] 跳过决策校准初始化：${error instanceof Error ? error.message : String(error)}`);
@@ -158,6 +165,7 @@ async function intakeMessage(input: {
   chatModes: Map<string, ChatMode>;
   activeAgentRuns: Map<string, ActiveAgentRun>;
 }): Promise<void> {
+  if (!input.config.interaction.feishu.enabled) return;
   const mode = await resolveChatMode(input.channel, input.message.chatId, input.chatModes, input.message.chatType);
   const scope = scopeFor(input.message, mode);
   const access = decideFeishuAccess(input.config, {
@@ -181,7 +189,13 @@ async function intakeMessage(input: {
     return;
   }
 
-  if (!isCalibrationChat && input.message.chatType !== 'p2p' && input.config.interaction.feishu.require_mention_in_groups && !input.message.mentionedBot) {
+  if (
+    !isCalibrationChat &&
+    input.message.chatType !== 'p2p' &&
+    input.config.interaction.feishu.require_mention_in_groups &&
+    !input.message.mentionedBot &&
+    !shouldAcceptUnmentionedGroupMessage(input.message, input.config.interaction.feishu.command_prefix)
+  ) {
     return;
   }
 
@@ -215,6 +229,25 @@ async function runBatch(input: {
   const commandText = isCalibrationChat && looksLikeBarePolicyCommand(text) ? `${commandPrefix} ${text}` : text;
   const command = parseDailyOsCommand(commandText, commandPrefix);
   const accessDecision = commandAccessDecision(input.config, last, isCalibrationChat);
+  if (command.type === 'ignore' && isProgressConfirmationReply(text)) {
+    const control = decideFeishuControl(input.config, accessDecision, { effect: 'memory_write' });
+    if (!control.ok) {
+      await replyToMessage(input.channel, last, `权限不足：${control.reason}`, input.config.interaction.feishu.reply_mode);
+      console.log(`[interaction] denied ${input.scope}; command=progress-confirm-reply; reason=${control.reason}`);
+      return;
+    }
+    const date = todayInTimezone(input.config);
+    const progress = await collectProgressCandidates(input.config, date);
+    const ledgerPath = appendConfirmedProgress(input.config, date, confirmedEntriesFromCandidates(progress.candidates));
+    await replyToMessage(
+      input.channel,
+      last,
+      progress.candidates.length > 0 ? `已确认 ${progress.candidates.length} 条今日进展，并写入：${ledgerPath}` : '没有可写入的进展候选；可能候选已经为空。',
+      input.config.interaction.feishu.reply_mode,
+    );
+    console.log(`[interaction] handled ${input.scope}; command=progress-confirm-reply`);
+    return;
+  }
   if (command.type === 'status') {
     await sendStatusCard(input.channel, last, input.config);
     console.log(`[interaction] handled ${input.scope}; command=status-card`);
@@ -396,6 +429,24 @@ function isStopText(text: string): boolean {
   return normalized === '/stop' || normalized === 'stop' || normalized === 'daily-os stop' || normalized === '停止' || normalized === '停止当前任务';
 }
 
+function shouldAcceptUnmentionedGroupMessage(message: NormalizedMessage, prefix: string): boolean {
+  const normalized = message.content.replace(/\s+/g, ' ').trim();
+  if (!normalized) return false;
+  if (normalized.toLowerCase().startsWith(`${prefix.toLowerCase()} `) || normalized.toLowerCase() === prefix.toLowerCase()) return true;
+  if (!message.replyToMessageId && !message.threadId) return false;
+  return isProgressConfirmationReply(normalized) || isDetailReply(normalized);
+}
+
+function isProgressConfirmationReply(text: string): boolean {
+  const normalized = text.replace(/\s+/g, ' ').trim().toLowerCase();
+  return ['确认', '确认全部', '通过', '可以', '写入', '记账', 'ok', 'okay', 'yes', 'y'].includes(normalized);
+}
+
+function isDetailReply(text: string): boolean {
+  const normalized = text.replace(/\s+/g, ' ').trim().toLowerCase();
+  return ['详情', '查看详情', '全文', '完整内容', 'details', 'detail'].includes(normalized);
+}
+
 async function stopAgentRun(activeRuns: Map<string, ActiveAgentRun>, scope: string): Promise<boolean> {
   const active = activeRuns.get(scope);
   if (!active) return false;
@@ -439,6 +490,7 @@ async function handleCardAction(input: {
   chatModes: Map<string, ChatMode>;
   activeAgentRuns: Map<string, ActiveAgentRun>;
 }): Promise<void> {
+  if (!input.config.interaction.feishu.enabled) return;
   const progressAction = parseProgressCardAction(input.event.action.value, input.config);
   if (progressAction) {
     await handleProgressCardAction({ ...input, action: progressAction });
@@ -564,7 +616,7 @@ async function handleProgressCardAction(input: {
   config: AppConfig;
   channel: LarkChannel;
   event: CardActionEvent;
-  action: { action: 'confirm_all' | 'ignore_all' | 'review'; date: string; candidateIds: string[] };
+  action: { action: 'confirm_all' | 'ignore_all' | 'details' | 'review'; date: string; candidateIds: string[] };
 }): Promise<void> {
   const access = decideFeishuAccess(input.config, {
     senderOpenId: input.event.operator.openId,
@@ -597,7 +649,7 @@ async function handleProgressCardAction(input: {
     );
     return;
   }
-  if (input.action.action === 'review') {
+  if (input.action.action === 'details' || input.action.action === 'review') {
     await input.channel.send(input.event.chatId, toSendInput(formatProgressCandidates(result), input.config.interaction.feishu.reply_mode), {
       replyTo: input.event.messageId,
     });

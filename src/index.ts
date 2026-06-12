@@ -160,6 +160,15 @@ async function startAll(options: CliOptions): Promise<void> {
   ensureLocalSetup(options.configPath, options.envPath);
   loadDotEnv(options.envPath);
   const config = loadConfig(options.configPath);
+  let currentConfig = config;
+  const getConfig = (): typeof config => {
+    try {
+      currentConfig = loadConfig(options.configPath);
+    } catch (error) {
+      console.warn(`[config] keeping last valid config: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return currentConfig;
+  };
   ensureMemoryFiles(config);
   ensureDecisionPolicyFiles(config);
 
@@ -172,14 +181,14 @@ async function startAll(options: CliOptions): Promise<void> {
     open: options.openUi,
   });
 
-  await runScheduler(config);
+  await runScheduler(getConfig);
   console.log('daily-os-feishu scheduler 已启动。');
   const sleepControls = startPreventSleep(config.service.prevent_sleep.enabled);
   const chromeControls = startChromeSnapshotService(config);
 
   let interactionControls: Awaited<ReturnType<typeof startFeishuInteraction>> | null = null;
   if (config.interaction.feishu.enabled) {
-    interactionControls = await startFeishuInteraction(config);
+    interactionControls = await startFeishuInteraction(getConfig);
     console.log('daily-os-feishu 飞书实时交互已启动。');
   } else {
     console.warn('interaction.feishu.enabled=false；飞书实时对话未启动。可在 UI 中启用并重启 `npm run start`。');
