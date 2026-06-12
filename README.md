@@ -1,5 +1,9 @@
 # Daily OS Feishu
 
+<p align="center">
+  <img src="docs/assets/daily-os-feishu-logo-banner.png" alt="Daily OS Feishu" width="700">
+</p>
+
 Daily OS Feishu is a Mac-first, Feishu-only personal workflow agent. It collects configurable local and remote signals, asks your local Codex CLI or OpenAI API to prepare a daily/weekly message, and sends the result to Feishu through the official Feishu SDK or the legacy `lark-cli` path.
 
 This repository is intentionally generic. It does not include personal tokens, private vault content, browser data, personal memory, or Feishu identifiers. It ships only a generic memory vault template. All private values live in `.env`, `config/config.yaml`, and ignored `data/` files.
