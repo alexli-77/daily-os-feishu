@@ -122,6 +122,8 @@ background_suggestions:
   send_to_feishu: true
   send_on_change_only: true
   state_path: "./data/memory/background-suggestions-state.json"
+  pending_path: "./data/memory/background-suggestions-pending.json"
+  pending_ttl_hours: 24
 
 sources:
   # User knowledge-base vault used as an evidence source.

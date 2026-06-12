@@ -266,6 +266,8 @@ export const AppConfigSchema = z.object({
       send_to_feishu: z.boolean().default(true),
       send_on_change_only: z.boolean().default(true),
       state_path: z.string().default('./data/memory/background-suggestions-state.json'),
+      pending_path: z.string().default('./data/memory/background-suggestions-pending.json'),
+      pending_ttl_hours: z.number().int().positive().default(24),
     })
     .default({
       enabled: false,
@@ -275,6 +277,8 @@ export const AppConfigSchema = z.object({
       send_to_feishu: true,
       send_on_change_only: true,
       state_path: './data/memory/background-suggestions-state.json',
+      pending_path: './data/memory/background-suggestions-pending.json',
+      pending_ttl_hours: 24,
     }),
   sources: z.object({
     vault: enabled.extend({

@@ -22,6 +22,27 @@ export interface BackgroundSuggestionsState {
   last_signature?: string;
 }
 
+export interface PendingBackgroundSuggestions {
+  created_at: string;
+  expires_at: string;
+  date: string;
+  mode: ChatAnalysisMode;
+  window_label: string;
+  suggestions: PendingBackgroundSuggestion[];
+}
+
+export interface PendingBackgroundSuggestion {
+  index: number;
+  id: string;
+  kind: string;
+  title: string;
+  summary: string;
+  targets: string[];
+  confidence: 'low' | 'medium' | 'high';
+  owner?: string;
+  due?: string;
+}
+
 export async function runBackgroundSuggestions(config: AppConfig, now = new Date()): Promise<BackgroundSuggestionsState> {
   if (!config.background_suggestions.enabled) return readBackgroundSuggestionsState(config);
   const state = readBackgroundSuggestionsState(config);
@@ -32,6 +53,7 @@ export async function runBackgroundSuggestions(config: AppConfig, now = new Date
     const result = await analyzeChatContext(config, date, config.background_suggestions.mode as ChatAnalysisMode);
     const suggestions = filterSuggestions(config, result.suggestions);
     const signature = suggestionSignature(suggestions);
+    writePendingBackgroundSuggestions(config, result, suggestions, now);
     const nextState: BackgroundSuggestionsState = {
       ...state,
       last_run_at: now.toISOString(),
@@ -88,6 +110,22 @@ export function readBackgroundSuggestionsState(config: AppConfig): BackgroundSug
   }
 }
 
+export function readPendingBackgroundSuggestions(config: AppConfig, now = new Date()): PendingBackgroundSuggestions | null {
+  const pendingPath = backgroundSuggestionsPendingPath(config);
+  if (!fs.existsSync(pendingPath)) return null;
+  try {
+    const pending = sanitizePending(JSON.parse(fs.readFileSync(pendingPath, 'utf8')));
+    if (!pending) return null;
+    if (Date.parse(pending.expires_at) <= now.getTime()) {
+      fs.rmSync(pendingPath, { force: true });
+      return null;
+    }
+    return pending;
+  } catch {
+    return null;
+  }
+}
+
 function isBackgroundSuggestionDue(config: AppConfig, state: BackgroundSuggestionsState, now: Date): boolean {
   if (!config.chat_analysis.enabled) return false;
   if (!state.last_run_at) return true;
@@ -114,7 +152,8 @@ function formatBackgroundSuggestionsMessage(result: ChatContextAnalysisResult, s
       ...(suggestion.due ? [`   时间：${suggestion.due}`] : []),
     ]),
     '',
-    '这些只是后台建议，不会自动修改任务、日历、文档或 Linear。',
+    '你可以直接回复自然语言，比如“第 2 条写入今天进展”“第 3 条改成明天跟进”“这些先忽略”。',
+    '这些只是后台建议；只有收到你的回复并通过 agent mode 处理后，才会继续执行。',
   ].join('\n');
 }
 
@@ -149,8 +188,45 @@ function writeBackgroundSuggestionsState(config: AppConfig, state: BackgroundSug
   fs.writeFileSync(statePath, JSON.stringify(state, null, 2), 'utf8');
 }
 
+function writePendingBackgroundSuggestions(
+  config: AppConfig,
+  result: ChatContextAnalysisResult,
+  suggestions: ChatContextSuggestion[],
+  now: Date,
+): void {
+  const pendingPath = backgroundSuggestionsPendingPath(config);
+  if (suggestions.length === 0) {
+    fs.rmSync(pendingPath, { force: true });
+    return;
+  }
+  const pending: PendingBackgroundSuggestions = {
+    created_at: now.toISOString(),
+    expires_at: new Date(now.getTime() + config.background_suggestions.pending_ttl_hours * 60 * 60_000).toISOString(),
+    date: result.date,
+    mode: result.mode,
+    window_label: result.window_label,
+    suggestions: suggestions.slice(0, config.chat_analysis.max_suggestions).map((suggestion, index) => ({
+      index: index + 1,
+      id: suggestion.id,
+      kind: suggestion.kind,
+      title: suggestion.title,
+      summary: suggestion.summary,
+      targets: suggestion.targets,
+      confidence: suggestion.confidence,
+      ...(suggestion.owner ? { owner: suggestion.owner } : {}),
+      ...(suggestion.due ? { due: suggestion.due } : {}),
+    })),
+  };
+  fs.mkdirSync(path.dirname(pendingPath), { recursive: true });
+  fs.writeFileSync(pendingPath, JSON.stringify(pending, null, 2), 'utf8');
+}
+
 function backgroundSuggestionsStatePath(config: AppConfig): string {
   return path.resolve(config.background_suggestions.state_path);
+}
+
+function backgroundSuggestionsPendingPath(config: AppConfig): string {
+  return path.resolve(config.background_suggestions.pending_path);
 }
 
 function nextRunAt(config: AppConfig, now: Date): Date {
@@ -182,4 +258,54 @@ function safeErrorSummary(error: unknown): string {
   if (/Failed to send Feishu message/i.test(message)) return 'Failed to send Feishu message.';
   if (/Failed to read Feishu messages/i.test(message)) return 'Failed to read Feishu messages.';
   return 'Background suggestions run failed. Check service logs.';
+}
+
+function sanitizePending(value: unknown): PendingBackgroundSuggestions | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  if (
+    typeof raw.created_at !== 'string' ||
+    typeof raw.expires_at !== 'string' ||
+    typeof raw.date !== 'string' ||
+    !['manual', 'todo', 'review'].includes(String(raw.mode)) ||
+    typeof raw.window_label !== 'string' ||
+    !Array.isArray(raw.suggestions)
+  ) {
+    return null;
+  }
+  return {
+    created_at: raw.created_at,
+    expires_at: raw.expires_at,
+    date: raw.date,
+    mode: raw.mode as ChatAnalysisMode,
+    window_label: raw.window_label,
+    suggestions: raw.suggestions.map(sanitizePendingSuggestion).filter((item): item is PendingBackgroundSuggestion => Boolean(item)),
+  };
+}
+
+function sanitizePendingSuggestion(value: unknown): PendingBackgroundSuggestion | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  if (
+    typeof raw.index !== 'number' ||
+    typeof raw.id !== 'string' ||
+    typeof raw.kind !== 'string' ||
+    typeof raw.title !== 'string' ||
+    typeof raw.summary !== 'string' ||
+    !Array.isArray(raw.targets) ||
+    !['low', 'medium', 'high'].includes(String(raw.confidence))
+  ) {
+    return null;
+  }
+  return {
+    index: raw.index,
+    id: raw.id,
+    kind: raw.kind,
+    title: raw.title,
+    summary: raw.summary,
+    targets: raw.targets.filter((target): target is string => typeof target === 'string'),
+    confidence: raw.confidence as 'low' | 'medium' | 'high',
+    ...(typeof raw.owner === 'string' ? { owner: raw.owner } : {}),
+    ...(typeof raw.due === 'string' ? { due: raw.due } : {}),
+  };
 }
