@@ -23,6 +23,20 @@ workflows:
     weekday: "SUN"
     time: "20:00"
 
+planning:
+  strategy_alignment:
+    enabled: true
+    # The source that should anchor daily planning before Linear/tasks are selected.
+    # Put private document names or table markers only in your local config/config.yaml.
+    primary_source_hint: "Primary weekly planning source"
+    primary_labels: ["weekly priorities", "每周要务"]
+    primary_markers: []
+    reference_labels: []
+    reference_markers: []
+    alignment_heading: "策略对齐"
+    # These sources refine execution, but should not override the primary strategy source.
+    reference_sources: ["linear", "vault", "feishu", "calendar", "github"]
+
 service:
   prevent_sleep:
     # Uses macOS `caffeinate -i` while `npm run start` or the launchd service is running.
