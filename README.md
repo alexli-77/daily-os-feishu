@@ -58,8 +58,9 @@ npm run start
 This opens the local UI, starts the scheduler for plan/review/weekly, and starts
 the Feishu websocket interaction layer when `interaction.feishu.enabled` is
 true. Keep the terminal window running. If the Mac sleeps, the local process and
-Feishu websocket pause too; after wake, the scheduler catches up missed runs
-within a three-hour window.
+Feishu websocket pause too; after wake, the scheduler catches up missed runs on
+the same local day. A missed daily plan can still run until the daily review
+time; failed runs are retried later instead of being marked as completed.
 
 Source, workflow, security, agent mode, and prompt-related settings saved in the
 UI are reloaded on the next scheduler tick or the next Feishu message/card

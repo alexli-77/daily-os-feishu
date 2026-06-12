@@ -11,7 +11,7 @@ import { runBackgroundSuggestions } from './background-suggestions.js';
 
 const LABEL = 'com.daily-os-feishu.agent';
 const SCHEDULER_STATE_PATH = './data/memory/scheduler-state.json';
-const CATCH_UP_WINDOW_MINUTES = 180;
+const RETRY_DELAY_MINUTES = 15;
 
 export interface LaunchAgentStatus {
   label: string;
@@ -21,6 +21,11 @@ export interface LaunchAgentStatus {
 }
 
 type ConfigProvider = AppConfig | (() => AppConfig);
+
+interface SchedulerRuntimeState {
+  fired: Set<string>;
+  retryAfter: Map<string, number>;
+}
 
 export async function installLaunchAgent(repoRoot = process.cwd()): Promise<string> {
   const plistPath = launchAgentPath();
@@ -54,20 +59,23 @@ export async function getLaunchAgentStatus(): Promise<LaunchAgentStatus> {
 }
 
 export async function runScheduler(config: ConfigProvider): Promise<void> {
-  const fired = readSchedulerState();
-  await safeTick(config, fired);
-  setInterval(() => void safeTick(config, fired), 60_000);
+  const state: SchedulerRuntimeState = {
+    fired: readSchedulerState(),
+    retryAfter: new Map(),
+  };
+  await safeTick(config, state);
+  setInterval(() => void safeTick(config, state), 60_000);
 }
 
-async function safeTick(configProvider: ConfigProvider, fired: Set<string>): Promise<void> {
+async function safeTick(configProvider: ConfigProvider, state: SchedulerRuntimeState): Promise<void> {
   try {
-    await tick(configProvider, fired);
+    await tick(configProvider, state);
   } catch (error) {
     console.error(`[scheduler] tick failed: ${error instanceof Error ? error.stack || error.message : String(error)}`);
   }
 }
 
-async function tick(configProvider: ConfigProvider, fired: Set<string>): Promise<void> {
+async function tick(configProvider: ConfigProvider, state: SchedulerRuntimeState): Promise<void> {
   const config = readRuntimeConfig(configProvider);
   const now = new Date();
   const time = timeInZone(now, config.user.timezone);
@@ -81,28 +89,32 @@ async function tick(configProvider: ConfigProvider, fired: Set<string>): Promise
   ];
 
   for (const item of schedule) {
-    if (!item.enabled || !isDue(time, item.time)) continue;
+    if (!item.enabled || !isWorkflowDue(config, item.workflow, time, item.time)) continue;
     if (item.weekday && item.weekday.slice(0, 3).toUpperCase() !== weekday) continue;
     const key = `${date}:${item.workflow}:${item.time}`;
-    if (fired.has(key)) continue;
-    markFired(fired, key);
+    if (state.fired.has(key) || isRetryBlocked(state, key, now)) continue;
     try {
       await runWorkflow(config, item.workflow);
+      markFired(state.fired, key);
+      clearRetry(state, key);
     } catch (error) {
+      scheduleRetry(state, key, now);
       console.error(error instanceof Error ? error.stack || error.message : String(error));
     }
   }
 
-  if (config.progress.enabled && isDue(time, config.progress.no_progress_reminder_time)) {
+  if (config.progress.enabled && isProgressReminderDue(config, time)) {
     const key = `${date}:progress_reminder:${config.progress.no_progress_reminder_time}`;
-    if (!fired.has(key)) {
-      markFired(fired, key);
+    if (!state.fired.has(key) && !isRetryBlocked(state, key, now)) {
       try {
         if (!hasConfirmedProgress(config, date)) {
           const result = await collectProgressCandidates(config, date);
           await sendFeishuCard(config, renderProgressConfirmationCard(config, result), progressReminderText(result.candidates));
         }
+        markFired(state.fired, key);
+        clearRetry(state, key);
       } catch (error) {
+        scheduleRetry(state, key, now);
         console.error(error instanceof Error ? error.stack || error.message : String(error));
       }
     }
@@ -139,12 +151,21 @@ function dateInZone(date: Date, timezone: string): string {
   }).format(date);
 }
 
-function isDue(currentTime: string, scheduledTime: string): boolean {
+function isWorkflowDue(config: AppConfig, workflow: WorkflowName, currentTime: string, scheduledTime: string): boolean {
   const current = minutesFromTime(currentTime);
   const scheduled = minutesFromTime(scheduledTime);
-  if (current === null || scheduled === null) return false;
-  const diff = current - scheduled;
-  return diff >= 0 && diff <= CATCH_UP_WINDOW_MINUTES;
+  if (current === null || scheduled === null || current < scheduled) return false;
+  if (workflow !== 'daily_plan') return true;
+  const review = minutesFromTime(config.workflows.daily_review.time);
+  return review === null || review <= scheduled || current < review;
+}
+
+function isProgressReminderDue(config: AppConfig, currentTime: string): boolean {
+  const current = minutesFromTime(currentTime);
+  const scheduled = minutesFromTime(config.progress.no_progress_reminder_time);
+  if (current === null || scheduled === null || current < scheduled) return false;
+  const review = minutesFromTime(config.workflows.daily_review.time);
+  return review === null || review <= scheduled || current < review;
 }
 
 function minutesFromTime(value: string): number | null {
@@ -172,6 +193,26 @@ function markFired(fired: Set<string>, key: string): void {
   const recent = [...fired].filter((item) => isRecentSchedulerKey(item));
   fs.mkdirSync(path.dirname(SCHEDULER_STATE_PATH), { recursive: true });
   fs.writeFileSync(SCHEDULER_STATE_PATH, JSON.stringify({ fired: recent }, null, 2), 'utf8');
+}
+
+function isRetryBlocked(state: SchedulerRuntimeState, key: string, now: Date): boolean {
+  const retryAt = state.retryAfter.get(key);
+  if (!retryAt) return false;
+  if (now.getTime() >= retryAt) {
+    state.retryAfter.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function scheduleRetry(state: SchedulerRuntimeState, key: string, now: Date): void {
+  const retryAt = now.getTime() + RETRY_DELAY_MINUTES * 60_000;
+  state.retryAfter.set(key, retryAt);
+  console.warn(`[scheduler] ${key} failed; will retry after ${new Date(retryAt).toISOString()}`);
+}
+
+function clearRetry(state: SchedulerRuntimeState, key: string): void {
+  state.retryAfter.delete(key);
 }
 
 function isRecentSchedulerKey(key: string): boolean {
