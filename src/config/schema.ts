@@ -2,6 +2,28 @@ import { z } from 'zod';
 
 const enabled = z.object({ enabled: z.boolean().default(false) });
 
+const strategyAlignment = z
+  .object({
+    enabled: z.boolean().default(true),
+    primary_source_hint: z.string().default('Primary weekly planning source'),
+    primary_labels: z.array(z.string()).default(['weekly priorities', '每周要务']),
+    primary_markers: z.array(z.string()).default([]),
+    reference_labels: z.array(z.string()).default([]),
+    reference_markers: z.array(z.string()).default([]),
+    alignment_heading: z.string().default('策略对齐'),
+    reference_sources: z.array(z.string()).default(['linear', 'vault', 'feishu', 'calendar', 'github']),
+  })
+  .default({
+    enabled: true,
+    primary_source_hint: 'Primary weekly planning source',
+    primary_labels: ['weekly priorities', '每周要务'],
+    primary_markers: [],
+    reference_labels: [],
+    reference_markers: [],
+    alignment_heading: '策略对齐',
+    reference_sources: ['linear', 'vault', 'feishu', 'calendar', 'github'],
+  });
+
 const feishuProfile = enabled.extend({
   id: z.string().default('default'),
   label: z.string().default('Default'),
@@ -43,6 +65,22 @@ export const AppConfigSchema = z.object({
       time: z.string().default('20:00'),
     }),
   }),
+  planning: z
+    .object({
+      strategy_alignment: strategyAlignment,
+    })
+    .default({
+      strategy_alignment: {
+        enabled: true,
+        primary_source_hint: 'Primary weekly planning source',
+        primary_labels: ['weekly priorities', '每周要务'],
+        primary_markers: [],
+        reference_labels: [],
+        reference_markers: [],
+        alignment_heading: '策略对齐',
+        reference_sources: ['linear', 'vault', 'feishu', 'calendar', 'github'],
+      },
+    }),
   service: z
     .object({
       prevent_sleep: enabled.default({ enabled: false }),

@@ -1,4 +1,4 @@
-import type { WorkflowName } from '../config/schema.js';
+import type { AppConfig, WorkflowName } from '../config/schema.js';
 import type { Evidence } from './types.js';
 
 const MAX_SUMMARY_CHARS = 2200;
@@ -6,10 +6,10 @@ const MAX_DETAIL_CHARS = 7000;
 const MAX_ROW_TITLE_CHARS = 38;
 const MAX_ROW_GOAL_CHARS = 30;
 
-export function formatWorkflowSummaryForFeishu(workflow: WorkflowName, date: string, content: string, evidence?: Evidence): string {
+export function formatWorkflowSummaryForFeishu(workflow: WorkflowName, date: string, content: string, evidence?: Evidence, config?: AppConfig): string {
   const clean = normalize(content);
   const intro = introFor(workflow, clean);
-  const overview = workflowOverview(workflow, clean, evidence);
+  const overview = workflowOverview(workflow, clean, evidence, config);
   const fallback = sentencePreview(clean, 420);
   const fallbackLines = normalizedTextKey(fallback) === normalizedTextKey(intro) ? [] : [fallback];
   const lines = [
@@ -55,15 +55,16 @@ function extractSectionBullets(content: string, headings: string[], limit: numbe
     .slice(0, limit);
 }
 
-function workflowOverview(workflow: WorkflowName, content: string, evidence?: Evidence): string[] {
-  if (workflow === 'daily_plan') return dailyPlanOverview(content, evidence);
+function workflowOverview(workflow: WorkflowName, content: string, evidence?: Evidence, config?: AppConfig): string[] {
+  if (workflow === 'daily_plan') return dailyPlanOverview(content, evidence, config);
   if (workflow === 'daily_review') return dailyReviewOverview(content, evidence);
   return weeklyReviewOverview(content, evidence);
 }
 
-function dailyPlanOverview(content: string, evidence?: Evidence): string[] {
+function dailyPlanOverview(content: string, evidence?: Evidence, config?: AppConfig): string[] {
   const linear = linearMetadataFromEvidence(evidence);
-  const alignment = weeklyAlignmentRows(content);
+  const alignment = strategyAlignmentRows(content, config);
+  const alignmentTitle = strategyAlignmentTitle(config);
   const priorities = extractSectionBullets(content, ['今日重点'], 3);
   const codex = extractSectionBullets(content, ['Codex 可以做', '我可以帮您', '我可以帮您安排 Codex 做'], 3);
   const user = extractSectionBullets(content, ['用户必须做', '需要您批示', '需要您本人处理'], 3);
@@ -84,7 +85,7 @@ function dailyPlanOverview(content: string, evidence?: Evidence): string[] {
     { label: '暂缓的', rows: pausedRows },
   ]);
   if (alignment.length === 0 || overview.length === 0) return overview;
-  return [overview[0], '', '**每周要务对齐**', ...alignment, ...overview.slice(1)];
+  return [overview[0], '', `**${alignmentTitle}**`, ...alignment, ...overview.slice(1)];
 }
 
 function dailyReviewOverview(content: string, evidence?: Evidence): string[] {
@@ -273,9 +274,31 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
-function weeklyAlignmentRows(content: string): string[] {
-  const rows = extractSectionBullets(content, ['每周要务对齐', 'Weekly 对齐', 'Weekly对齐', '本周要务', '🐶'], 2);
+function strategyAlignmentRows(content: string, config?: AppConfig): string[] {
+  if (config?.planning.strategy_alignment.enabled === false) return [];
+  const rows = extractSectionBullets(content, strategyAlignmentHeadings(config), 2);
   return rows.map((row) => `- ${completePhrase(row, 120)}`).slice(0, 2);
+}
+
+function strategyAlignmentTitle(config?: AppConfig): string {
+  return config?.planning.strategy_alignment.alignment_heading || '策略对齐';
+}
+
+function strategyAlignmentHeadings(config?: AppConfig): string[] {
+  const strategy = config?.planning.strategy_alignment;
+  return dedupe(
+    [
+      strategy?.alignment_heading,
+      ...(strategy?.primary_labels || []),
+      ...(strategy?.primary_markers || []),
+      '策略对齐',
+      'Strategy alignment',
+      '主策略对齐',
+      '本周要务',
+      '每周要务对齐',
+      'Weekly alignment',
+    ].filter((value): value is string => Boolean(value && value.trim())),
+  );
 }
 
 function removeEvidenceTail(value: string): string {

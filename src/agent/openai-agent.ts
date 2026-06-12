@@ -31,6 +31,7 @@ export function buildUserPrompt(input: AgentInput): string {
   return [
     `# Workflow\n${workflowPrompt}`,
     `# User\n${JSON.stringify(input.config.user, null, 2)}`,
+    `# Planning Configuration\n${JSON.stringify(input.config.planning, null, 2)}`,
     `# Date\n${input.date}`,
     `# Memory\n${JSON.stringify(input.memory, null, 2)}`,
     `# Evidence\n${JSON.stringify(input.evidence, null, 2)}`,
