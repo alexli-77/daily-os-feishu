@@ -9,6 +9,8 @@ import {
   type ChatContextSuggestion,
 } from '../chat/context-analysis.js';
 import { sendFeishuMessage } from '../connectors/lark-cli.js';
+import { appendDailyMemory, appendFeedbackLog } from '../storage/memory.js';
+import { todayInTimezone } from '../utils/date.js';
 
 export interface BackgroundSuggestionsState {
   last_run_at?: string;
@@ -41,6 +43,11 @@ export interface PendingBackgroundSuggestion {
   confidence: 'low' | 'medium' | 'high';
   owner?: string;
   due?: string;
+}
+
+export interface PendingBackgroundSuggestionReply {
+  handled: boolean;
+  reply?: string;
 }
 
 export async function runBackgroundSuggestions(config: AppConfig, now = new Date()): Promise<BackgroundSuggestionsState> {
@@ -126,6 +133,75 @@ export function readPendingBackgroundSuggestions(config: AppConfig, now = new Da
   }
 }
 
+export function handlePendingBackgroundSuggestionReply(
+  config: AppConfig,
+  text: string,
+  metadata: { messageId: string; source: string; now?: Date },
+): PendingBackgroundSuggestionReply {
+  const pending = readPendingBackgroundSuggestions(config, metadata.now || new Date());
+  if (!pending) return { handled: false };
+
+  const parsed = parsePendingSuggestionReply(text, pending);
+  if (!parsed) return { handled: false };
+
+  const selected = pending.suggestions.filter((suggestion) => parsed.indexes.includes(suggestion.index));
+  if (selected.length === 0) {
+    return {
+      handled: true,
+      reply: `我现在只有 ${pending.suggestions.length} 条待确认建议。请回复“采纳第 1 条”或“忽略第 1 条”。`,
+    };
+  }
+
+  if (parsed.action === 'dismiss') {
+    appendFeedbackLog(
+      config,
+      selected.map((suggestion) => `用户不采纳后台建议 ${suggestion.index}：${suggestion.title}`).join('\n'),
+      { message_id: metadata.messageId, source: metadata.source, action: 'dismiss_background_suggestion' },
+    );
+    writePendingBackgroundSuggestionSnapshot(config, {
+      ...pending,
+      suggestions: pending.suggestions.filter((suggestion) => !parsed.indexes.includes(suggestion.index)),
+    });
+    return {
+      handled: true,
+      reply: [
+        `收到，已忽略${formatIndexes(selected)}。`,
+        '',
+        ...selected.map((suggestion) => `- ${suggestion.title}`),
+        '',
+        '我不会把它写入日历、Linear 或记忆库。',
+      ].join('\n'),
+    };
+  }
+
+  const date = todayInTimezone(config);
+  const note = selected
+    .map(
+      (suggestion) =>
+        `用户采纳后台建议 ${suggestion.index}：${suggestion.title}\n建议：${suggestion.summary}\n用户回复：${text.trim()}\n目标：${suggestion.targets.join('、')}`,
+    )
+    .join('\n\n');
+  appendDailyMemory(config, selected.some((suggestion) => suggestion.targets.includes('review')) ? 'daily_review' : 'daily_plan', date, note);
+  appendFeedbackLog(config, note, { message_id: metadata.messageId, source: metadata.source, action: 'accept_background_suggestion' });
+  writePendingBackgroundSuggestionSnapshot(config, {
+    ...pending,
+    suggestions: pending.suggestions.filter((suggestion) => !parsed.indexes.includes(suggestion.index)),
+  });
+
+  return {
+    handled: true,
+    reply: [
+      `收到，已记录${formatIndexes(selected)}。`,
+      '',
+      ...selected.map((suggestion) => `- ${suggestion.title}`),
+      '',
+      '我会在下一次计划/复盘里参考这条确认。',
+      `你的回复：${text.trim()}`,
+      '说明：我刚才只是记录了你的批示，还没有直接修改日历或 Linear。',
+    ].join('\n'),
+  };
+}
+
 function isBackgroundSuggestionDue(config: AppConfig, state: BackgroundSuggestionsState, now: Date): boolean {
   if (!config.chat_analysis.enabled) return false;
   if (!state.last_run_at) return true;
@@ -143,18 +219,28 @@ function formatBackgroundSuggestionsMessage(result: ChatContextAnalysisResult, s
   return [
     `# 后台工作建议 - ${result.date}`,
     '',
-    `我在后台检查了 ${result.inspected_messages} 条聊天信号，发现 ${suggestions.length} 条需要确认的建议。`,
+    `老板，我在后台看了 ${result.inspected_messages} 条聊天记录，发现 ${suggestions.length} 件事可能需要你定一下。`,
     '',
-    ...suggestions.slice(0, 5).flatMap((suggestion, index) => [
-      `${index + 1}. ${confidenceLabel(suggestion.confidence)}：${suggestion.title}`,
-      `   建议：${suggestion.summary}`,
-      `   目标：${suggestion.targets.join('、')}`,
-      ...(suggestion.due ? [`   时间：${suggestion.due}`] : []),
-    ]),
+    ...suggestions.slice(0, 5).flatMap((suggestion, index) => formatSuggestionForFeishu(suggestion, index + 1)),
     '',
-    '你可以直接回复自然语言，比如“第 2 条写入今天进展”“第 3 条改成明天跟进”“这些先忽略”。',
-    '这些只是后台建议；只有收到你的回复并通过 agent mode 处理后，才会继续执行。',
+    '你可以直接回复：',
+    '- 不采纳这个建议',
+    '- 采纳第 1 条',
+    '- 第 1 条改成明天跟进',
+    '',
+    '我会先回你一条确认。涉及日历或 Linear 的实际改动，不会在你确认前自动执行。',
   ].join('\n');
+}
+
+function formatSuggestionForFeishu(suggestion: ChatContextSuggestion, index: number): string[] {
+  return [
+    `${index}. 我看到你提到：${suggestion.title}`,
+    `   我的建议：${suggestion.summary}`,
+    `   可能影响：${suggestion.targets.map(targetLabel).join('、')}`,
+    ...(suggestion.due ? [`   时间：${suggestion.due}`] : []),
+    `   判断把握：${confidenceLabel(suggestion.confidence)}`,
+    '   是否采纳？请老板批示。',
+  ];
 }
 
 function suggestionSignature(suggestions: ChatContextSuggestion[]): string {
@@ -221,6 +307,16 @@ function writePendingBackgroundSuggestions(
   fs.writeFileSync(pendingPath, JSON.stringify(pending, null, 2), 'utf8');
 }
 
+function writePendingBackgroundSuggestionSnapshot(config: AppConfig, pending: PendingBackgroundSuggestions): void {
+  const pendingPath = backgroundSuggestionsPendingPath(config);
+  if (pending.suggestions.length === 0) {
+    fs.rmSync(pendingPath, { force: true });
+    return;
+  }
+  fs.mkdirSync(path.dirname(pendingPath), { recursive: true });
+  fs.writeFileSync(pendingPath, JSON.stringify(pending, null, 2), 'utf8');
+}
+
 function backgroundSuggestionsStatePath(config: AppConfig): string {
   return path.resolve(config.background_suggestions.state_path);
 }
@@ -247,9 +343,59 @@ function confidenceRank(value: 'low' | 'medium' | 'high'): number {
 }
 
 function confidenceLabel(value: 'low' | 'medium' | 'high'): string {
-  if (value === 'high') return '高置信度';
-  if (value === 'medium') return '中置信度';
-  return '低置信度';
+  if (value === 'high') return '高';
+  if (value === 'medium') return '中';
+  return '低';
+}
+
+function targetLabel(target: string): string {
+  const labels: Record<string, string> = {
+    todo: '待办',
+    daily_plan: '今日计划',
+    calendar: '日历',
+    document: '文档',
+    linear: 'Linear',
+    memory: '记忆库',
+    review: '复盘',
+  };
+  return labels[target] || target;
+}
+
+function parsePendingSuggestionReply(
+  text: string,
+  pending: PendingBackgroundSuggestions,
+): { action: 'accept' | 'dismiss'; indexes: number[] } | null {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return null;
+  if (/^(?:\/?daily-os|@daily-os)\b/i.test(normalized)) return null;
+
+  const dismiss = /(不采纳|不采用|不要|不用|忽略|先忽略|先不|取消|算了|否|no\b|reject\b|dismiss\b)/i.test(normalized);
+  const accept = /(采纳|采用|可以|同意|确认|写入|记录|加入|安排|创建|调整|改成|跟进|yes\b|ok\b|okay\b)/i.test(normalized);
+  if (!dismiss && !accept) return null;
+
+  const indexes = extractReferencedSuggestionIndexes(normalized, pending);
+  if (indexes.length === 0) return null;
+  return { action: dismiss ? 'dismiss' : 'accept', indexes };
+}
+
+function extractReferencedSuggestionIndexes(text: string, pending: PendingBackgroundSuggestions): number[] {
+  if (/(全部|都|这些)/.test(text)) return pending.suggestions.map((suggestion) => suggestion.index);
+
+  const indexes = new Set<number>();
+  for (const match of text.matchAll(/第\s*(\d+)\s*条/g)) indexes.add(Number(match[1]));
+  for (const match of text.matchAll(/\b(\d+)\b/g)) indexes.add(Number(match[1]));
+
+  if (indexes.size === 0 && pending.suggestions.length === 1 && /(这个|这条|该建议|这个建议|刚才|建议)/.test(text)) {
+    indexes.add(pending.suggestions[0].index);
+  }
+
+  const available = new Set(pending.suggestions.map((suggestion) => suggestion.index));
+  return [...indexes].filter((index) => available.has(index));
+}
+
+function formatIndexes(suggestions: PendingBackgroundSuggestion[]): string {
+  if (suggestions.length === 1) return `第 ${suggestions[0].index} 条建议`;
+  return `第 ${suggestions.map((suggestion) => suggestion.index).join('、')} 条建议`;
 }
 
 function safeErrorSummary(error: unknown): string {

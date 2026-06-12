@@ -430,6 +430,12 @@ function isDailyOsGeneratedText(text: string): boolean {
     /\*\*(MIT|Main Plan|Missing Sources|What changed today)\*\*/i.test(normalized) ||
     /完整内容我已经保存/.test(normalized) ||
     /需要展开时[，,]?请回复/.test(normalized) ||
+    /可以[，,]?您?直接回复修改意见即可/.test(normalized) ||
+    /格式示例[:：]?\s*daily-os\s+修改今日安排/i.test(normalized) ||
+    /我会把修改意见写入今天的上下文/.test(normalized) ||
+    /后台工作建议\s*-\s*\d{4}-\d{2}-\d{2}/.test(normalized) ||
+    /我在后台(?:检查|看了).+条聊天/.test(normalized) ||
+    /是否采纳[？?]?请老板批示/.test(normalized) ||
     /今天还没有确认过的进展记录/.test(normalized) ||
     /这些还不能直接当事实[，,]?需要您批示确认/.test(normalized) ||
     /这些只是建议，不会自动修改任务、日历、文档或 Linear/.test(normalized) ||

@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { AppConfig } from '../config/schema.js';
 import { listFeishuMessages, sendFeishuFeedbackReply, type FeishuMessage } from '../connectors/lark-cli.js';
 import { handleDailyOsCommand } from '../interaction/daily-os-command.js';
+import { handlePendingBackgroundSuggestionReply } from '../service/background-suggestions.js';
 
 interface FeedbackState {
   processed_ids: string[];
@@ -47,7 +48,7 @@ export async function pollFeishuFeedback(config: AppConfig, options: { send?: bo
 }
 
 async function handleCommand(config: AppConfig, message: FeishuMessage, send: boolean): Promise<{ handled: boolean }> {
-  return handleDailyOsCommand({
+  const commandResult = await handleDailyOsCommand({
     config,
     messageId: message.id,
     text: message.text,
@@ -58,6 +59,15 @@ async function handleCommand(config: AppConfig, message: FeishuMessage, send: bo
       if (send) await sendFeishuFeedbackReply(config, text);
     },
   });
+  if (commandResult.handled) return commandResult;
+
+  const suggestionReply = handlePendingBackgroundSuggestionReply(config, message.text, {
+    messageId: message.id,
+    source: 'feishu-poll',
+  });
+  if (!suggestionReply.handled) return commandResult;
+  if (send && suggestionReply.reply) await sendFeishuFeedbackReply(config, suggestionReply.reply);
+  return { handled: true };
 }
 
 function loadState(config: AppConfig): FeedbackState {
