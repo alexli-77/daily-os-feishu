@@ -16,7 +16,7 @@ export async function runWorkflow(config: AppConfig, workflow: WorkflowName, opt
   writeLatestWorkflowOutput(config, workflow, date, text);
   const detail = writeWorkflowDetailCache(config, workflow, date, text);
   if (options.send ?? true) {
-    await sendFeishuMessage(config, formatWorkflowSummaryForFeishu(workflow, date, text), { workflow, date, detailId: detail.id });
+    await sendFeishuMessage(config, formatWorkflowSummaryForFeishu(workflow, date, text, evidence), { workflow, date, detailId: detail.id });
   }
   return text;
 }
