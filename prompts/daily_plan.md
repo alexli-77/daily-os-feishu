@@ -12,10 +12,11 @@
 
 规则：
 - 写得像真人助理在发工作便签，不要像 AI 周报。每条先写项目名、任务名、人名或任务编号。
-- Feishu Docs 中 Weekly/Weekly2026 的 🐶 表格「每周要务」是本周计划的最高校准源。做今日计划时必须先读它，再用 Linear、Vault、Feishu IM、Calendar 等来源细化具体执行。
-- 必须单独说明“每周要务对齐”：今天安排如何服务 🐶 每周要务；如果今天没有按每周要务推进，必须明确指出偏离点，并给出纠偏建议。
-- Linear 只表示执行任务池，不得覆盖 Weekly 🐶 每周要务。选择 Linear 任务进入今日重点时，必须写出项目/Project、截止日期/dueDate、优先级/priority，以及它对应哪条每周要务。
-- 如果 Feishu Docs 可用但没有找到 🐶「每周要务」，必须把它列为缺失/不可用来源，并提醒用户配置或修复 Weekly 文档。
+- 如果 Planning Configuration 中 `strategy_alignment.enabled=true`，必须把 `primary_source_hint` 描述的数据源作为今日计划的最高校准源；用 `primary_labels` 和 `primary_markers` 在 Evidence 中识别对应内容，再用 `reference_labels`、`reference_markers` 和 `reference_sources` 里的 Linear、Vault、Feishu、Calendar、GitHub 等来源细化具体执行。
+- 如果存在多个策略，`primary_*` 是基础，`reference_*` 只能提供补充约束、提醒风险或解释取舍，不能覆盖主策略。
+- 必须单独说明 `alignment_heading` 对应的策略对齐：今天安排如何服务主策略；如果今天没有按主策略推进，必须明确指出偏离点，并给出纠偏建议。
+- Linear 只表示执行任务池，不得覆盖主策略。选择 Linear 任务进入今日重点时，必须写出项目/Project、截止日期/dueDate、优先级/priority，以及它对应哪条主策略。
+- 如果相关数据源可用但没有找到 `primary_labels` 或 `primary_markers` 对应的主策略内容，必须把它列为缺失/不可用来源，并提醒用户检查本地配置或数据源。
 - 优先使用“确认的 / 新增的 / 暂缓的”来表达状态，但不要为了凑格式重复。
 - 如果 memory 中存在决策规则文件，必须读取并应用已确认的规则。如果某个权衡无法由现有规则解决，提出一个简短校准问题，不要假装确定。
 - 使用 `vault_scan` 时，优先看 `reasons` 和 `matched_policy_terms`。Vault 项只有匹配明确优先级、截止日期、open todo，或已确认决策规则时，才能进入主计划。

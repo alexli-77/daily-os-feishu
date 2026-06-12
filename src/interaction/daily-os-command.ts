@@ -229,7 +229,7 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
       await context.reply(`Running ${command.workflow.replaceAll('_', ' ')}...`);
       const output = await runWorkflow(context.config, command.workflow, { send: context.sendWorkflowOutput ?? false });
       if (!(context.sendWorkflowOutput ?? false)) {
-        await context.reply(formatWorkflowSummaryForFeishu(command.workflow, todayInTimezone(context.config), output));
+        await context.reply(formatWorkflowSummaryForFeishu(command.workflow, todayInTimezone(context.config), output, undefined, context.config));
       }
       return;
     }
