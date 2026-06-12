@@ -57,6 +57,14 @@ true. Keep the terminal window running. If the Mac sleeps, the local process and
 Feishu websocket pause too; after wake, the scheduler catches up missed runs
 within a three-hour window.
 
+Source, workflow, security, agent mode, and prompt-related settings saved in the
+UI are reloaded on the next scheduler tick or the next Feishu message/card
+callback. In practice, newly saved sources affect the next plan, review, progress
+confirmation, and Feishu command without restarting. Startup-level switches still
+require a restart, such as turning the Feishu interaction websocket on after it
+was disabled, toggling the prevent-sleep service, or changing service lifecycle
+settings.
+
 Then check the installation:
 
 ```bash

@@ -52,6 +52,12 @@ npm run start
 
 它会打开本地 UI，启动 plan/review/weekly 的前台 scheduler，并在
 `interaction.feishu.enabled=true` 时启动飞书 websocket 实时交互层。保持这个终端窗口运行即可。
+
+UI 中保存的 source、workflow、security、agent mode 和 prompt 相关配置，会在下一次
+scheduler tick 或下一条飞书消息/卡片回调时重新读取。也就是说，修改数据源并保存后，
+新的计划、复盘、进展确认和飞书命令会使用最新配置。启动型开关仍然需要重启，例如：
+从关闭改为开启 Feishu interaction websocket、开启/关闭防睡眠服务，或调整后台服务本身的
+生命周期。
 如果 Mac 进入睡眠，本地进程和飞书长连接也会暂停；醒来后，scheduler 会在 3 小时窗口内补跑错过的任务。
 
 检查环境：

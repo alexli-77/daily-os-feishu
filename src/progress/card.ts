@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import type { AppConfig } from '../config/schema.js';
 import type { ProgressCaptureResult } from './capture.js';
 
-export type ProgressCardAction = 'confirm_all' | 'ignore_all' | 'review';
+export type ProgressCardAction = 'confirm_all' | 'ignore_all' | 'details' | 'review';
 
 export interface ParsedProgressCardAction {
   action: ProgressCardAction;
@@ -23,7 +23,13 @@ export function renderProgressConfirmationCard(config: AppConfig, result: Progre
         tag: 'markdown',
         content:
           result.candidates.length > 0
-            ? ['我看到这些可能是今天的进展。它们还不是事实，确认后才会写入今日进展账本。', '', ...candidateLines(result)].join('\n')
+            ? [
+                '我看到这些可能是今天的进展。它们还不是事实，确认后才会写入今日进展账本。',
+                '',
+                ...candidateSummaryLines(result),
+                '',
+                '需要看来源和依据时点「查看详情」。',
+              ].join('\n')
             : [
                 '目前还没有看到可靠的今日进展候选。',
                 '',
@@ -31,19 +37,6 @@ export function renderProgressConfirmationCard(config: AppConfig, result: Progre
                 '`daily-os remember 今天进展：...`',
               ].join('\n'),
       },
-      ...(result.missing_sources.length
-        ? [
-            {
-              tag: 'note',
-              elements: [
-                {
-                  tag: 'plain_text',
-                  content: `部分来源不可用：${result.missing_sources.slice(0, 3).join('; ')}`,
-                },
-              ],
-            },
-          ]
-        : []),
       {
         tag: 'action',
         actions: [
@@ -61,9 +54,9 @@ export function renderProgressConfirmationCard(config: AppConfig, result: Progre
           },
           {
             tag: 'button',
-            text: { tag: 'plain_text', content: '发文字版' },
+            text: { tag: 'plain_text', content: '查看详情' },
             type: 'default',
-            value: progressActionValue(config, 'review', result.date, candidateIds),
+            value: progressActionValue(config, 'details', result.date, candidateIds),
           },
         ],
       },
@@ -86,14 +79,10 @@ export function parseProgressCardAction(value: unknown, config: AppConfig): Pars
   return { action, date, candidateIds };
 }
 
-function candidateLines(result: ProgressCaptureResult): string[] {
-  return result.candidates.map((candidate, index) =>
-    [
-      `${index + 1}. **${escapeMarkdown(candidate.title)}**`,
-      `   来源：${candidate.source}；可信度：${candidate.confidence}`,
-      `   依据：${escapeMarkdown(candidate.evidence)}`,
-    ].join('\n'),
-  );
+function candidateSummaryLines(result: ProgressCaptureResult): string[] {
+  const visible = result.candidates.slice(0, 5).map((candidate, index) => `${index + 1}. **${escapeMarkdown(candidate.title)}**`);
+  if (result.candidates.length <= visible.length) return visible;
+  return [...visible, `还有 ${result.candidates.length - visible.length} 条候选，点「查看详情」展开。`];
 }
 
 function progressActionValue(config: AppConfig, action: ProgressCardAction, date: string, candidateIds: string[]): Record<string, unknown> {
@@ -117,7 +106,7 @@ function timingSafeEqual(left: string, right: string): boolean {
 }
 
 function isProgressAction(value: unknown): value is ProgressCardAction {
-  return value === 'confirm_all' || value === 'ignore_all' || value === 'review';
+  return value === 'confirm_all' || value === 'ignore_all' || value === 'details' || value === 'review';
 }
 
 function escapeMarkdown(value: string): string {
