@@ -216,6 +216,63 @@ Feishu source profile 是 Daily OS 的本地设置，不是飞书开放平台凭
 - `Calendar`、`Tasks`、`Docs`、`IM history`：数据源开关。`Calendar` 和 `Tasks` 使用所选 `Access identity`；`IM history` 还需要 Chat ID env 对应的值。
 - Advanced local settings：`Local source key` 控制证据名称，`Chat ID env var` 是保存飞书 `Chat ID` 的 `.env` 变量名。大多数用户保持默认即可。
 
+### 飞书账号和权限模型
+
+Daily OS 同时支持个人飞书空间和企业飞书租户。两种场景的本地配置模型一致：密钥放在
+`.env`，数据源设置放在 `config/config.yaml`，每个 Feishu source profile 通过
+`identity` 决定使用 `user` 还是 `bot` 身份访问。
+
+个人空间通常用最简单路径：
+
+- 先运行 `lark-cli auth login`，再在 UI 点击 `Auto configure from lark-cli`；
+- 日历、任务、文档和 IM history 的 profile `identity` 选 `user`；
+- 只有发送输出、轮询反馈或采集某个会话的 IM history 时，才填写 `FEISHU_CHAT_ID`；
+- 只有启用 SDK 输出或 websocket interaction layer 时，才填写 `LARK_APP_ID` 和
+  `LARK_APP_SECRET`。
+
+企业租户里，管理员可能需要先审批应用 scope。Daily OS 仍然可以通过 `lark-cli`
+使用用户登录身份，但租户决定这个 user token 是否能读取日历、任务、文档或消息。
+如果改用 bot 身份，bot 必须被安装到目标会话，并且飞书应用需要具备对应的 bot/app scope。
+
+配置权限时按下面的矩阵判断：
+
+| 能力 | 推荐身份 | 必填本地值 | 飞书权限说明 |
+| --- | --- | --- | --- |
+| SDK 发送 workflow 输出 | `bot` | `LARK_APP_ID`、`LARK_APP_SECRET`、`FEISHU_CHAT_ID` | bot 必须能向目标会话发消息。 |
+| lark-cli fallback 发送输出 | `user` 或 `bot` | `FEISHU_CHAT_ID`、已登录的 `lark-cli` | 使用本机 `lark-cli` 当前登录身份。 |
+| 日历数据源 | `user` | 已登录的 `lark-cli` | user token 需要租户批准日历读取 scope。 |
+| 任务数据源 | `user` | 已登录的 `lark-cli` | user token 需要租户批准任务/任务列表读取 scope。 |
+| 文档数据源 | `user` | profile 中的 Docs URL/token | 用户本人需要有文档访问权限；读取文档不使用 Chat ID。 |
+| IM history 数据源 | 个人/私有使用推荐 `user`；只有 bot 已进群且 scope 齐全时才用 `bot` | `FEISHU_CHAT_ID` 等 chat ID env 值 | 租户需要批准消息读取 scope。尽量使用窄范围会话白名单。 |
+| Websocket interaction layer | `bot` 接收事件，user/admin allowlist 决定可执行动作 | `LARK_APP_ID`、`LARK_APP_SECRET`、owner/admin open ID | 启用远程命令前先配置 user/chat allowlist。 |
+| 决策校准群创建 | `bot` | `LARK_APP_ID`、`LARK_APP_SECRET`、owner open ID | 飞书应用需要 `im:chat` 和发消息权限。 |
+
+企业租户里如果某个能力失败，先看 `lark-cli auth status` 和 UI 的 **Run Checks**。
+如果本地登录存在但数据源仍失败，通常缺的是租户审批过的 scope，或者 bot 尚未安装进目标会话。
+Daily OS 会把这些视为本地配置问题，不会自动扩大权限。
+
+推荐诊断命令：
+
+```bash
+lark-cli auth status
+lark-cli config show
+lark-cli im +chat-list --as user --types group,p2p --format json
+```
+
+用 `lark-cli auth status` 确认当前有哪些可用身份以及已授权 scope。用
+`lark-cli config show` 确认本地 App ID。只有某个能力需要 chat ID 时，才运行
+chat-list 命令，然后把目标会话的 `oc_xxx` 写入对应的 chat ID env 变量。
+
+Doctor 和 UI 错误文案应该区分这些情况：
+
+- 缺少 `lark-cli`：请安装并登录 lark-cli，或者关闭飞书数据源采集和 lark-cli fallback。
+- 缺少 user 登录：日历、任务、文档或 IM history 使用 user 身份时，请运行 `lark-cli auth login`。
+- 缺少 bot 凭证：使用 SDK 输出、websocket interaction 或决策校准拉群前，请配置 `LARK_APP_ID` 和 `LARK_APP_SECRET`。
+- 缺少 chat ID：只有发送输出、轮询反馈或读取指定会话 IM history 时，才需要配置 `FEISHU_CHAT_ID`。
+- 缺少租户 scope：请让飞书租户管理员批准对应 scope，然后重新登录 lark-cli。
+- bot 未安装到目标会话：请把 bot 安装进目标会话，或者读取用户可访问数据源时把 profile identity 改成 `user`。
+- 跨租户访问失败：请使用和目标会话/文档属于同一租户的飞书应用与 lark-cli 登录身份。
+
 当前版本中，多个 Feishu source profile 共享同一套 `App ID` 和 `App Secret`。
 如果你需要接入不同飞书应用或不同租户，暂时用单独的本地 app config 运行。
 
