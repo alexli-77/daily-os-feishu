@@ -31,8 +31,9 @@ import {
 import { parseProgressCardAction, renderProgressConfirmationCard } from '../progress/card.js';
 import { todayInTimezone } from '../utils/date.js';
 import { appendDailyMemory, appendFeedbackLog, readLatestWorkflowOutput, readWorkflowDetailCache } from '../storage/memory.js';
-import { formatLatestWorkflowDetails } from '../workflows/summary.js';
+import { formatLatestWorkflowDetails, formatWorkflowSummaryForFeishu } from '../workflows/summary.js';
 import { handlePendingBackgroundSuggestionReply } from '../service/background-suggestions.js';
+import { renderFeishuWorkflowCard } from '../connectors/feishu-sdk.js';
 
 interface FeishuInteractionControls {
   stop: () => Promise<void>;
@@ -608,7 +609,8 @@ async function handleCardAction(input: {
 
   await input.channel.send(input.event.chatId, { text: `正在运行 ${action.replaceAll('_', ' ')}...` }, { replyTo: input.event.messageId });
   const output = await runWorkflow(input.config, action, { send: false });
-  await input.channel.send(input.event.chatId, toSendInput(output, input.config.interaction.feishu.reply_mode), { replyTo: input.event.messageId });
+  const summary = formatWorkflowSummaryForFeishu(action, todayInTimezone(input.config), output, undefined, input.config);
+  await input.channel.send(input.event.chatId, { card: renderFeishuWorkflowCard(summary, { workflow: action, date: todayInTimezone(input.config) }) }, { replyTo: input.event.messageId });
 }
 
 async function handleWorkflowCardCommand(input: {

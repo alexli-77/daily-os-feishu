@@ -33,6 +33,10 @@ export async function pollFeishuFeedback(
 
   for (const message of messages.reverse()) {
     if (seen.has(message.id)) continue;
+    if (isFeishuAppMessage(message)) {
+      seen.add(message.id);
+      continue;
+    }
 
     const result = options.workflowRevisionsOnly
       ? await handleFallbackReply(config, message, options.send ?? true)
@@ -52,6 +56,13 @@ export async function pollFeishuFeedback(
   });
 
   return { checked: messages.length, processed, ignored };
+}
+
+function isFeishuAppMessage(message: FeishuMessage): boolean {
+  if (!message.raw || typeof message.raw !== 'object') return false;
+  const sender = (message.raw as Record<string, unknown>).sender;
+  if (!sender || typeof sender !== 'object') return false;
+  return (sender as Record<string, unknown>).sender_type === 'app';
 }
 
 async function handleCommand(config: AppConfig, message: FeishuMessage, send: boolean): Promise<{ handled: boolean }> {
