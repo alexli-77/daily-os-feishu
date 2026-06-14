@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { AppConfig } from '../config/schema.js';
 import { collectEvidence } from '../workflows/evidence.js';
 import type { Evidence, EvidenceSource } from '../workflows/types.js';
+import { collectFeishuUserMessageRecords } from '../utils/feishu-message-records.js';
 
 export interface ProgressCandidate {
   id: string;
@@ -181,8 +182,8 @@ function extractFeishuCandidates(evidence: Evidence): ProgressCandidate[] {
   const out: ProgressCandidate[] = [];
   for (const [sourceName, source] of Object.entries(evidence.sources)) {
     if (!sourceName.includes('im_history') || source.state !== 'available') continue;
-    for (const text of collectTexts(source.data)) {
-      const normalized = text.replace(/\s+/g, ' ').trim();
+    for (const message of collectFeishuUserMessageRecords(source.data)) {
+      const normalized = message.text.replace(/\s+/g, ' ').trim();
       if (isDailyOsGeneratedText(normalized)) continue;
       if (!looksLikeProgress(normalized)) continue;
       out.push(
