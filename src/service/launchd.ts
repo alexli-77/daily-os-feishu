@@ -8,6 +8,7 @@ import { collectProgressCandidates, hasConfirmedProgress, type ProgressCandidate
 import { renderProgressConfirmationCard } from '../progress/card.js';
 import { sendFeishuCard } from '../connectors/lark-cli.js';
 import { runBackgroundSuggestions } from './background-suggestions.js';
+import { pollFeishuFeedback } from '../feedback/feishu-feedback.js';
 
 const LABEL = 'com.daily-os-feishu.agent';
 const SCHEDULER_STATE_PATH = './data/memory/scheduler-state.json';
@@ -129,6 +130,15 @@ async function tick(configProvider: ConfigProvider, state: SchedulerRuntimeState
       await runBackgroundSuggestions(config, now);
     } catch (error) {
       console.error(`[scheduler] background suggestions failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  if (config.feedback.feishu.enabled) {
+    try {
+      const result = await pollFeishuFeedback(config, { workflowRevisionsOnly: true, markIgnored: false });
+      if (result.processed > 0) console.log(`[scheduler] processed ${result.processed} Feishu revision reply via polling fallback`);
+    } catch (error) {
+      console.error(`[scheduler] Feishu feedback polling failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 }
