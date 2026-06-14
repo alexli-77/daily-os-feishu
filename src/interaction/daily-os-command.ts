@@ -25,7 +25,7 @@ export type ParsedDailyOsCommand =
   | { type: 'details' }
   | { type: 'chat_analysis'; mode?: ChatAnalysisMode }
   | { type: 'progress' }
-  | { type: 'confirm_policy_candidate'; id: string }
+  | { type: 'confirm_policy_candidate'; id?: string }
   | { type: 'reject_policy_candidate'; id: string; reason?: string }
   | { type: 'calibrate' }
   | { type: 'remember'; text: string }
@@ -40,7 +40,9 @@ export interface DailyOsCommandContext {
   source: string;
   prefix: string;
   reply: (text: string) => Promise<void>;
+  sendWorkflowCard?: (input: { workflow: WorkflowName; date: string; text: string; summary: string }) => Promise<void>;
   sendWorkflowOutput?: boolean;
+  runWorkflowForCommand?: typeof runWorkflow;
   accessDecision?: FeishuAccessDecision;
   sessionScopeId?: string;
   stopAgentRun?: () => Promise<boolean>;
@@ -93,8 +95,8 @@ export function parseDailyOsCommand(text: string, prefix: string): ParsedDailyOs
   if (['progress', '进展', '今日进展', '进展确认'].includes(lower)) return { type: 'progress' };
   if (['policy', 'decision policy', '规则', '决策规则'].includes(lower)) return { type: 'policy' };
   if (['candidates', 'policy candidates', '候选规则', '待确认规则'].includes(lower)) return { type: 'policy_candidates' };
-  const confirmCandidate = normalized.match(/^(?:save|confirm)\s+(?:rule\s+)?(.+)$/i) || normalized.match(/^(?:保存规则|确认规则)\s*(.+)$/);
-  if (confirmCandidate?.[1]?.trim()) return { type: 'confirm_policy_candidate', id: confirmCandidate[1].trim() };
+  const confirmCandidate = parseConfirmCandidateCommand(normalized);
+  if (confirmCandidate) return confirmCandidate;
   const rejectCandidate = normalized.match(/^(?:reject|dismiss)\s+(?:rule\s+)?(.+)$/i) || normalized.match(/^(?:拒绝规则|放弃规则)\s*(.+)$/);
   if (rejectCandidate?.[1]?.trim()) {
     const { id, reason } = splitCandidateIdAndReason(rejectCandidate[1].trim());
@@ -182,7 +184,12 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
       return;
     }
     case 'confirm_policy_candidate': {
-      const candidate = confirmPolicyCandidate(context.config, command.id);
+      const candidateId = command.id || listPolicyCandidates(context.config, 'pending')[0]?.id;
+      if (!candidateId) {
+        await context.reply('当前没有待确认的候选规则。');
+        return;
+      }
+      const candidate = confirmPolicyCandidate(context.config, candidateId);
       await context.reply(
         [
           `已保存长期决策规则：${candidate.rule.id}`,
@@ -226,10 +233,16 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
       return;
     }
     case 'workflow': {
+      const date = todayInTimezone(context.config);
       await context.reply(`Running ${command.workflow.replaceAll('_', ' ')}...`);
-      const output = await runWorkflow(context.config, command.workflow, { send: context.sendWorkflowOutput ?? false });
-      if (!(context.sendWorkflowOutput ?? false)) {
-        await context.reply(formatWorkflowSummaryForFeishu(command.workflow, todayInTimezone(context.config), output, undefined, context.config));
+      const run = context.runWorkflowForCommand || runWorkflow;
+      const sendViaConfiguredOutput = (context.sendWorkflowOutput ?? false) && !context.sendWorkflowCard;
+      const output = await run(context.config, command.workflow, { send: sendViaConfiguredOutput });
+      const summary = formatWorkflowSummaryForFeishu(command.workflow, date, output, undefined, context.config);
+      if (context.sendWorkflowCard) {
+        await context.sendWorkflowCard({ workflow: command.workflow, date, text: output, summary });
+      } else if (!sendViaConfiguredOutput) {
+        await context.reply(summary);
       }
       return;
     }
@@ -256,6 +269,18 @@ function splitCandidateIdAndReason(text: string): { id: string; reason?: string 
   const [id = '', ...rest] = text.trim().split(/\s+/);
   const reason = rest.join(' ').replace(/^(?:because|原因[:：]?)/i, '').trim();
   return { id, ...(reason ? { reason } : {}) };
+}
+
+function parseConfirmCandidateCommand(text: string): Extract<ParsedDailyOsCommand, { type: 'confirm_policy_candidate' }> | null {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (/^(?:save|confirm)(?:\s+rule)?$/i.test(normalized) || /^(?:保存规则|确认规则|确认保存|保存)$/i.test(normalized)) {
+    return { type: 'confirm_policy_candidate' };
+  }
+  const match =
+    normalized.match(/^(?:save|confirm)\s+(?:rule\s+)?(.+)$/i) ||
+    normalized.match(/^(?:确认保存|保存规则|确认规则)[:：]?\s*(?:daily-os\s+)?(?:保存规则|确认规则)?\s*(.+)$/i);
+  const id = match?.[1]?.trim().replace(/[`"'。]+$/g, '');
+  return id ? { type: 'confirm_policy_candidate', id } : null;
 }
 
 function parseChatAnalysisCommand(text: string): ParsedDailyOsCommand | null {
