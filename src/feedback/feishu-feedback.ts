@@ -1,8 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { AppConfig, WorkflowName } from '../config/schema.js';
-import { listFeishuMessages, sendFeishuFeedbackReply, type FeishuMessage } from '../connectors/lark-cli.js';
+import { listFeishuMessages, sendFeishuCard, sendFeishuFeedbackReply, type FeishuMessage } from '../connectors/lark-cli.js';
+import { renderFeishuWorkflowCard } from '../connectors/feishu-sdk.js';
 import { handleDailyOsCommand } from '../interaction/daily-os-command.js';
+import { runWorkflow } from '../workflows/run-workflow.js';
 import { handlePendingBackgroundSuggestionReply } from '../service/background-suggestions.js';
 import { appendDailyMemory, appendFeedbackLog } from '../storage/memory.js';
 import { todayInTimezone } from '../utils/date.js';
@@ -17,6 +19,10 @@ export interface FeedbackPollResult {
   processed: number;
   ignored: number;
 }
+
+export type FeedbackWorkflowCardSender = (input: { workflow: WorkflowName; date: string; summary: string }) => Promise<void>;
+type FeedbackReplySender = (text: string) => Promise<void>;
+type FeedbackWorkflowRunner = typeof runWorkflow;
 
 export async function pollFeishuFeedback(
   config: AppConfig,
@@ -40,7 +46,7 @@ export async function pollFeishuFeedback(
 
     const result = options.workflowRevisionsOnly
       ? await handleFallbackReply(config, message, options.send ?? true)
-      : await handleCommand(config, message, options.send ?? true);
+      : await handleFeishuFeedbackCommand(config, message, options.send ?? true);
     if (!result.handled) {
       ignored += 1;
       if (options.markIgnored ?? true) seen.add(message.id);
@@ -65,16 +71,31 @@ function isFeishuAppMessage(message: FeishuMessage): boolean {
   return (sender as Record<string, unknown>).sender_type === 'app';
 }
 
-async function handleCommand(config: AppConfig, message: FeishuMessage, send: boolean): Promise<{ handled: boolean }> {
+export async function handleFeishuFeedbackCommand(
+  config: AppConfig,
+  message: FeishuMessage,
+  send: boolean,
+  workflowCardSender: FeedbackWorkflowCardSender = async ({ workflow, date, summary }) => {
+    await sendFeishuCard(config, renderFeishuWorkflowCard(summary, { workflow, date }), summary);
+  },
+  runWorkflowForCommand?: FeedbackWorkflowRunner,
+  replySender: FeedbackReplySender = async (text) => {
+    await sendFeishuFeedbackReply(config, text);
+  },
+): Promise<{ handled: boolean }> {
   const commandResult = await handleDailyOsCommand({
     config,
     messageId: message.id,
     text: message.text,
     source: 'feishu-poll',
     prefix: config.feedback.feishu.command_prefix,
-    sendWorkflowOutput: send,
+    sendWorkflowOutput: false,
+    sendWorkflowCard: async ({ workflow, date, summary }) => {
+      if (send) await workflowCardSender({ workflow, date, summary });
+    },
+    ...(runWorkflowForCommand ? { runWorkflowForCommand } : {}),
     reply: async (text) => {
-      if (send) await sendFeishuFeedbackReply(config, text);
+      if (send) await replySender(text);
     },
   });
   if (commandResult.handled) return commandResult;
