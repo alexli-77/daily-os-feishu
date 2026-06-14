@@ -607,10 +607,26 @@ async function handleCardAction(input: {
     return;
   }
 
-  await input.channel.send(input.event.chatId, { text: `正在运行 ${action.replaceAll('_', ' ')}...` }, { replyTo: input.event.messageId });
-  const output = await runWorkflow(input.config, action, { send: false });
-  const summary = formatWorkflowSummaryForFeishu(action, todayInTimezone(input.config), output, undefined, input.config);
-  await input.channel.send(input.event.chatId, { card: renderFeishuWorkflowCard(summary, { workflow: action, date: todayInTimezone(input.config) }) }, { replyTo: input.event.messageId });
+  const label = action.replaceAll('_', ' ');
+  await input.channel.send(input.event.chatId, { text: `正在运行 ${label}...` }, { replyTo: input.event.messageId });
+  console.log(`[interaction] started ${input.event.chatId}; card-action=${action}`);
+  const progressTimer = setTimeout(() => {
+    void input.channel
+      .send(
+        input.event.chatId,
+        { text: `${label} 还在运行，通常需要 1-3 分钟。完成后我会发一张新的 Daily OS 卡片。` },
+        { replyTo: input.event.messageId },
+      )
+      .catch((error: unknown) => console.warn(`[interaction] failed to send card-action progress notice: ${error instanceof Error ? error.message : String(error)}`));
+  }, 60_000);
+  try {
+    const output = await runWorkflow(input.config, action, { send: false });
+    const summary = formatWorkflowSummaryForFeishu(action, todayInTimezone(input.config), output, undefined, input.config);
+    await input.channel.send(input.event.chatId, { card: renderFeishuWorkflowCard(summary, { workflow: action, date: todayInTimezone(input.config) }) }, { replyTo: input.event.messageId });
+    console.log(`[interaction] handled ${input.event.chatId}; card-action=${action}`);
+  } finally {
+    clearTimeout(progressTimer);
+  }
 }
 
 async function handleWorkflowCardCommand(input: {
