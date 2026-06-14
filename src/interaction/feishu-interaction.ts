@@ -30,7 +30,7 @@ import {
 } from '../progress/capture.js';
 import { parseProgressCardAction, renderProgressConfirmationCard } from '../progress/card.js';
 import { todayInTimezone } from '../utils/date.js';
-import { appendDailyMemory, readLatestWorkflowOutput, readWorkflowDetailCache } from '../storage/memory.js';
+import { appendDailyMemory, appendFeedbackLog, readLatestWorkflowOutput, readWorkflowDetailCache } from '../storage/memory.js';
 import { formatLatestWorkflowDetails } from '../workflows/summary.js';
 import { handlePendingBackgroundSuggestionReply } from '../service/background-suggestions.js';
 
@@ -356,6 +356,32 @@ async function runBatch(input: {
     return;
   }
 
+  if (isWorkflowRevisionFollowUp(last, text)) {
+    const control = decideFeishuControl(input.config, accessDecision, { effect: 'memory_write' });
+    if (!control.ok) {
+      await replyToMessage(input.channel, last, `权限不足：${control.reason}`, input.config.interaction.feishu.reply_mode);
+      console.log(`[interaction] denied ${input.scope}; command=workflow-revision-follow-up; reason=${control.reason}`);
+      return;
+    }
+    const workflow = revisionWorkflowForText(text);
+    const date = todayInTimezone(input.config);
+    appendDailyMemory(input.config, workflow, date, `用户提出修改意见：${text}`);
+    appendFeedbackLog(input.config, text, {
+      message_id: last.messageId,
+      source: `feishu-interaction:${input.scope}`,
+      workflow,
+    });
+    const nextCommand = workflow === 'daily_plan' ? 'plan' : workflow === 'daily_review' ? 'review' : 'weekly';
+    await replyToMessage(
+      input.channel,
+      last,
+      `收到，我已把这条修改意见写入${revisionWorkflowLabel(workflow)}上下文。请点卡片里的「重新生成」，或发送 ${input.config.interaction.feishu.command_prefix} ${nextCommand}，我会按这条意见重新整理。`,
+      input.config.interaction.feishu.reply_mode,
+    );
+    console.log(`[interaction] handled ${input.scope}; command=workflow-revision-follow-up`);
+    return;
+  }
+
   if (input.config.interaction.feishu.agent_mode.enabled) {
     const control = decideFeishuControl(input.config, accessDecision, {
       effect: agentModeControlEffect(input.config),
@@ -446,7 +472,7 @@ function shouldAcceptUnmentionedGroupMessage(message: NormalizedMessage, prefix:
   if (normalized.toLowerCase().startsWith(`${prefix.toLowerCase()} `) || normalized.toLowerCase() === prefix.toLowerCase()) return true;
   if (!message.replyToMessageId && !message.threadId) return false;
   if (allowFreeformReplies) return true;
-  return isProgressConfirmationReply(normalized) || isDetailReply(normalized);
+  return isProgressConfirmationReply(normalized) || isDetailReply(normalized) || isLikelyWorkflowRevisionText(normalized);
 }
 
 function isProgressConfirmationReply(text: string): boolean {
@@ -457,6 +483,29 @@ function isProgressConfirmationReply(text: string): boolean {
 function isDetailReply(text: string): boolean {
   const normalized = text.replace(/\s+/g, ' ').trim().toLowerCase();
   return ['详情', '查看详情', '全文', '完整内容', 'details', 'detail'].includes(normalized);
+}
+
+function isWorkflowRevisionFollowUp(message: NormalizedMessage, text: string): boolean {
+  return Boolean((message.replyToMessageId || message.threadId) && isLikelyWorkflowRevisionText(text));
+}
+
+function isLikelyWorkflowRevisionText(text: string): boolean {
+  const normalized = text.replace(/\s+/g, ' ').trim().toLowerCase();
+  if (normalized.length < 4) return false;
+  return /修改|调整|改成|降级|优先|不做|先做|安排|计划|复盘|review|weekly|周报|周复盘|本周|今天|明天|leo-\d+/i.test(normalized);
+}
+
+function revisionWorkflowForText(text: string): WorkflowName {
+  const normalized = text.replace(/\s+/g, ' ').trim().toLowerCase();
+  if (/weekly|周报|周复盘|本周/.test(normalized)) return 'weekly_review';
+  if (/复盘|review/.test(normalized)) return 'daily_review';
+  return 'daily_plan';
+}
+
+function revisionWorkflowLabel(workflow: WorkflowName): string {
+  if (workflow === 'weekly_review') return '本周复盘';
+  if (workflow === 'daily_review') return '今日复盘';
+  return '今日安排';
 }
 
 async function stopAgentRun(activeRuns: Map<string, ActiveAgentRun>, scope: string): Promise<boolean> {
