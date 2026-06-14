@@ -502,6 +502,8 @@ function isGeneratedDailyOsText(text: string): boolean {
   if (!normalized) return false;
   return (
     normalized.startsWith('收到，我已把这条修改意见写入') ||
+    normalized.startsWith('<card title="Daily OS">') ||
+    normalized.startsWith('老板，我在后台看了') ||
     normalized.startsWith('Running ') ||
     normalized.startsWith('老板，我帮您') ||
     normalized.startsWith('老板您好') ||

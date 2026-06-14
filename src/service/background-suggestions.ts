@@ -224,7 +224,7 @@ function formatBackgroundSuggestionsMessage(result: ChatContextAnalysisResult, s
     ...suggestions.slice(0, 5).flatMap((suggestion, index) => formatSuggestionForFeishu(suggestion, index + 1)),
     '',
     '你可以直接回复：',
-    '- 不采纳这个建议',
+    ...(suggestions.length === 1 ? ['- 不采纳这个建议', '- 采纳这个建议'] : ['- 不采纳全部', '- 不采纳第 1 条']),
     '- 采纳第 1 条',
     '- 第 1 条改成明天跟进',
     '',
@@ -387,6 +387,9 @@ function extractReferencedSuggestionIndexes(text: string, pending: PendingBackgr
 
   if (indexes.size === 0 && pending.suggestions.length === 1 && /(这个|这条|该建议|这个建议|刚才|建议)/.test(text)) {
     indexes.add(pending.suggestions[0].index);
+  }
+  if (indexes.size === 0 && /(不采纳|不采用|不要|不用|忽略|先忽略|先不|取消|算了|否|no\b|reject\b|dismiss\b)/i.test(text) && /(这个|这条|该建议|这个建议|刚才|建议)/.test(text)) {
+    for (const suggestion of pending.suggestions) indexes.add(suggestion.index);
   }
 
   const available = new Set(pending.suggestions.map((suggestion) => suggestion.index));

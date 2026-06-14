@@ -35,7 +35,7 @@ export async function pollFeishuFeedback(
     if (seen.has(message.id)) continue;
 
     const result = options.workflowRevisionsOnly
-      ? await handleWorkflowRevision(config, message, options.send ?? true)
+      ? await handleFallbackReply(config, message, options.send ?? true)
       : await handleCommand(config, message, options.send ?? true);
     if (!result.handled) {
       ignored += 1;
@@ -67,6 +67,7 @@ async function handleCommand(config: AppConfig, message: FeishuMessage, send: bo
     },
   });
   if (commandResult.handled) return commandResult;
+  if (isGeneratedDailyOsText(message.text)) return { handled: false };
 
   const suggestionReply = handlePendingBackgroundSuggestionReply(config, message.text, {
     messageId: message.id,
@@ -81,6 +82,20 @@ async function handleCommand(config: AppConfig, message: FeishuMessage, send: bo
   if (revision.handled) return revision;
 
   return commandResult;
+}
+
+async function handleFallbackReply(config: AppConfig, message: FeishuMessage, send: boolean): Promise<{ handled: boolean }> {
+  if (isGeneratedDailyOsText(message.text)) return { handled: false };
+  const suggestionReply = handlePendingBackgroundSuggestionReply(config, message.text, {
+    messageId: message.id,
+    source: 'feishu-poll',
+  });
+  if (suggestionReply.handled) {
+    if (send && suggestionReply.reply) await sendFeishuFeedbackReply(config, suggestionReply.reply);
+    return { handled: true };
+  }
+
+  return handleWorkflowRevision(config, message, send);
 }
 
 async function handleWorkflowRevision(config: AppConfig, message: FeishuMessage, send: boolean): Promise<{ handled: boolean }> {
@@ -122,6 +137,8 @@ function isGeneratedDailyOsText(text: string): boolean {
   if (!normalized) return false;
   return (
     normalized.startsWith('收到，我已把这条修改意见写入') ||
+    normalized.startsWith('<card title="Daily OS">') ||
+    normalized.startsWith('老板，我在后台看了') ||
     normalized.startsWith('Running ') ||
     normalized.startsWith('老板，我帮您') ||
     normalized.startsWith('老板您好') ||
