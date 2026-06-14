@@ -107,7 +107,7 @@ function createFeishuClient(): Client {
 
 function sdkMessagePayload(text: string, mode: FeishuSdkSendMode, options?: FeishuSdkMessageOptions): { msgType: string; content: string } {
   if (mode === 'text') return textPayload(text);
-  const card = workflowCard(text, options);
+  const card = renderFeishuWorkflowCard(text, options);
   const content = JSON.stringify(card);
   // Feishu card bodies are stricter than text messages. When a workflow is
   // unexpectedly large, prefer delivering the message over failing the run.
@@ -115,7 +115,7 @@ function sdkMessagePayload(text: string, mode: FeishuSdkSendMode, options?: Feis
   return { msgType: 'interactive', content };
 }
 
-function workflowCard(text: string, options?: FeishuSdkMessageOptions): object {
+export function renderFeishuWorkflowCard(text: string, options?: FeishuSdkMessageOptions): object {
   const workflow = options?.workflow;
   const actions = workflow ? workflowActions(workflow, options) : [];
   return {
