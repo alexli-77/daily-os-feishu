@@ -34,6 +34,7 @@ import { appendDailyMemory, appendFeedbackLog, readLatestWorkflowOutput, readWor
 import { formatLatestWorkflowDetails, formatWorkflowSummaryForFeishu } from '../workflows/summary.js';
 import { handlePendingBackgroundSuggestionReply } from '../service/background-suggestions.js';
 import { renderFeishuWorkflowCard } from '../connectors/feishu-sdk.js';
+import { sendFeishuCard } from '../connectors/lark-cli.js';
 
 interface FeishuInteractionControls {
   stop: () => Promise<void>;
@@ -306,10 +307,7 @@ async function runBatch(input: {
       sessionScopeId: session.scope_id,
       stopAgentRun: async () => stopAgentRun(input.activeAgentRuns, input.scope),
       sendWorkflowCard: async ({ workflow, date, summary }) => {
-        await input.channel.send(last.chatId, { card: renderFeishuWorkflowCard(summary, { workflow, date }) }, {
-          replyTo: last.messageId,
-          ...(last.threadId ? { replyInThread: true } : {}),
-        });
+        await sendWorkflowCardOutput(input.config, workflow, date, summary, `interaction:${input.scope}`);
       },
       reply: async (reply) => {
         await replyToMessage(input.channel, last, reply, input.config.interaction.feishu.reply_mode);
@@ -712,7 +710,7 @@ async function handleWorkflowCardCommand(input: {
     sessionScopeId: input.event.chatId,
     stopAgentRun: async () => stopAgentRun(input.activeAgentRuns, input.event.chatId),
     sendWorkflowCard: async ({ workflow, date, summary }) => {
-      await input.channel.send(input.event.chatId, { card: renderFeishuWorkflowCard(summary, { workflow, date }) }, { replyTo: input.event.messageId });
+      await sendWorkflowCardOutput(input.config, workflow, date, summary, `card-command:${input.event.chatId}`);
     },
     reply: async (reply) => {
       await input.channel.send(input.event.chatId, toSendInput(reply, input.config.interaction.feishu.reply_mode), {
@@ -927,6 +925,12 @@ async function replyToMessage(channel: LarkChannel, message: NormalizedMessage, 
     replyTo: message.messageId,
     ...(chatMode === 'topic' ? { replyInThread: true } : {}),
   });
+}
+
+async function sendWorkflowCardOutput(config: AppConfig, workflow: WorkflowName, date: string, summary: string, source: string): Promise<void> {
+  console.log(`[interaction] sending workflow-card source=${source}; workflow=${workflow}; bytes=${Buffer.byteLength(summary, 'utf8')}`);
+  await sendFeishuCard(config, renderFeishuWorkflowCard(summary, { workflow, date }), summary);
+  console.log(`[interaction] sent workflow-card source=${source}; workflow=${workflow}`);
 }
 
 function toSendInput(text: string, mode: 'markdown' | 'text'): { markdown: string } | { text: string } {
