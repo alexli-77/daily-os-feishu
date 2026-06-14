@@ -469,6 +469,7 @@ function isStopText(text: string): boolean {
 function shouldAcceptUnmentionedGroupMessage(message: NormalizedMessage, prefix: string, allowFreeformReplies: boolean): boolean {
   const normalized = message.content.replace(/\s+/g, ' ').trim();
   if (!normalized) return false;
+  if (isGeneratedDailyOsText(normalized)) return false;
   if (normalized.toLowerCase().startsWith(`${prefix.toLowerCase()} `) || normalized.toLowerCase() === prefix.toLowerCase()) return true;
   if (!message.replyToMessageId && !message.threadId) return false;
   if (allowFreeformReplies) return true;
@@ -486,13 +487,32 @@ function isDetailReply(text: string): boolean {
 }
 
 function isWorkflowRevisionFollowUp(message: NormalizedMessage, text: string): boolean {
-  return Boolean((message.replyToMessageId || message.threadId) && isLikelyWorkflowRevisionText(text));
+  return Boolean((message.replyToMessageId || message.threadId) && !isGeneratedDailyOsText(text) && isLikelyWorkflowRevisionText(text));
 }
 
 function isLikelyWorkflowRevisionText(text: string): boolean {
   const normalized = text.replace(/\s+/g, ' ').trim().toLowerCase();
   if (normalized.length < 4) return false;
+  if (/^daily-os\s+(plan|review|weekly|details|progress|status)\b/i.test(normalized)) return false;
   return /修改|调整|改成|降级|优先|不做|先做|安排|计划|复盘|review|weekly|周报|周复盘|本周|今天|明天|leo-\d+/i.test(normalized);
+}
+
+function isGeneratedDailyOsText(text: string): boolean {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return false;
+  return (
+    normalized.startsWith('收到，我已把这条修改意见写入') ||
+    normalized.startsWith('Running ') ||
+    normalized.startsWith('老板，我帮您') ||
+    normalized.startsWith('老板您好') ||
+    normalized.startsWith('老板，我把') ||
+    normalized.includes('请发送 daily-os weekly，我会按这条意见重新整理') ||
+    normalized.includes('请发送 daily-os plan，我会按这条意见重新整理') ||
+    normalized.includes('请发送 daily-os review，我会按这条意见重新整理') ||
+    normalized.includes('请点卡片里的「重新生成」') ||
+    normalized.includes('如果下周安排要改，直接回复') ||
+    normalized.includes('您看下周先按这个节奏走可以吗？')
+  );
 }
 
 function revisionWorkflowForText(text: string): WorkflowName {
