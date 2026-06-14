@@ -8,6 +8,7 @@ import type { ChatContextSuggestion } from '../src/chat/context-analysis.js';
 import { parseDailyOsCommand, runParsedDailyOsCommand } from '../src/interaction/daily-os-command.js';
 import { handlePendingBackgroundSuggestionReply } from '../src/service/background-suggestions.js';
 import { renderFeishuWorkflowCard } from '../src/connectors/feishu-sdk.js';
+import { handleFeishuFeedbackCommand } from '../src/feedback/feishu-feedback.js';
 import { createPolicyCandidate, listPolicyCandidates } from '../src/decision/candidates.js';
 import { decisionPolicyFiles } from '../src/decision/policy.js';
 import { collectFeishuUserMessageRecords, isFeishuAppMessageRecord } from '../src/utils/feishu-message-records.js';
@@ -19,6 +20,7 @@ try {
   testChatSuggestionCoalescing();
   testDailyOsCommandParsing();
   await testWorkflowCommandUsesCardCallback();
+  await testFeedbackPollWorkflowCommandUsesCardSender();
   await testConfirmLatestPolicyCandidateWithoutId();
   testBackgroundSuggestionDismissAllFromAmbiguousDismiss();
   testWorkflowCardRendering();
@@ -138,6 +140,33 @@ async function testWorkflowCommandUsesCardCallback(): Promise<void> {
       },
     },
     { type: 'workflow', workflow: 'daily_plan' },
+  );
+
+  assert.deepEqual(replies, ['Running daily plan...']);
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0]?.workflow, 'daily_plan');
+  assert.match(cards[0]?.summary || '', /LEO-7/);
+}
+
+async function testFeedbackPollWorkflowCommandUsesCardSender(): Promise<void> {
+  const replies: string[] = [];
+  const cards: Array<{ workflow: string; summary: string }> = [];
+  const config = testConfig();
+  await handleFeishuFeedbackCommand(
+    config,
+    { id: 'message-1', text: 'daily-os plan', raw: { sender: { sender_type: 'user' } } },
+    true,
+    async ({ workflow, summary }) => {
+      cards.push({ workflow, summary });
+    },
+    async (_config, workflow, options) => {
+      assert.equal(workflow, 'daily_plan');
+      assert.deepEqual(options, { send: false });
+      return '老板，今天先看这几件事。\n\n## 今日重点\n- LEO-7 邮件复核';
+    },
+    async (text) => {
+      replies.push(text);
+    },
   );
 
   assert.deepEqual(replies, ['Running daily plan...']);
