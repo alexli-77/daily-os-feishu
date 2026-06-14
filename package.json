@@ -28,9 +28,10 @@
     "service:uninstall": "tsx src/index.ts service uninstall",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "privacy:scan": "bash scripts/privacy-scan.sh",
+    "regression:test": "tsx scripts/regression-tests.ts",
     "alpha:smoke": "bash scripts/alpha-smoke.sh",
     "alpha:smoke:ci": "DAILY_OS_SKIP_AGENT_SMOKE=1 bash scripts/alpha-smoke.sh",
-    "verify": "npm run typecheck && npm run build && npm run privacy:scan"
+    "verify": "npm run typecheck && npm run build && npm run privacy:scan && npm run regression:test"
   },
   "keywords": [
     "daily-os",

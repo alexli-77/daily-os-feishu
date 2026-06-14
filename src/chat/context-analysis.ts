@@ -3,6 +3,7 @@ import { collectEvidence } from '../workflows/evidence.js';
 import type { Evidence, EvidenceSource } from '../workflows/types.js';
 import { loadMemory } from '../storage/memory.js';
 import { addDays } from '../utils/date.js';
+import { collectFeishuUserMessageRecords } from '../utils/feishu-message-records.js';
 
 export type ChatSuggestionKind =
   | 'new_task'
@@ -152,15 +153,14 @@ function extractFeishuMessages(evidence: Evidence): ChatMessageSignal[] {
   const out: ChatMessageSignal[] = [];
   for (const [sourceName, source] of Object.entries(evidence.sources)) {
     if (!sourceName.includes('im_history') || source.state !== 'available') continue;
-    for (const raw of collectMessageRecords(source.data)) {
-      const text = extractText(raw);
+    for (const raw of collectFeishuUserMessageRecords(source.data)) {
+      const text = raw.text;
       if (!text.trim()) continue;
-      const createdAt = extractTimestamp(raw);
       out.push({
-        id: extractId(raw) || suggestionId(`${sourceName}:${text}`),
+        id: raw.id || suggestionId(`${sourceName}:${text}`),
         text,
         source: sourceName,
-        ...(createdAt ? { createdAt } : {}),
+        ...(raw.createdAt ? { createdAt: raw.createdAt } : {}),
       });
     }
   }
@@ -215,23 +215,6 @@ function filterMessagesByWindow(messages: ChatMessageSignal[], window: ChatWindo
 
 function chatAnalysisMessageLimit(config: AppConfig): number {
   return config.chat_analysis.lookback_messages || config.chat_analysis.max_messages;
-}
-
-function collectMessageRecords(value: unknown): unknown[] {
-  if (Array.isArray(value)) return value.flatMap(collectMessageRecords);
-  if (!value || typeof value !== 'object') return [];
-  const record = value as Record<string, unknown>;
-  const directText = extractText(record);
-  const directId = extractId(record);
-  const nested = ['items', 'messages', 'data', 'list']
-    .flatMap((key) => collectMessageRecords(record[key]))
-    .filter(Boolean);
-  if (directText && (directId || hasMessageShape(record))) return [record, ...nested];
-  return nested;
-}
-
-function hasMessageShape(record: Record<string, unknown>): boolean {
-  return ['content', 'text', 'message', 'body'].some((key) => key in record);
 }
 
 function buildContextIndex(evidence: Evidence, config: AppConfig): string {
@@ -445,66 +428,6 @@ function isDailyOsGeneratedText(text: string): boolean {
 
 function stripGeneratedCardPrefix(text: string): string {
   return text.replace(/^<card\s+title="[^"]*">\s*/i, '').trim();
-}
-
-function extractId(raw: unknown): string {
-  if (!raw || typeof raw !== 'object') return '';
-  const record = raw as Record<string, unknown>;
-  for (const key of ['message_id', 'messageId', 'id']) {
-    const value = record[key];
-    if (typeof value === 'string') return value;
-  }
-  return '';
-}
-
-function extractTimestamp(raw: unknown): Date | undefined {
-  if (!raw || typeof raw !== 'object') return undefined;
-  const record = raw as Record<string, unknown>;
-  for (const key of ['create_time', 'createTime', 'created_at', 'createdAt', 'timestamp', 'send_time', 'update_time']) {
-    const date = dateFromTimestampValue(record[key]);
-    if (date) return date;
-  }
-  return undefined;
-}
-
-function dateFromTimestampValue(value: unknown): Date | undefined {
-  if (typeof value === 'number') {
-    const ms = value < 10_000_000_000 ? value * 1000 : value;
-    const date = new Date(ms);
-    return Number.isNaN(date.getTime()) ? undefined : date;
-  }
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  if (!trimmed) return undefined;
-  if (/^\d+$/.test(trimmed)) return dateFromTimestampValue(Number(trimmed));
-  const date = new Date(trimmed);
-  return Number.isNaN(date.getTime()) ? undefined : date;
-}
-
-function extractText(value: unknown): string {
-  if (typeof value === 'string') {
-    const parsed = tryParseJson(value);
-    return parsed ? extractText(parsed) : value;
-  }
-  if (Array.isArray(value)) return value.map(extractText).filter(Boolean).join(' ');
-  if (!value || typeof value !== 'object') return '';
-  const record = value as Record<string, unknown>;
-  const direct = [record.text, record.content, record.title, record.message, record.body]
-    .map(extractText)
-    .filter(Boolean)
-    .join(' ');
-  if (direct) return direct;
-  return '';
-}
-
-function tryParseJson(value: string): unknown | null {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return null;
-  try {
-    return JSON.parse(trimmed) as unknown;
-  } catch {
-    return null;
-  }
 }
 
 function suggestionId(seed: string): string {
