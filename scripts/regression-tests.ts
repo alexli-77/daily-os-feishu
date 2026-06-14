@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { loadConfig } from '../src/config/load-config.js';
+import { coalesceChatSuggestions } from '../src/chat/context-analysis.js';
+import type { ChatContextSuggestion } from '../src/chat/context-analysis.js';
 import { parseDailyOsCommand } from '../src/interaction/daily-os-command.js';
 import { handlePendingBackgroundSuggestionReply } from '../src/service/background-suggestions.js';
 import { renderFeishuWorkflowCard } from '../src/connectors/feishu-sdk.js';
@@ -12,6 +14,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-os-regression-'));
 
 try {
   testFeishuUserMessageFiltering();
+  testChatSuggestionCoalescing();
   testDailyOsCommandParsing();
   testBackgroundSuggestionDismissAllFromAmbiguousDismiss();
   testWorkflowCardRendering();
@@ -42,6 +45,50 @@ function testFeishuUserMessageFiltering(): void {
   assert.equal(records[0]?.id, 'user-1');
   assert.equal(records[0]?.text, 'LEO-7 邮件已经完成，待周一发布');
   assert.ok(records[0]?.createdAt instanceof Date);
+}
+
+function testChatSuggestionCoalescing(): void {
+  const suggestions: ChatContextSuggestion[] = [
+    {
+      id: 'weekly-1',
+      kind: 'new_task',
+      title: '今天是周日，需要对本周的 weekly 进行复盘。',
+      summary: '建议新增为待办。',
+      targets: ['todo', 'memory'],
+      confidence: 'medium',
+      due: '今天',
+      evidence: '今天是周日，需要对本周的 weekly 进行复盘。',
+      why: '聊天里出现待办、请求或下一步信号。',
+    },
+    {
+      id: 'weekly-2',
+      kind: 'document_update',
+      title: '根据 feishu weekly 文档里的本周要务核对任务进度。',
+      summary: '建议检查是否需要更新飞书文档。',
+      targets: ['document', 'linear', 'memory'],
+      confidence: 'medium',
+      due: '今天',
+      evidence: '你要根据我的 feishu weekly 文档里的本周要务，对今天的任务做安排。',
+      why: '聊天里出现文档、方案或记录更新信号。',
+    },
+    {
+      id: 'leo-7',
+      kind: 'completion',
+      title: 'LEO-7 邮件已经完成，待周一发布',
+      summary: '建议确认是否标记完成。',
+      targets: ['daily_plan', 'review'],
+      confidence: 'high',
+      due: '周一',
+      evidence: 'LEO-7 邮件已经完成，待周一发布',
+      why: '聊天里出现完成、合并、发布或搞定信号。',
+    },
+  ];
+
+  const coalesced = coalesceChatSuggestions(suggestions);
+  assert.equal(coalesced.length, 2);
+  const weekly = coalesced.find((suggestion) => suggestion.id === 'weekly-2' || suggestion.id === 'weekly-1');
+  assert.ok(weekly);
+  assert.deepEqual(new Set(weekly.targets), new Set(['todo', 'document', 'linear', 'memory']));
 }
 
 function testDailyOsCommandParsing(): void {

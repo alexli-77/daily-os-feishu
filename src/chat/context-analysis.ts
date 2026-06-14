@@ -53,9 +53,7 @@ export async function analyzeChatContext(config: AppConfig, date: string, mode =
   const window = chatAnalysisWindow(config, date, mode);
   const messages = filterMessagesByWindow(extractFeishuMessages(evidence), window).slice(0, chatAnalysisMessageLimit(config));
   const context = buildContextIndex(evidence, config);
-  const suggestions = messages
-    .flatMap((message) => suggestionsFromMessage(message, context))
-    .filter((suggestion, index, all) => all.findIndex((candidate) => candidate.id === suggestion.id) === index)
+  const suggestions = coalesceChatSuggestions(messages.flatMap((message) => suggestionsFromMessage(message, context)))
     .sort((a, b) => confidenceRank(b.confidence) - confidenceRank(a.confidence))
     .slice(0, config.chat_analysis.max_suggestions);
 
@@ -103,6 +101,19 @@ export function formatChatContextAnalysis(result: ChatContextAnalysisResult): st
   return lines.join('\n');
 }
 
+export function coalesceChatSuggestions(suggestions: ChatContextSuggestion[]): ChatContextSuggestion[] {
+  const out: ChatContextSuggestion[] = [];
+  for (const suggestion of suggestions) {
+    const existingIndex = out.findIndex((candidate) => candidate.id === suggestion.id || areSimilarSuggestions(candidate, suggestion));
+    if (existingIndex === -1) {
+      out.push(suggestion);
+      continue;
+    }
+    out[existingIndex] = mergeSimilarSuggestions(out[existingIndex] as ChatContextSuggestion, suggestion);
+  }
+  return out;
+}
+
 function suggestionsFromMessage(message: ChatMessageSignal, context: string): ChatContextSuggestion[] {
   const text = normalizeText(message.text);
   if (!text || isDailyOsGeneratedText(text)) return [];
@@ -147,6 +158,63 @@ function suggestionsFromMessage(message: ChatMessageSignal, context: string): Ch
   }
 
   return suggestions;
+}
+
+function areSimilarSuggestions(a: ChatContextSuggestion, b: ChatContextSuggestion): boolean {
+  const aTopic = suggestionTopicKey(a);
+  const bTopic = suggestionTopicKey(b);
+  if (aTopic && aTopic === bTopic) return true;
+  if (a.kind !== b.kind) return false;
+  const aKeywords = extractKeywords(`${a.title} ${a.evidence}`);
+  const bKeywords = extractKeywords(`${b.title} ${b.evidence}`);
+  return keywordOverlap(aKeywords, bKeywords) >= 0.5 && targetsOverlap(a.targets, b.targets);
+}
+
+function suggestionTopicKey(suggestion: ChatContextSuggestion): string | undefined {
+  const text = normalizeText(`${suggestion.title} ${suggestion.evidence}`).toLowerCase();
+  if (/(weekly|周复盘|本周要务|每周日|周日.+复盘|复盘.+本周)/i.test(text)) return 'topic:weekly_review';
+  const issueKeys = Array.from(new Set(text.match(/[a-z][a-z0-9]+-\d+/gi) || [])).sort();
+  if (issueKeys.length > 0) return `issue:${suggestion.kind}:${issueKeys.join(',')}`;
+  return undefined;
+}
+
+function mergeSimilarSuggestions(a: ChatContextSuggestion, b: ChatContextSuggestion): ChatContextSuggestion {
+  const preferred = suggestionQualityScore(b) > suggestionQualityScore(a) ? b : a;
+  const other = preferred === a ? b : a;
+  return {
+    ...preferred,
+    targets: mergeTargets(preferred.targets, other.targets),
+    confidence: higherConfidence(preferred.confidence, other.confidence),
+    owner: preferred.owner || other.owner,
+    due: preferred.due || other.due,
+  };
+}
+
+function suggestionQualityScore(suggestion: ChatContextSuggestion): number {
+  return confidenceRank(suggestion.confidence) * 100 + Math.min(suggestion.evidence.length, 220);
+}
+
+function higherConfidence(
+  a: ChatContextSuggestion['confidence'],
+  b: ChatContextSuggestion['confidence'],
+): ChatContextSuggestion['confidence'] {
+  return confidenceRank(b) > confidenceRank(a) ? b : a;
+}
+
+function mergeTargets(a: ChatSuggestionTarget[], b: ChatSuggestionTarget[]): ChatSuggestionTarget[] {
+  return [...new Set([...a, ...b])];
+}
+
+function targetsOverlap(a: ChatSuggestionTarget[], b: ChatSuggestionTarget[]): boolean {
+  return a.some((target) => b.includes(target));
+}
+
+function keywordOverlap(a: string[], b: string[]): number {
+  const left = new Set(a.map((value) => value.toLowerCase()));
+  const right = new Set(b.map((value) => value.toLowerCase()));
+  const intersection = [...left].filter((value) => right.has(value)).length;
+  const union = new Set([...left, ...right]).size;
+  return union === 0 ? 0 : intersection / union;
 }
 
 function extractFeishuMessages(evidence: Evidence): ChatMessageSignal[] {
