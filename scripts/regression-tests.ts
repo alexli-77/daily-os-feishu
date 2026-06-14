@@ -9,6 +9,7 @@ import { parseDailyOsCommand, runParsedDailyOsCommand } from '../src/interaction
 import { handlePendingBackgroundSuggestionReply } from '../src/service/background-suggestions.js';
 import { renderFeishuWorkflowCard } from '../src/connectors/feishu-sdk.js';
 import { handleFeishuFeedbackCommand } from '../src/feedback/feishu-feedback.js';
+import { formatWorkflowSummaryForFeishu } from '../src/workflows/summary.js';
 import { createPolicyCandidate, listPolicyCandidates } from '../src/decision/candidates.js';
 import { decisionPolicyFiles } from '../src/decision/policy.js';
 import { collectFeishuUserMessageRecords, isFeishuAppMessageRecord } from '../src/utils/feishu-message-records.js';
@@ -22,6 +23,7 @@ try {
   testEveryFeishuInteractionWorkflowCommandHasCardSender();
   await testWorkflowCommandUsesCardCallback();
   await testFeedbackPollWorkflowCommandUsesCardSender();
+  testDailyPlanSummaryShowsOpenLoopEvidence();
   await testConfirmLatestPolicyCandidateWithoutId();
   testBackgroundSuggestionDismissAllFromAmbiguousDismiss();
   testWorkflowCardRendering();
@@ -217,6 +219,28 @@ async function testConfirmLatestPolicyCandidateWithoutId(): Promise<void> {
   assert.equal(listPolicyCandidates(config, 'pending').length, 0);
   assert.match(replies.join('\n'), /已保存长期决策规则：sunday-weekly-review/);
   assert.match(fs.readFileSync(decisionPolicyFiles(config).policyPath, 'utf8'), /每周日必须参考 weekly 文档复盘本周要务/);
+}
+
+function testDailyPlanSummaryShowsOpenLoopEvidence(): void {
+  const content = [
+    '老板您好，我帮您整理了今天的安排。',
+    '',
+    '**1. 今日重点**',
+    'MIT：',
+    '- `Weekly2026 🐶 本周要务复盘` 今天最重要的是核对 6.8-6.14 本周要务还有哪些没有真实闭环，完成标准是四栏表。',
+    '',
+    '**2. 为什么是这些**',
+    '最高校准源是 Feishu Docs `Weekly2026`。',
+    '今日需要补进 todo 的未闭环项是：`LEO-7` 邮件还没看到真实发送记录和 follow-up 日期；`未来 4 周唯一主线` 需要周日确认是否最终闭环；飞书文档、方案、会议记录需要检查是否和真实进展一致。',
+    '',
+    '**4. Codex 可以做**',
+    '- `Weekly2026 🐶 对账` Codex 可以整理本周要务核对表，预期产物是四栏表。',
+  ].join('\n');
+  const summary = formatWorkflowSummaryForFeishu('daily_plan', '2026-06-14', content, undefined, testConfig());
+  assert.match(summary, /未闭环依据/);
+  assert.match(summary, /LEO-7/);
+  assert.match(summary, /未来 4 周唯一主线/);
+  assert.match(summary, /飞书文档/);
 }
 
 function testBackgroundSuggestionDismissAllFromAmbiguousDismiss(): void {

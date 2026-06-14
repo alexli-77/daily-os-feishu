@@ -65,6 +65,7 @@ function dailyPlanOverview(content: string, evidence?: Evidence, config?: AppCon
   const linear = linearMetadataFromEvidence(evidence);
   const alignment = strategyAlignmentRows(content, config);
   const alignmentTitle = strategyAlignmentTitle(config);
+  const openLoopRows = dailyPlanOpenLoopRows(content);
   const priorities = extractSectionBullets(content, ['今日重点'], 3);
   const codex = extractSectionBullets(content, ['Codex 可以做', '我可以帮您', '我可以帮您安排 Codex 做'], 3);
   const user = extractSectionBullets(content, ['用户必须做', '需要您批示', '需要您本人处理'], 3);
@@ -84,8 +85,12 @@ function dailyPlanOverview(content: string, evidence?: Evidence, config?: AppCon
     { label: '新增的', rows: newRows },
     { label: '暂缓的', rows: pausedRows },
   ]);
-  if (alignment.length === 0 || overview.length === 0) return overview;
-  return [overview[0], '', `**${alignmentTitle}**`, ...alignment, ...overview.slice(1)];
+  if (overview.length === 0) return overview;
+  const contextRows = [
+    ...(alignment.length > 0 ? [`**${alignmentTitle}**`, ...alignment] : []),
+    ...(openLoopRows.length > 0 ? ['', '**未闭环依据**', ...openLoopRows] : []),
+  ];
+  return contextRows.length === 0 ? overview : [overview[0], '', ...contextRows, ...overview.slice(1)];
 }
 
 function dailyReviewOverview(content: string, evidence?: Evidence): string[] {
@@ -299,6 +304,24 @@ function strategyAlignmentHeadings(config?: AppConfig): string[] {
       'Weekly alignment',
     ].filter((value): value is string => Boolean(value && value.trim())),
   );
+}
+
+function dailyPlanOpenLoopRows(content: string): string[] {
+  const text = stripMarkdown(content).replace(/\s+/g, ' ');
+  const match =
+    text.match(/今日需要补进 todo 的未闭环项是[:：]\s*([^。]+)/) ||
+    text.match(/未闭环项(?:是|包括)[:：]\s*([^。]+)/);
+  if (!match?.[1]) return [];
+  return splitOpenLoopItems(match[1])
+    .map((item) => `- ${completePhrase(item, 120)}`)
+    .slice(0, 3);
+}
+
+function splitOpenLoopItems(value: string): string[] {
+  return value
+    .split(/；|;|、(?=`?LEO-|未来|飞书|Feishu|Weekly)/)
+    .map((item) => item.replace(/^和/, '').trim())
+    .filter((item) => item.length >= 6);
 }
 
 function removeEvidenceTail(value: string): string {
