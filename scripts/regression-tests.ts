@@ -19,6 +19,7 @@ try {
   testFeishuUserMessageFiltering();
   testChatSuggestionCoalescing();
   testDailyOsCommandParsing();
+  testEveryFeishuInteractionWorkflowCommandHasCardSender();
   await testWorkflowCommandUsesCardCallback();
   await testFeedbackPollWorkflowCommandUsesCardSender();
   await testConfirmLatestPolicyCandidateWithoutId();
@@ -95,6 +96,14 @@ function testChatSuggestionCoalescing(): void {
   const weekly = coalesced.find((suggestion) => suggestion.id === 'weekly-2' || suggestion.id === 'weekly-1');
   assert.ok(weekly);
   assert.deepEqual(new Set(weekly.targets), new Set(['todo', 'document', 'linear', 'memory']));
+}
+
+function testEveryFeishuInteractionWorkflowCommandHasCardSender(): void {
+  const source = fs.readFileSync(path.resolve('src/interaction/feishu-interaction.ts'), 'utf8');
+  const commandHandlerCount = source.match(/handleDailyOsCommand\(\{/g)?.length || 0;
+  const workflowCardSenderCount = source.match(/sendWorkflowCard:/g)?.length || 0;
+  assert.ok(commandHandlerCount >= 3, 'expected Feishu interaction command handlers to be discoverable');
+  assert.equal(workflowCardSenderCount, commandHandlerCount, 'every Feishu command handler must pass sendWorkflowCard');
 }
 
 function testDailyOsCommandParsing(): void {

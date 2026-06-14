@@ -341,6 +341,9 @@ async function runBatch(input: {
     accessDecision,
     sessionScopeId: session.scope_id,
     stopAgentRun: async () => stopAgentRun(input.activeAgentRuns, input.scope),
+    sendWorkflowCard: async ({ workflow, date, summary }) => {
+      await sendWorkflowCardOutput(input.config, workflow, date, summary, `interaction:${input.scope}`);
+    },
     reply: async (reply) => {
       await replyToMessage(input.channel, last, reply, input.config.interaction.feishu.reply_mode);
     },
