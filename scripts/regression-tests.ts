@@ -5,9 +5,11 @@ import path from 'node:path';
 import { loadConfig } from '../src/config/load-config.js';
 import { coalesceChatSuggestions } from '../src/chat/context-analysis.js';
 import type { ChatContextSuggestion } from '../src/chat/context-analysis.js';
-import { parseDailyOsCommand } from '../src/interaction/daily-os-command.js';
+import { parseDailyOsCommand, runParsedDailyOsCommand } from '../src/interaction/daily-os-command.js';
 import { handlePendingBackgroundSuggestionReply } from '../src/service/background-suggestions.js';
 import { renderFeishuWorkflowCard } from '../src/connectors/feishu-sdk.js';
+import { createPolicyCandidate, listPolicyCandidates } from '../src/decision/candidates.js';
+import { decisionPolicyFiles } from '../src/decision/policy.js';
 import { collectFeishuUserMessageRecords, isFeishuAppMessageRecord } from '../src/utils/feishu-message-records.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-os-regression-'));
@@ -16,6 +18,8 @@ try {
   testFeishuUserMessageFiltering();
   testChatSuggestionCoalescing();
   testDailyOsCommandParsing();
+  await testWorkflowCommandUsesCardCallback();
+  await testConfirmLatestPolicyCandidateWithoutId();
   testBackgroundSuggestionDismissAllFromAmbiguousDismiss();
   testWorkflowCardRendering();
   console.log('Regression tests passed.');
@@ -95,6 +99,12 @@ function testDailyOsCommandParsing(): void {
   assert.deepEqual(parseDailyOsCommand('daily-os plan', 'daily-os'), { type: 'workflow', workflow: 'daily_plan' });
   assert.deepEqual(parseDailyOsCommand('daily-os review', 'daily-os'), { type: 'workflow', workflow: 'daily_review' });
   assert.deepEqual(parseDailyOsCommand('daily-os weekly', 'daily-os'), { type: 'workflow', workflow: 'weekly_review' });
+  assert.deepEqual(parseDailyOsCommand('daily-os 保存规则', 'daily-os'), { type: 'confirm_policy_candidate' });
+  assert.deepEqual(parseDailyOsCommand('daily-os 确认保存', 'daily-os'), { type: 'confirm_policy_candidate' });
+  assert.deepEqual(parseDailyOsCommand('daily-os 确认保存：daily-os 保存规则 pol-20260605202553-801f4cf6', 'daily-os'), {
+    type: 'confirm_policy_candidate',
+    id: 'pol-20260605202553-801f4cf6',
+  });
 
   const revision = parseDailyOsCommand('daily-os 修改今日安排：把 LEO-12 降级，今天先处理导师邮件', 'daily-os');
   assert.equal(revision.type, 'revision_request');
@@ -102,6 +112,73 @@ function testDailyOsCommandParsing(): void {
     assert.equal(revision.workflow, 'daily_plan');
     assert.match(revision.text, /LEO-12/);
   }
+}
+
+async function testWorkflowCommandUsesCardCallback(): Promise<void> {
+  const replies: string[] = [];
+  const cards: Array<{ workflow: string; summary: string }> = [];
+  await runParsedDailyOsCommand(
+    {
+      config: testConfig(),
+      messageId: 'message-1',
+      text: 'daily-os plan',
+      source: 'regression-test',
+      prefix: 'daily-os',
+      sendWorkflowOutput: false,
+      reply: async (text) => {
+        replies.push(text);
+      },
+      sendWorkflowCard: async ({ workflow, summary }) => {
+        cards.push({ workflow, summary });
+      },
+      runWorkflowForCommand: async (_config, workflow, options) => {
+        assert.equal(workflow, 'daily_plan');
+        assert.deepEqual(options, { send: false });
+        return '老板，今天先看这几件事。\n\n## 今日重点\n- LEO-7 邮件复核';
+      },
+    },
+    { type: 'workflow', workflow: 'daily_plan' },
+  );
+
+  assert.deepEqual(replies, ['Running daily plan...']);
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0]?.workflow, 'daily_plan');
+  assert.match(cards[0]?.summary || '', /LEO-7/);
+}
+
+async function testConfirmLatestPolicyCandidateWithoutId(): Promise<void> {
+  const config = testConfig();
+  createPolicyCandidate(config, {
+    chatId: 'chat-1',
+    messageId: 'message-1',
+    senderOpenId: 'sender-1',
+    rawUserText: '每周日按 weekly 复盘。',
+    assistantReply: '已记录候选规则。',
+    rule: {
+      id: 'sunday-weekly-review',
+      description: '每周日必须参考 weekly 文档复盘本周要务。',
+      applies_to: ['daily_plan', 'weekly_review'],
+    },
+  });
+
+  const replies: string[] = [];
+  await runParsedDailyOsCommand(
+    {
+      config,
+      messageId: 'message-2',
+      text: 'daily-os 保存规则',
+      source: 'regression-test',
+      prefix: 'daily-os',
+      reply: async (text) => {
+        replies.push(text);
+      },
+    },
+    { type: 'confirm_policy_candidate' },
+  );
+
+  assert.equal(listPolicyCandidates(config, 'pending').length, 0);
+  assert.match(replies.join('\n'), /已保存长期决策规则：sunday-weekly-review/);
+  assert.match(fs.readFileSync(decisionPolicyFiles(config).policyPath, 'utf8'), /每周日必须参考 weekly 文档复盘本周要务/);
 }
 
 function testBackgroundSuggestionDismissAllFromAmbiguousDismiss(): void {
@@ -176,5 +253,7 @@ function testConfig(): ReturnType<typeof loadConfig> {
   config.feedback.feishu.state_path = path.join(tmp, 'feedback-state.json');
   config.memory.daily_dir = path.join(tmp, 'daily');
   config.memory.long_term_path = path.join(tmp, 'long-term.md');
+  config.memory.repository_path = path.join(tmp, 'repository');
+  config.decision.candidates_path = path.join(tmp, 'decision-policy-candidates.md');
   return config;
 }
