@@ -26,6 +26,7 @@ try {
   await testWeeklyWorkflowCommandPassesEvidenceToCardSummary();
   await testFeedbackPollWorkflowCommandUsesCardSender();
   testDailyPlanSummaryShowsOpenLoopEvidence();
+  testWorkflowSummaryQuotesLinearMetadata();
   testWeeklyReviewSummaryPrioritizesReviewEvidence();
   testWeeklyReviewSummaryShowsStructuredPriorityItems();
   testWeeklyPrioritiesExtractPortfolioReviewItem();
@@ -299,6 +300,42 @@ function testDailyPlanSummaryShowsOpenLoopEvidence(): void {
   assert.match(summary, /LEO-7/);
   assert.match(summary, /未来 4 周唯一主线/);
   assert.match(summary, /飞书文档/);
+}
+
+function testWorkflowSummaryQuotesLinearMetadata(): void {
+  const content = [
+    '老板您好，我帮您整理了今天的安排。',
+    '',
+    '**1. 今日重点**',
+    '- `LEO-7 Heng Li 意向邮件` 今天先做最终发送审核。',
+  ].join('\n');
+  const summary = formatWorkflowSummaryForFeishu(
+    'daily_plan',
+    '2026-06-14',
+    content,
+    {
+      generated_at: '2026-06-14T00:00:00.000Z',
+      date: '2026-06-14',
+      sources: {
+        linear: {
+          state: 'available',
+          data: {
+            items: [
+              {
+                identifier: 'LEO-7',
+                title: '[P0][6/15][Draft ready] Heng Li 意向邮件',
+                project: { name: 'Job or PhD?' },
+                dueDate: '2026-06-15',
+              },
+            ],
+          },
+        },
+      },
+    },
+    testConfig(),
+  );
+  assert.match(summary, /> Linear：Job or PhD\? · Due 2026-06-15 · P0/);
+  assert.doesNotMatch(summary, /\n\s+Linear：Project/);
 }
 
 function testWeeklyReviewSummaryPrioritizesReviewEvidence(): void {
