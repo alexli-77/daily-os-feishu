@@ -108,7 +108,8 @@ function dailyReviewOverview(content: string, evidence?: Evidence): string[] {
 function weeklyReviewOverview(content: string, evidence?: Evidence): string[] {
   const linear = linearMetadataFromEvidence(evidence);
   const done = extractPrefixedSectionRows(content, ['本周已经完成', '已推进'], ['确认的', '完成', '已推进'], 3);
-  const open = extractPrefixedSectionRows(content, ['本周没做完', '需要继续盯', '未闭环'], ['未闭环'], 3);
+  const open = extractPrefixedSectionRows(content, ['本周没做完', '需要继续盯', '未闭环'], ['未闭环', '逐条核对'], 3);
+  const weeklyOpen = weeklyPriorityOpenRows(evidence);
   const decision = weeklyDecisionRows(content);
   const mit = extractSectionBullets(content, ['下周 MIT'], 1);
   const plan = extractSectionBullets(content, ['下周主要安排'], 4);
@@ -117,7 +118,8 @@ function weeklyReviewOverview(content: string, evidence?: Evidence): string[] {
   const codexAfterPlan = codex.filter((item) => !overlapsAny(item, [...mit, ...planAfterMit]));
   return groupedOverview('先复盘本周，再决定下周带走', [
     { label: '本周确认', rows: done.map((item) => taskRow(item, '完成', '已推进', '本周已经能沉淀为结果', linear)).slice(0, 2) },
-    { label: '本周未闭环', rows: open.map((item) => taskRow(item, '未闭环', '您', '下周需要继续盯到可验证结果', linear)).slice(0, 3) },
+    { label: '本周未闭环', rows: open.map((item) => taskRow(item, '未闭环', '您', '下周需要继续盯到可验证结果', linear)).slice(0, 2) },
+    { label: 'Weekly 🐶 未完成', rows: weeklyOpen.map((item) => taskRow(item, '未完成', '待确认', '按 Feishu Weekly 逐条带走', linear)).slice(0, 3) },
     { label: '决策依据', rows: decision.map((item) => taskRow(item, '规则', '已加载', '本次复盘已按这条规则排序', linear)).slice(0, 1) },
     {
       label: '下周带走',
@@ -128,6 +130,18 @@ function weeklyReviewOverview(content: string, evidence?: Evidence): string[] {
       ].slice(0, 5),
     },
   ]);
+}
+
+function weeklyPriorityOpenRows(evidence?: Evidence): string[] {
+  const source = evidence?.sources.weekly_priorities;
+  if (!source || source.state !== 'available' || !isRecord(source.data) || !Array.isArray(source.data.items)) return [];
+  const rows = source.data.items
+    .filter((item): item is Record<string, unknown> => isRecord(item))
+    .filter((item) => item.scope === '🐶')
+    .map((item) => (typeof item.item === 'string' ? item.item : ''))
+    .filter((item) => item && !/✅/.test(item));
+  const highSignal = rows.filter((item) => /portfolio|作品集|build in public|强制令|Leon 学长/i.test(item));
+  return dedupe([...highSignal, ...rows]).slice(0, 6);
 }
 
 function groupedOverview(title: string, groups: Array<{ label: string; rows: string[] }>): string[] {
