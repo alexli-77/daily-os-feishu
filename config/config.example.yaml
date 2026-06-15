@@ -18,6 +18,9 @@ workflows:
   daily_review:
     enabled: true
     time: "21:30"
+    # On the weekly review day, skip the automatic daily review.
+    # Users can still trigger it manually with `daily-os review`.
+    skip_on_weekly_review_day: true
   weekly_review:
     enabled: true
     weekday: "SUN"

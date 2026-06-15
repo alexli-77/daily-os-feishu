@@ -91,8 +91,18 @@ async function tick(configProvider: ConfigProvider, state: SchedulerRuntimeState
   ];
 
   for (const item of schedule) {
-    if (!item.enabled || !isWorkflowDue(config, item.workflow, time, item.time)) continue;
-    if (item.weekday && item.weekday.slice(0, 3).toUpperCase() !== weekday) continue;
+    if (!item.enabled) continue;
+    if (
+      !shouldRunScheduledWorkflow(config, {
+        workflow: item.workflow,
+        currentTime: time,
+        currentWeekday: weekday,
+        scheduledTime: item.time,
+        scheduledWeekday: item.weekday,
+      })
+    ) {
+      continue;
+    }
     const key = `${date}:${item.workflow}:${item.time}`;
     if (state.fired.has(key) || isRetryBlocked(state, key, now)) continue;
     if (!claimFired(state, key)) continue;
@@ -165,6 +175,29 @@ function dateInZone(date: Date, timezone: string): string {
   }).format(date);
 }
 
+export function shouldRunScheduledWorkflow(
+  config: AppConfig,
+  input: {
+    workflow: WorkflowName;
+    currentTime: string;
+    currentWeekday: string;
+    scheduledTime: string;
+    scheduledWeekday?: string;
+  },
+): boolean {
+  if (!isWorkflowDue(config, input.workflow, input.currentTime, input.scheduledTime)) return false;
+  if (input.scheduledWeekday && !isSameWeekday(input.scheduledWeekday, input.currentWeekday)) return false;
+  if (
+    input.workflow === 'daily_review' &&
+    config.workflows.daily_review.skip_on_weekly_review_day &&
+    config.workflows.weekly_review.enabled &&
+    isSameWeekday(config.workflows.weekly_review.weekday, input.currentWeekday)
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function isWorkflowDue(config: AppConfig, workflow: WorkflowName, currentTime: string, scheduledTime: string): boolean {
   const current = minutesFromTime(currentTime);
   const scheduled = minutesFromTime(scheduledTime);
@@ -172,6 +205,10 @@ function isWorkflowDue(config: AppConfig, workflow: WorkflowName, currentTime: s
   if (workflow !== 'daily_plan') return true;
   const review = minutesFromTime(config.workflows.daily_review.time);
   return review === null || review <= scheduled || current < review;
+}
+
+function isSameWeekday(configured: string, current: string): boolean {
+  return configured.slice(0, 3).toUpperCase() === current.slice(0, 3).toUpperCase();
 }
 
 function isProgressReminderDue(config: AppConfig, currentTime: string): boolean {

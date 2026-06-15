@@ -1068,6 +1068,7 @@ const HTML = String.raw`<!doctype html>
                 <legend>Daily review</legend>
                 <label><input id="workflow-review-enabled" type="checkbox" /> Enabled</label>
                 <label>Time<input id="workflow-review-time" type="time" /></label>
+                <label><input id="workflow-review-skip-weekly-day" type="checkbox" /> Skip automatic review on weekly review day</label>
                 <button type="button" data-action="review">Run now</button>
               </fieldset>
               <fieldset>
@@ -1717,6 +1718,7 @@ function render() {
   set('workflow-plan-time', config.workflows.daily_plan.time);
   checked('workflow-review-enabled', config.workflows.daily_review.enabled);
   set('workflow-review-time', config.workflows.daily_review.time);
+  checked('workflow-review-skip-weekly-day', config.workflows.daily_review.skip_on_weekly_review_day);
   checked('workflow-weekly-enabled', config.workflows.weekly_review.enabled);
   set('workflow-weekly-weekday', config.workflows.weekly_review.weekday);
   set('workflow-weekly-time', config.workflows.weekly_review.time);
@@ -1855,6 +1857,7 @@ async function saveAll() {
   next.workflows.daily_plan.time = value('workflow-plan-time');
   next.workflows.daily_review.enabled = isChecked('workflow-review-enabled');
   next.workflows.daily_review.time = value('workflow-review-time');
+  next.workflows.daily_review.skip_on_weekly_review_day = isChecked('workflow-review-skip-weekly-day');
   next.workflows.weekly_review.enabled = isChecked('workflow-weekly-enabled');
   next.workflows.weekly_review.weekday = value('workflow-weekly-weekday');
   next.workflows.weekly_review.time = value('workflow-weekly-time');
