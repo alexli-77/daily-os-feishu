@@ -158,7 +158,7 @@ function groupedOverview(title: string, groups: Array<{ label: string; rows: str
 function taskRow(item: string, priority: string, owner: string, goal: string, linear: Map<string, LinearIssueMetadata> = new Map()): string {
   const clean = compactItem(item);
   const meta = linearMetadataLine(item, linear);
-  return `**${priority}｜${owner}**：${clean}\n   目标：${goalFromItem(item, goal)}${meta ? `\n   Linear：${meta}` : ''}`;
+  return `**${priority}｜${owner}**：${clean}\n   目标：${goalFromItem(item, goal)}${meta ? `\n   > Linear：${meta}` : ''}`;
 }
 
 function ownerFor(item: string, codexItems: string[], userItems: string[]): string {
@@ -214,11 +214,12 @@ function linearMetadataLine(item: string, linear: Map<string, LinearIssueMetadat
     .map((meta) =>
       [
         meta.project ? `Project ${meta.project}` : '',
-        meta.dueDate ? `Deadline ${meta.dueDate}` : '',
-        meta.priority ? `Priority ${meta.priority}` : '',
+        meta.dueDate ? `Due ${meta.dueDate}` : '',
+        meta.priority ? meta.priority : '',
       ]
         .filter(Boolean)
-        .join('；'),
+        .join(' · ')
+        .replace(/^Project\s+/, ''),
     )
     .filter(Boolean);
   return lines.slice(0, 2).join(' / ');
