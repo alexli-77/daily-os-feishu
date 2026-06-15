@@ -281,7 +281,7 @@ function parseChatAnalysisMode(value: string | undefined, fallback: ChatAnalysis
 }
 
 async function runAndPrint(config: ReturnType<typeof loadConfig>, workflow: WorkflowName, send: boolean): Promise<void> {
-  const text = await runWorkflow(config, workflow, { send });
+  const text = await runWorkflow(config, workflow, { send, trigger: 'cli', source: process.argv.slice(2).join(' ') });
   console.log(text);
 }
 

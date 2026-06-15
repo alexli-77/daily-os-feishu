@@ -249,3 +249,4 @@ memory:
   repository_path: ""
   long_term_path: "./data/memory/long-term.md"
   daily_dir: "./data/memory/daily"
+  workflow_runs_dir: "./data/memory/workflow-runs"

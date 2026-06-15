@@ -10,6 +10,8 @@ import { handlePendingBackgroundSuggestionReply } from '../src/service/backgroun
 import { renderFeishuWorkflowCard } from '../src/connectors/feishu-sdk.js';
 import { handleFeishuFeedbackCommand } from '../src/feedback/feishu-feedback.js';
 import { shouldRunScheduledWorkflow } from '../src/service/launchd.js';
+import { formatRecentWorkflowRuns, listRecentWorkflowRuns } from '../src/workflows/run-ledger.js';
+import { runWorkflow } from '../src/workflows/run-workflow.js';
 import { formatWorkflowSummaryForFeishu } from '../src/workflows/summary.js';
 import { extractWeeklyPrioritiesFromXml } from '../src/workflows/weekly-priorities.js';
 import { createPolicyCandidate, listPolicyCandidates } from '../src/decision/candidates.js';
@@ -29,6 +31,7 @@ try {
   testDailyPlanSummaryShowsOpenLoopEvidence();
   testWorkflowSummaryQuotesLinearMetadata();
   testSchedulerSkipsDailyReviewOnWeeklyReviewDay();
+  await testWorkflowRunLedgerRecordsSendFailure();
   testWeeklyReviewSummaryPrioritizesReviewEvidence();
   testWeeklyReviewSummaryShowsStructuredPriorityItems();
   testWeeklyPrioritiesExtractPortfolioReviewItem();
@@ -384,6 +387,59 @@ function testSchedulerSkipsDailyReviewOnWeeklyReviewDay(): void {
   );
 }
 
+async function testWorkflowRunLedgerRecordsSendFailure(): Promise<void> {
+  const config = testConfig();
+  config.sources.vault.enabled = false;
+  config.sources.chrome_snapshot.enabled = false;
+  config.sources.apple_calendar_snapshot.enabled = false;
+  config.sources.feishu.enabled = false;
+  config.sources.github.enabled = false;
+  config.sources.linear.enabled = false;
+  config.progress.enabled = false;
+  config.output.feishu.enabled = true;
+  config.output.feishu.provider = 'lark_cli';
+  config.output.feishu.chat_id_env = 'MISSING_TEST_FEISHU_CHAT_ID';
+
+  const fakeCodex = path.join(tmp, 'fake-codex');
+  fs.writeFileSync(
+    fakeCodex,
+    [
+      '#!/usr/bin/env node',
+      "const fs = require('fs');",
+      "const args = process.argv.slice(2);",
+      "const outputPath = args[args.indexOf('--output-last-message') + 1];",
+      "fs.writeFileSync(outputPath, '老板，今天先处理 LEO-65。');",
+    ].join('\n'),
+    'utf8',
+  );
+  fs.chmodSync(fakeCodex, 0o755);
+
+  const previousCodexBin = process.env.CODEX_BIN;
+  process.env.CODEX_BIN = fakeCodex;
+  try {
+    await assert.rejects(
+      () => runWorkflow(config, 'daily_plan', { send: true, trigger: 'scheduler', source: 'regression-test' }),
+      /MISSING_TEST_FEISHU_CHAT_ID/,
+    );
+  } finally {
+    if (previousCodexBin === undefined) {
+      delete process.env.CODEX_BIN;
+    } else {
+      process.env.CODEX_BIN = previousCodexBin;
+    }
+  }
+
+  const runs = listRecentWorkflowRuns(config, 1);
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0]?.workflow, 'daily_plan');
+  assert.equal(runs[0]?.trigger, 'scheduler');
+  assert.equal(runs[0]?.status, 'failed');
+  assert.equal(runs[0]?.send.status, 'failed');
+  assert.match(runs[0]?.error || '', /MISSING_TEST_FEISHU_CHAT_ID/);
+  assert.match(formatRecentWorkflowRuns(runs), /daily_plan/);
+  assert.match(formatRecentWorkflowRuns(runs), /failed/);
+}
+
 function testWeeklyReviewSummaryPrioritizesReviewEvidence(): void {
   const content = [
     '老板，我帮您整理了本周总结和下周安排。',
@@ -554,6 +610,7 @@ function testConfig(): ReturnType<typeof loadConfig> {
   config.memory.daily_dir = path.join(tmp, 'daily');
   config.memory.long_term_path = path.join(tmp, 'long-term.md');
   config.memory.repository_path = path.join(tmp, 'repository');
+  config.memory.workflow_runs_dir = path.join(tmp, 'workflow-runs');
   config.decision.candidates_path = path.join(tmp, 'decision-policy-candidates.md');
   return config;
 }

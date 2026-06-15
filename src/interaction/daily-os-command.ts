@@ -1,6 +1,6 @@
 import type { AppConfig, WorkflowName } from '../config/schema.js';
 import { appendDailyMemory, appendFeedbackLog, appendLongTermMemory, readLatestWorkflowOutput } from '../storage/memory.js';
-import { runWorkflow } from '../workflows/run-workflow.js';
+import { runWorkflow, runWorkflowDetailed } from '../workflows/run-workflow.js';
 import { collectEvidence } from '../workflows/evidence.js';
 import { formatLatestWorkflowDetails, formatWorkflowSummaryForFeishu } from '../workflows/summary.js';
 import { decisionCalibrationPrompt, decisionPolicyStatusText } from '../decision/policy.js';
@@ -15,6 +15,8 @@ import { clearFeishuSession } from './session-catalog.js';
 import { collectProgressCandidates, formatProgressCandidates } from '../progress/capture.js';
 import { todayInTimezone } from '../utils/date.js';
 import { analyzeChatContext, formatChatContextAnalysis, type ChatAnalysisMode } from '../chat/context-analysis.js';
+import { formatRecentWorkflowRuns, listRecentWorkflowRuns } from '../workflows/run-ledger.js';
+import { markWorkflowRunFailed, markWorkflowRunSucceeded } from '../workflows/run-ledger.js';
 
 export type ParsedDailyOsCommand =
   | { type: 'ignore' }
@@ -118,10 +120,11 @@ export function parseDailyOsCommand(text: string, prefix: string): ParsedDailyOs
   return { type: 'ignore' };
 }
 
-export function dailyOsStatusText(prefix: string): string {
-  return [
+export function dailyOsStatusText(prefix: string, config?: AppConfig): string {
+  const lines = [
     'Daily OS 正在运行。',
     '',
+    ...(config ? [formatRecentWorkflowRuns(listRecentWorkflowRuns(config, 5)), ''] : []),
     '可用命令：',
     `- ${prefix} status`,
     `- ${prefix} new`,
@@ -139,13 +142,14 @@ export function dailyOsStatusText(prefix: string): string {
     `- ${prefix} plan`,
     `- ${prefix} review`,
     `- ${prefix} weekly`,
-  ].join('\n');
+  ];
+  return lines.join('\n');
 }
 
 export async function runParsedDailyOsCommand(context: DailyOsCommandContext, command: ParsedDailyOsCommand): Promise<void> {
   switch (command.type) {
     case 'status':
-      await context.reply(dailyOsStatusText(context.prefix));
+      await context.reply(dailyOsStatusText(context.prefix, context.config));
       return;
     case 'policy':
       await context.reply(decisionPolicyStatusText(context.config));
@@ -237,16 +241,33 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
     case 'workflow': {
       const date = todayInTimezone(context.config);
       await context.reply(`Running ${command.workflow.replaceAll('_', ' ')}...`);
-      const run = context.runWorkflowForCommand || runWorkflow;
       const sendViaConfiguredOutput = (context.sendWorkflowOutput ?? false) && !context.sendWorkflowCard;
-      const output = await run(context.config, command.workflow, { send: sendViaConfiguredOutput });
+      const result = context.runWorkflowForCommand
+        ? {
+            text: await context.runWorkflowForCommand(context.config, command.workflow, { send: sendViaConfiguredOutput }),
+            run: null,
+          }
+        : await runWorkflowDetailed(context.config, command.workflow, {
+            send: sendViaConfiguredOutput,
+            trigger: 'feishu_command',
+            source: context.source,
+          });
+      const output = result.text;
       const evidence =
         command.workflow === 'weekly_review' && (context.sendWorkflowCard || !sendViaConfiguredOutput)
           ? await (context.collectEvidenceForSummary || collectEvidence)(context.config, date)
           : undefined;
       const summary = formatWorkflowSummaryForFeishu(command.workflow, date, output, evidence, context.config);
       if (context.sendWorkflowCard) {
-        await context.sendWorkflowCard({ workflow: command.workflow, date, text: output, summary });
+        try {
+          await context.sendWorkflowCard({ workflow: command.workflow, date, text: output, summary });
+          if (result.run) {
+            markWorkflowRunSucceeded(context.config, result.run, { enabled: true, provider: 'feishu_interaction', mode: 'card', status: 'succeeded' });
+          }
+        } catch (error) {
+          if (result.run) markWorkflowRunFailed(context.config, result.run, error, { sendFailed: true });
+          throw error;
+        }
       } else if (!sendViaConfiguredOutput) {
         await context.reply(summary);
       }
