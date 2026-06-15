@@ -24,6 +24,7 @@ try {
   await testWorkflowCommandUsesCardCallback();
   await testFeedbackPollWorkflowCommandUsesCardSender();
   testDailyPlanSummaryShowsOpenLoopEvidence();
+  testWeeklyReviewSummaryPrioritizesReviewEvidence();
   await testConfirmLatestPolicyCandidateWithoutId();
   testBackgroundSuggestionDismissAllFromAmbiguousDismiss();
   testWorkflowCardRendering();
@@ -241,6 +242,37 @@ function testDailyPlanSummaryShowsOpenLoopEvidence(): void {
   assert.match(summary, /LEO-7/);
   assert.match(summary, /未来 4 周唯一主线/);
   assert.match(summary, /飞书文档/);
+}
+
+function testWeeklyReviewSummaryPrioritizesReviewEvidence(): void {
+  const content = [
+    '老板，我帮您整理了本周总结和下周安排。',
+    '',
+    '**1. 本周已经完成 / 已推进**',
+    '',
+    '确认的：本周主线已经从泛泛的 PhD / Job 选择，收口到 Poly / MOOSE / Heng Li 申请链路。证据来源是 Feishu Weekly2026 🐶 6.8-6.14 本周要务。',
+    '确认的：`LEO-7 Heng Li 意向邮件` 已推进到发送前审核状态。证据来源是 Linear：`LEO-7 [P0][6/15][Draft ready][待周一发送]`。',
+    '',
+    '**2. 本周没做完 / 需要继续盯**',
+    '',
+    '未闭环：`LEO-7` 邮件是否真实发出。原因是 Weekly2026 把导师联系标成 `MIT ✅`，但 Linear 到 2026-06-14 仍显示 `In Review / Draft ready / 待周一发送`。',
+    '未闭环：follow-up 日期没有证据。Weekly 要务明确要求记录 follow-up 日期，但当前证据里没有看到 follow-up 记录。',
+    '',
+    '**3. OKR / 优先级对齐**',
+    '',
+    '已确认决策规则影响排序：周日必须 review Feishu Weekly 🐶；博士 / 工作重大选择优先保护；Codex 可以先做草稿、检查表和方案拆解，最终判断、验收、对外发送由您本人完成。',
+    '',
+    '**4. 下周 MIT**',
+    '',
+    '下周唯一 MIT：`2026-06-15 发送 LEO-7 Heng Li 意向邮件，并记录收件人、附件、发送时间、follow-up 日期`。',
+  ].join('\n');
+  const summary = formatWorkflowSummaryForFeishu('weekly_review', '2026-06-14', content, undefined, testConfig());
+  assert.match(summary, /先复盘本周/);
+  assert.match(summary, /本周未闭环/);
+  assert.match(summary, /LEO-7/);
+  assert.match(summary, /follow-up/);
+  assert.match(summary, /决策依据/);
+  assert.doesNotMatch(summary, /\*\*下周先这样安排\*\*/);
 }
 
 function testBackgroundSuggestionDismissAllFromAmbiguousDismiss(): void {

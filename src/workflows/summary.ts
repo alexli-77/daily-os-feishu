@@ -107,24 +107,30 @@ function dailyReviewOverview(content: string, evidence?: Evidence): string[] {
 
 function weeklyReviewOverview(content: string, evidence?: Evidence): string[] {
   const linear = linearMetadataFromEvidence(evidence);
-  const done = extractSectionBullets(content, ['本周已经完成', '已推进'], 2);
+  const done = extractPrefixedSectionRows(content, ['本周已经完成', '已推进'], ['确认的', '完成', '已推进'], 3);
+  const open = extractPrefixedSectionRows(content, ['本周没做完', '需要继续盯', '未闭环'], ['未闭环'], 3);
+  const decision = weeklyDecisionRows(content);
   const mit = extractSectionBullets(content, ['下周 MIT'], 1);
   const plan = extractSectionBullets(content, ['下周主要安排'], 4);
   const codex = extractSectionBullets(content, ['我可以帮您安排 Codex 做', 'Codex 可以做'], 2);
-  return groupedOverview('下周先这样安排', [
-    { label: '确认的', rows: done.map((item) => taskRow(item, '完成', '已推进', '本周已经能沉淀为结果', linear)).slice(0, 2) },
+  const planAfterMit = plan.filter((item) => !overlapsAny(item, mit));
+  const codexAfterPlan = codex.filter((item) => !overlapsAny(item, [...mit, ...planAfterMit]));
+  return groupedOverview('先复盘本周，再决定下周带走', [
+    { label: '本周确认', rows: done.map((item) => taskRow(item, '完成', '已推进', '本周已经能沉淀为结果', linear)).slice(0, 2) },
+    { label: '本周未闭环', rows: open.map((item) => taskRow(item, '未闭环', '您', '下周需要继续盯到可验证结果', linear)).slice(0, 3) },
+    { label: '决策依据', rows: decision.map((item) => taskRow(item, '规则', '已加载', '本次复盘已按这条规则排序', linear)).slice(0, 1) },
     {
-      label: '新增的',
+      label: '下周带走',
       rows: [
         ...mit.map((item) => taskRow(item, 'P0', ownerFor(item, codex, []), '下周唯一主线', linear)),
-        ...plan.map((item, index) => taskRow(item, index === 0 ? 'P0' : 'P1', ownerFor(item, codex, []), '推进到可检查结果', linear)),
-        ...codex.map((item) => taskRow(item, 'P1', 'Codex', '先准备可交付产物', linear)),
+        ...planAfterMit.map((item, index) => taskRow(item, index === 0 ? 'P1' : 'P2', ownerFor(item, codex, []), '推进到可检查结果', linear)),
+        ...codexAfterPlan.map((item) => taskRow(item, 'P1', 'Codex', '先准备可交付产物', linear)),
       ].slice(0, 5),
     },
   ]);
 }
 
-function groupedOverview(title: string, groups: Array<{ label: '确认的' | '暂缓的' | '新增的'; rows: string[] }>): string[] {
+function groupedOverview(title: string, groups: Array<{ label: string; rows: string[] }>): string[] {
   const lines: string[] = [`**${title}**`];
   for (const group of groups) {
     const rows = dedupe(group.rows).slice(0, 3);
@@ -157,8 +163,9 @@ function compactItem(item: string): string {
     removeEvidenceTail(
       stripMarkdown(item)
         .replace(/^(MIT|P[0-3]|优先级[:：]?)\s*/i, '')
-        .replace(/^(确认的|暂缓的|新增的)[:：\s]*/, '')
+        .replace(/^(确认的|暂缓的|新增的|未闭环)[:：\s]*/, '')
         .replace(/^(完成|已推进|未闭环|下一步|P[0-3])\s*[|｜]\s*(?:已推进|您|Codex)?\s*[:：]\s*/, '')
+        .replace(/^(完成|已推进|未闭环|下一步|P[0-3])[:：\s]*/, '')
         .replace(/^(?:Codex|我可以先|我可以|我|您|用户)\s*(?:可以先|可以|需要|先)?\s*/, '')
         .replace(/^今天最大的进展是/, '')
         .replace(/\s+/g, ' ')
@@ -173,7 +180,7 @@ function goalFromItem(item: string, fallback: string): string {
   const clean = stripMarkdown(item).replace(/\s+/g, ' ').trim();
   const match =
     clean.match(/(?:完成标准|预期产物|目标|结果|产物)(?:是|为|：|:)\s*([^。；;]+)/) ||
-    clean.match(/(?:确保|形成|产出|完成|确认|决定)([^。；;，,]{6,60})/);
+    clean.match(/(?:确保|形成|产出|完成|确认(?!过)|决定)([^。；;，,]{6,60})/);
   return completePhrase(match?.[1]?.trim() || fallback, MAX_ROW_GOAL_CHARS);
 }
 
@@ -306,6 +313,32 @@ function strategyAlignmentHeadings(config?: AppConfig): string[] {
   );
 }
 
+function extractPrefixedSectionRows(content: string, headings: string[], prefixes: string[], limit: number): string[] {
+  const sections = splitSections(content);
+  const wanted = headings.map((heading) => heading.toLowerCase());
+  const prefixPattern = new RegExp(`^(?:${prefixes.map(escapeRegExp).join('|')})[:：\\s]`);
+  const rows = sections
+    .filter((section) => wanted.some((heading) => section.heading.toLowerCase().includes(heading)))
+    .flatMap((section) =>
+      section.body
+        .split('\n')
+        .map((line) => stripMarkdown(line).trim())
+        .filter((line) => prefixPattern.test(line))
+        .map((line) => completePhrase(line, 160)),
+    );
+  if (rows.length > 0) return dedupe(rows).slice(0, limit);
+  return extractSectionBullets(content, headings, limit);
+}
+
+function weeklyDecisionRows(content: string): string[] {
+  const stripped = stripMarkdown(content).replace(/\s+/g, ' ');
+  const match =
+    stripped.match(/已确认决策规则影响排序[:：]\s*([^。]+)/) ||
+    stripped.match(/决策规则影响排序[:：]\s*([^。]+)/) ||
+    stripped.match(/周日必须 review Feishu Weekly[^。]+/);
+  return match?.[1] ? [match[1]] : [];
+}
+
 function dailyPlanOpenLoopRows(content: string): string[] {
   const text = stripMarkdown(content).replace(/\s+/g, ' ');
   const match =
@@ -335,7 +368,7 @@ function removeEvidenceTail(value: string): string {
 function completePhrase(value: string, max: number): string {
   const clean = value
     .replace(/^(MIT|P[0-3]|优先级[:：]?)\s*/i, '')
-    .replace(/^(确认的|暂缓的|新增的)[:：\s]*/, '')
+    .replace(/^(确认的|暂缓的|新增的|未闭环)[:：\s]*/, '')
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/^[「“"']+|[」”"']+$/g, '');
@@ -349,6 +382,10 @@ function completePhrase(value: string, max: number): string {
   return tidyPhrase(clean.slice(0, max).replace(/[，,、：:｜|/\\\s-]+$/u, '').trim());
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function tidyPhrase(value: string): string {
   return value.replace(/^[「“"']+|[」”"']+$/g, '').trim();
 }
@@ -360,13 +397,13 @@ function actionHint(workflow: WorkflowName): string {
   if (workflow === 'daily_review') {
     return '如果复盘有漏记，直接回复：daily-os 修改今日复盘：……';
   }
-  return '如果下周安排要改，直接回复：daily-os 修改周计划：……';
+  return '如果本周结论或下周带走项要改，直接回复：daily-os 修改周计划：……';
 }
 
 function closingLine(workflow: WorkflowName): string {
   if (workflow === 'daily_plan') return '您看这样排可以吗？';
   if (workflow === 'daily_review') return '您确认一下，哪些可以记为今天完成？';
-  return '您看下周先按这个节奏走可以吗？';
+  return '您确认一下：本周结论和下周带走项对吗？';
 }
 
 function splitSections(content: string): Array<{ heading: string; body: string }> {
