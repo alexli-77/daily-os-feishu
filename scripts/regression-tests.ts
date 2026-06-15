@@ -10,6 +10,7 @@ import { handlePendingBackgroundSuggestionReply } from '../src/service/backgroun
 import { renderFeishuWorkflowCard } from '../src/connectors/feishu-sdk.js';
 import { handleFeishuFeedbackCommand } from '../src/feedback/feishu-feedback.js';
 import { formatWorkflowSummaryForFeishu } from '../src/workflows/summary.js';
+import { extractWeeklyPrioritiesFromXml } from '../src/workflows/weekly-priorities.js';
 import { createPolicyCandidate, listPolicyCandidates } from '../src/decision/candidates.js';
 import { decisionPolicyFiles } from '../src/decision/policy.js';
 import { collectFeishuUserMessageRecords, isFeishuAppMessageRecord } from '../src/utils/feishu-message-records.js';
@@ -25,6 +26,8 @@ try {
   await testFeedbackPollWorkflowCommandUsesCardSender();
   testDailyPlanSummaryShowsOpenLoopEvidence();
   testWeeklyReviewSummaryPrioritizesReviewEvidence();
+  testWeeklyReviewSummaryShowsStructuredPriorityItems();
+  testWeeklyPrioritiesExtractPortfolioReviewItem();
   await testConfirmLatestPolicyCandidateWithoutId();
   testBackgroundSuggestionDismissAllFromAmbiguousDismiss();
   testWorkflowCardRendering();
@@ -273,6 +276,72 @@ function testWeeklyReviewSummaryPrioritizesReviewEvidence(): void {
   assert.match(summary, /follow-up/);
   assert.match(summary, /决策依据/);
   assert.doesNotMatch(summary, /\*\*下周先这样安排\*\*/);
+}
+
+function testWeeklyReviewSummaryShowsStructuredPriorityItems(): void {
+  const content = [
+    '老板，我帮您整理了本周总结和下周安排。',
+    '',
+    '**1. 本周已经完成 / 已推进**',
+    '确认的：`LEO-7 Heng Li 意向邮件` 已推进到发送前审核状态。',
+    '',
+    '**2. 本周没做完 / 需要继续盯**',
+    '逐条核对 🐶 本周要务：导师联系被 Weekly 标为 `MIT ✅`，但 Linear 仍显示待周一发送。',
+    '',
+    '**3. OKR / 优先级对齐**',
+    '已确认决策规则影响排序：周日必须 review Feishu Weekly 🐶。',
+  ].join('\n');
+  const summary = formatWorkflowSummaryForFeishu(
+    'weekly_review',
+    '2026-06-14',
+    content,
+    {
+      generated_at: '2026-06-14T00:00:00.000Z',
+      date: '2026-06-14',
+      sources: {
+        weekly_priorities: {
+          state: 'available',
+          data: {
+            week: '6.8-6.14',
+            items: [
+              { scope: '🐶', item: '完成 2026 年度 OKR 方向 review 收尾：明确未来 4 周唯一主线（延续上周⭕️）' },
+              { scope: '🐶', item: 'Leon 学长强制令工具：完成 1 个付费文档上架（延续上周⭕️）' },
+              { scope: '🐶', item: '个人 portfolio：把首版页面发给小企鹅 review，并按反馈改 1 轮（延续上周⭕️）' },
+            ],
+          },
+        },
+      },
+    },
+    testConfig(),
+  );
+  assert.match(summary, /Weekly 🐶 未完成/);
+  assert.match(summary, /个人 portfolio/);
+  assert.match(summary, /小企鹅 review/);
+}
+
+function testWeeklyPrioritiesExtractPortfolioReviewItem(): void {
+  const xml = [
+    '<title>Weekly2026</title>',
+    '<table>',
+    '<tbody>',
+    '<tr><td><p>🐶 重点OKR</p></td><td><p>6.8-6.14 要务</p></td><td><p>retro</p></td></tr>',
+    '<tr>',
+    '<td><p>名利-Leon学长</p></td>',
+    '<td><ol>',
+    '<li>Leon 学长强制令工具：完成 1 个付费文档上架（延续上周⭕️）</li>',
+    '<li>个人 portfolio：把首版页面发给小企鹅 review，并按反馈改 1 轮（延续上周⭕️）</li>',
+    '<li>发布 2 条 build in public 内容：换导师 / AI 研究方向 / 读博选择</li>',
+    '</ol></td>',
+    '<td><p></p></td>',
+    '</tr>',
+    '</tbody>',
+    '</table>',
+  ].join('');
+  const items = extractWeeklyPrioritiesFromXml(xml, '6.8-6.14', 'Weekly2026');
+  assert.ok(
+    items.some((item) => item.scope === '🐶' && /个人 portfolio/.test(item.item) && /小企鹅 review/.test(item.item)),
+    'weekly priorities must preserve the portfolio review item as its own row',
+  );
 }
 
 function testBackgroundSuggestionDismissAllFromAmbiguousDismiss(): void {
