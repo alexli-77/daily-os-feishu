@@ -9,7 +9,7 @@ import {
 import type { AppConfig, WorkflowName } from '../config/schema.js';
 import { handleDailyOsCommand, parseDailyOsCommand } from './daily-os-command.js';
 import { PendingQueue } from './pending-queue.js';
-import { runWorkflow } from '../workflows/run-workflow.js';
+import { runWorkflow, runWorkflowDetailed } from '../workflows/run-workflow.js';
 import { collectEvidence } from '../workflows/evidence.js';
 import { decideFeishuAccess, decideFeishuControl, type FeishuAccessDecision } from './access-policy.js';
 import { isDecisionCalibrationChat, startDecisionOnboarding } from '../decision/onboarding.js';
@@ -33,6 +33,7 @@ import { parseProgressCardAction, renderProgressConfirmationCard } from '../prog
 import { todayInTimezone } from '../utils/date.js';
 import { appendDailyMemory, appendFeedbackLog, readLatestWorkflowOutput, readWorkflowDetailCache } from '../storage/memory.js';
 import { formatLatestWorkflowDetails, formatWorkflowSummaryForFeishu } from '../workflows/summary.js';
+import { markWorkflowRunFailed, markWorkflowRunSucceeded } from '../workflows/run-ledger.js';
 import { handlePendingBackgroundSuggestionReply } from '../service/background-suggestions.js';
 import { renderFeishuWorkflowCard } from '../connectors/feishu-sdk.js';
 import { sendFeishuCard } from '../connectors/lark-cli.js';
@@ -628,11 +629,18 @@ async function handleCardAction(input: {
       .catch((error: unknown) => console.warn(`[interaction] failed to send card-action progress notice: ${error instanceof Error ? error.message : String(error)}`));
   }, 60_000);
   try {
-    const output = await runWorkflow(input.config, action, { send: false });
+    const result = await runWorkflowDetailed(input.config, action, { send: false, trigger: 'card_action', source: `card-action:${input.event.chatId}` });
+    const output = result.text;
     const date = todayInTimezone(input.config);
     const evidence = action === 'weekly_review' ? await collectEvidence(input.config, date) : undefined;
     const summary = formatWorkflowSummaryForFeishu(action, date, output, evidence, input.config);
-    await input.channel.send(input.event.chatId, { card: renderFeishuWorkflowCard(summary, { workflow: action, date }) }, { replyTo: input.event.messageId });
+    try {
+      await input.channel.send(input.event.chatId, { card: renderFeishuWorkflowCard(summary, { workflow: action, date }) }, { replyTo: input.event.messageId });
+      markWorkflowRunSucceeded(input.config, result.run, { enabled: true, provider: 'feishu_interaction', mode: 'card', status: 'succeeded' });
+    } catch (error) {
+      markWorkflowRunFailed(input.config, result.run, error, { sendFailed: true });
+      throw error;
+    }
     console.log(`[interaction] handled ${input.event.chatId}; card-action=${action}`);
   } finally {
     clearTimeout(progressTimer);

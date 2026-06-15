@@ -355,7 +355,7 @@ async function runActionInner(options: UiServerOptions, request: Record<string, 
     weekly: 'weekly_review',
   };
   if (action in workflows) {
-    return { ok: true, text: await runWorkflow(config, workflows[action], { send: sendOutput }) };
+    return { ok: true, text: await runWorkflow(config, workflows[action], { send: sendOutput, trigger: 'ui', source: action }) };
   }
 
   throw new Error(`Unknown action: ${action}`);

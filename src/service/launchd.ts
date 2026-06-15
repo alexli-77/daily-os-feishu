@@ -107,7 +107,7 @@ async function tick(configProvider: ConfigProvider, state: SchedulerRuntimeState
     if (state.fired.has(key) || isRetryBlocked(state, key, now)) continue;
     if (!claimFired(state, key)) continue;
     try {
-      await runWorkflow(config, item.workflow);
+      await runWorkflow(config, item.workflow, { trigger: 'scheduler', source: key });
       clearRetry(state, key);
     } catch (error) {
       unmarkFired(state, key);

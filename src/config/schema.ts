@@ -407,6 +407,7 @@ export const AppConfigSchema = z.object({
     repository_path: z.string().default(''),
     long_term_path: z.string().default('./data/memory/long-term.md'),
     daily_dir: z.string().default('./data/memory/daily'),
+    workflow_runs_dir: z.string().default('./data/memory/workflow-runs'),
   }),
 });
 
