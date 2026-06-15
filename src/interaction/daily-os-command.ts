@@ -1,6 +1,7 @@
 import type { AppConfig, WorkflowName } from '../config/schema.js';
 import { appendDailyMemory, appendFeedbackLog, appendLongTermMemory, readLatestWorkflowOutput } from '../storage/memory.js';
 import { runWorkflow } from '../workflows/run-workflow.js';
+import { collectEvidence } from '../workflows/evidence.js';
 import { formatLatestWorkflowDetails, formatWorkflowSummaryForFeishu } from '../workflows/summary.js';
 import { decisionCalibrationPrompt, decisionPolicyStatusText } from '../decision/policy.js';
 import {
@@ -43,6 +44,7 @@ export interface DailyOsCommandContext {
   sendWorkflowCard?: (input: { workflow: WorkflowName; date: string; text: string; summary: string }) => Promise<void>;
   sendWorkflowOutput?: boolean;
   runWorkflowForCommand?: typeof runWorkflow;
+  collectEvidenceForSummary?: typeof collectEvidence;
   accessDecision?: FeishuAccessDecision;
   sessionScopeId?: string;
   stopAgentRun?: () => Promise<boolean>;
@@ -238,7 +240,11 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
       const run = context.runWorkflowForCommand || runWorkflow;
       const sendViaConfiguredOutput = (context.sendWorkflowOutput ?? false) && !context.sendWorkflowCard;
       const output = await run(context.config, command.workflow, { send: sendViaConfiguredOutput });
-      const summary = formatWorkflowSummaryForFeishu(command.workflow, date, output, undefined, context.config);
+      const evidence =
+        command.workflow === 'weekly_review' && (context.sendWorkflowCard || !sendViaConfiguredOutput)
+          ? await (context.collectEvidenceForSummary || collectEvidence)(context.config, date)
+          : undefined;
+      const summary = formatWorkflowSummaryForFeishu(command.workflow, date, output, evidence, context.config);
       if (context.sendWorkflowCard) {
         await context.sendWorkflowCard({ workflow: command.workflow, date, text: output, summary });
       } else if (!sendViaConfiguredOutput) {

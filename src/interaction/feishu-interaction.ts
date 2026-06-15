@@ -10,6 +10,7 @@ import type { AppConfig, WorkflowName } from '../config/schema.js';
 import { handleDailyOsCommand, parseDailyOsCommand } from './daily-os-command.js';
 import { PendingQueue } from './pending-queue.js';
 import { runWorkflow } from '../workflows/run-workflow.js';
+import { collectEvidence } from '../workflows/evidence.js';
 import { decideFeishuAccess, decideFeishuControl, type FeishuAccessDecision } from './access-policy.js';
 import { isDecisionCalibrationChat, startDecisionOnboarding } from '../decision/onboarding.js';
 import { runDecisionCalibrationAgent } from '../decision/calibration-agent.js';
@@ -628,8 +629,10 @@ async function handleCardAction(input: {
   }, 60_000);
   try {
     const output = await runWorkflow(input.config, action, { send: false });
-    const summary = formatWorkflowSummaryForFeishu(action, todayInTimezone(input.config), output, undefined, input.config);
-    await input.channel.send(input.event.chatId, { card: renderFeishuWorkflowCard(summary, { workflow: action, date: todayInTimezone(input.config) }) }, { replyTo: input.event.messageId });
+    const date = todayInTimezone(input.config);
+    const evidence = action === 'weekly_review' ? await collectEvidence(input.config, date) : undefined;
+    const summary = formatWorkflowSummaryForFeishu(action, date, output, evidence, input.config);
+    await input.channel.send(input.event.chatId, { card: renderFeishuWorkflowCard(summary, { workflow: action, date }) }, { replyTo: input.event.messageId });
     console.log(`[interaction] handled ${input.event.chatId}; card-action=${action}`);
   } finally {
     clearTimeout(progressTimer);
