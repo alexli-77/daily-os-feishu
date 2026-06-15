@@ -58,7 +58,11 @@ export const AppConfigSchema = z.object({
   }),
   workflows: z.object({
     daily_plan: z.object({ enabled: z.boolean().default(true), time: z.string().default('08:00') }),
-    daily_review: z.object({ enabled: z.boolean().default(true), time: z.string().default('21:30') }),
+    daily_review: z.object({
+      enabled: z.boolean().default(true),
+      time: z.string().default('21:30'),
+      skip_on_weekly_review_day: z.boolean().default(true),
+    }),
     weekly_review: z.object({
       enabled: z.boolean().default(true),
       weekday: z.string().default('SUN'),

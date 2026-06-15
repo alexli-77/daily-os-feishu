@@ -9,6 +9,7 @@ import { parseDailyOsCommand, runParsedDailyOsCommand } from '../src/interaction
 import { handlePendingBackgroundSuggestionReply } from '../src/service/background-suggestions.js';
 import { renderFeishuWorkflowCard } from '../src/connectors/feishu-sdk.js';
 import { handleFeishuFeedbackCommand } from '../src/feedback/feishu-feedback.js';
+import { shouldRunScheduledWorkflow } from '../src/service/launchd.js';
 import { formatWorkflowSummaryForFeishu } from '../src/workflows/summary.js';
 import { extractWeeklyPrioritiesFromXml } from '../src/workflows/weekly-priorities.js';
 import { createPolicyCandidate, listPolicyCandidates } from '../src/decision/candidates.js';
@@ -27,6 +28,7 @@ try {
   await testFeedbackPollWorkflowCommandUsesCardSender();
   testDailyPlanSummaryShowsOpenLoopEvidence();
   testWorkflowSummaryQuotesLinearMetadata();
+  testSchedulerSkipsDailyReviewOnWeeklyReviewDay();
   testWeeklyReviewSummaryPrioritizesReviewEvidence();
   testWeeklyReviewSummaryShowsStructuredPriorityItems();
   testWeeklyPrioritiesExtractPortfolioReviewItem();
@@ -336,6 +338,50 @@ function testWorkflowSummaryQuotesLinearMetadata(): void {
   );
   assert.match(summary, /> Linear：Job or PhD\? · Due 2026-06-15 · P0/);
   assert.doesNotMatch(summary, /\n\s+Linear：Project/);
+}
+
+function testSchedulerSkipsDailyReviewOnWeeklyReviewDay(): void {
+  const config = testConfig();
+  config.workflows.weekly_review.enabled = true;
+  config.workflows.weekly_review.weekday = 'SUN';
+  config.workflows.weekly_review.time = '20:00';
+  config.workflows.daily_review.enabled = true;
+  config.workflows.daily_review.time = '21:30';
+  config.workflows.daily_review.skip_on_weekly_review_day = true;
+
+  assert.equal(
+    shouldRunScheduledWorkflow(config, {
+      workflow: 'daily_review',
+      currentTime: '21:30',
+      currentWeekday: 'SUN',
+      scheduledTime: '21:30',
+    }),
+    false,
+    'automatic daily review should be skipped on the configured weekly review day',
+  );
+
+  assert.equal(
+    shouldRunScheduledWorkflow(config, {
+      workflow: 'daily_review',
+      currentTime: '21:30',
+      currentWeekday: 'MON',
+      scheduledTime: '21:30',
+    }),
+    true,
+    'daily review should still run on non-weekly-review days',
+  );
+
+  config.workflows.daily_review.skip_on_weekly_review_day = false;
+  assert.equal(
+    shouldRunScheduledWorkflow(config, {
+      workflow: 'daily_review',
+      currentTime: '21:30',
+      currentWeekday: 'SUN',
+      scheduledTime: '21:30',
+    }),
+    true,
+    'the skip behavior should be configurable',
+  );
 }
 
 function testWeeklyReviewSummaryPrioritizesReviewEvidence(): void {
