@@ -23,6 +23,7 @@ try {
   testDailyOsCommandParsing();
   testEveryFeishuInteractionWorkflowCommandHasCardSender();
   await testWorkflowCommandUsesCardCallback();
+  await testWeeklyWorkflowCommandPassesEvidenceToCardSummary();
   await testFeedbackPollWorkflowCommandUsesCardSender();
   testDailyPlanSummaryShowsOpenLoopEvidence();
   testWeeklyReviewSummaryPrioritizesReviewEvidence();
@@ -161,6 +162,59 @@ async function testWorkflowCommandUsesCardCallback(): Promise<void> {
   assert.equal(cards.length, 1);
   assert.equal(cards[0]?.workflow, 'daily_plan');
   assert.match(cards[0]?.summary || '', /LEO-7/);
+}
+
+async function testWeeklyWorkflowCommandPassesEvidenceToCardSummary(): Promise<void> {
+  const replies: string[] = [];
+  const cards: Array<{ workflow: string; summary: string }> = [];
+  await runParsedDailyOsCommand(
+    {
+      config: testConfig(),
+      messageId: 'message-1',
+      text: 'daily-os weekly',
+      source: 'regression-test',
+      prefix: 'daily-os',
+      sendWorkflowOutput: false,
+      reply: async (text) => {
+        replies.push(text);
+      },
+      sendWorkflowCard: async ({ workflow, summary }) => {
+        cards.push({ workflow, summary });
+      },
+      runWorkflowForCommand: async (_config, workflow, options) => {
+        assert.equal(workflow, 'weekly_review');
+        assert.deepEqual(options, { send: false });
+        return [
+          '老板，我帮您整理了本周总结和下周安排。',
+          '',
+          '**1. 本周已经完成 / 已推进**',
+          '确认的：`LEO-7 Heng Li 意向邮件` 已推进到发送前审核。',
+          '',
+          '**2. 本周没做完 / 需要继续盯**',
+          '逐条核对 🐶 本周要务：导师联系被 Weekly 标为 `MIT ✅`，但 Linear 仍显示待周一发送。',
+        ].join('\n');
+      },
+      collectEvidenceForSummary: async () => ({
+        generated_at: '2026-06-14T00:00:00.000Z',
+        date: '2026-06-14',
+        sources: {
+          weekly_priorities: {
+            state: 'available',
+            data: {
+              week: '6.8-6.14',
+              items: [{ scope: '🐶', item: '个人 portfolio：把首版页面发给小企鹅 review，并按反馈改 1 轮（延续上周⭕️）' }],
+            },
+          },
+        },
+      }),
+    },
+    { type: 'workflow', workflow: 'weekly_review' },
+  );
+
+  assert.deepEqual(replies, ['Running weekly review...']);
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0]?.workflow, 'weekly_review');
+  assert.match(cards[0]?.summary || '', /个人 portfolio/);
 }
 
 async function testFeedbackPollWorkflowCommandUsesCardSender(): Promise<void> {
