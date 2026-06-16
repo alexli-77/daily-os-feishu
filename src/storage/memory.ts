@@ -21,6 +21,7 @@ export interface LatestWorkflowOutput {
   date: string;
   generated_at: string;
   content: string;
+  evidence_trace?: string;
 }
 
 export interface WorkflowDetailCache extends LatestWorkflowOutput {
@@ -55,7 +56,7 @@ export function appendDailyMemory(config: AppConfig, workflow: WorkflowName, dat
   fs.appendFileSync(filePath, `\n\n## ${title}\n\n${content.trim()}\n`);
 }
 
-export function writeLatestWorkflowOutput(config: AppConfig, workflow: WorkflowName, date: string, content: string): string {
+export function writeLatestWorkflowOutput(config: AppConfig, workflow: WorkflowName, date: string, content: string, evidenceTrace?: string): string {
   const filePath = latestWorkflowOutputPath(config);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const payload: LatestWorkflowOutput = {
@@ -63,12 +64,13 @@ export function writeLatestWorkflowOutput(config: AppConfig, workflow: WorkflowN
     date,
     generated_at: new Date().toISOString(),
     content: content.trim(),
+    ...(evidenceTrace ? { evidence_trace: evidenceTrace } : {}),
   };
   fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf8');
   return filePath;
 }
 
-export function writeWorkflowDetailCache(config: AppConfig, workflow: WorkflowName, date: string, content: string): WorkflowDetailCache {
+export function writeWorkflowDetailCache(config: AppConfig, workflow: WorkflowName, date: string, content: string, evidenceTrace?: string): WorkflowDetailCache {
   const cacheDir = workflowDetailCacheDir(config);
   fs.mkdirSync(cacheDir, { recursive: true });
   const payload: WorkflowDetailCache = {
@@ -77,6 +79,7 @@ export function writeWorkflowDetailCache(config: AppConfig, workflow: WorkflowNa
     date,
     generated_at: new Date().toISOString(),
     content: content.trim(),
+    ...(evidenceTrace ? { evidence_trace: evidenceTrace } : {}),
   };
   fs.writeFileSync(path.join(cacheDir, `${payload.id}.json`), JSON.stringify(payload, null, 2), 'utf8');
   pruneWorkflowDetailCache(cacheDir);

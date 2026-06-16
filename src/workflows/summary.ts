@@ -1,4 +1,5 @@
 import type { AppConfig, WorkflowName } from '../config/schema.js';
+import type { MemoryBundle } from '../storage/memory.js';
 import type { Evidence } from './types.js';
 
 const MAX_SUMMARY_CHARS = 2200;
@@ -23,17 +24,45 @@ export function formatWorkflowSummaryForFeishu(workflow: WorkflowName, date: str
   return trimSummary(lines.join('\n'), MAX_SUMMARY_CHARS);
 }
 
-export function formatLatestWorkflowDetails(input: { workflow: WorkflowName; date: string; generated_at: string; content: string }): string {
+export function formatLatestWorkflowDetails(input: { workflow: WorkflowName; date: string; generated_at: string; content: string; evidence_trace?: string }): string {
   return truncate(
     [
-      `老板，这是最近一次 ${workflowLabel(input.workflow)} 的完整内容。`,
+      `最近一次${workflowLabel(input.workflow)}`,
       `日期：${input.date}`,
       `生成时间：${input.generated_at}`,
+      ...(input.evidence_trace?.trim() ? ['', input.evidence_trace.trim()] : []),
+      '',
+      '完整内容',
       '',
       input.content.trim(),
     ].join('\n'),
     MAX_DETAIL_CHARS,
   );
+}
+
+export function buildWorkflowEvidenceTrace(input: { evidence: Evidence; memory: MemoryBundle }): string {
+  const policyYaml = input.memory.repository.some((file) => file.path === 'decision-policy.yaml');
+  const policyNotes = input.memory.repository.some((file) => file.path === 'decision-policy.md');
+  const sourceLines = Object.entries(input.evidence.sources)
+    .slice(0, 14)
+    .map(([name, source]) => `- ${name}：${source.state}${source.detail ? `，${completePhrase(source.detail, 90)}` : sourceDataHint(name, source.data)}`)
+    .filter(Boolean);
+  const weeklyRows = weeklyPriorityRows(input.evidence);
+  const linearRows = linearIssueRows(input.evidence);
+
+  return [
+    '这次用了这些依据',
+    '',
+    '决策规则',
+    `- decision-policy.yaml：${policyYaml ? '已读' : '未读'}`,
+    `- decision-policy.md：${policyNotes ? '已读' : '未读'}`,
+    `- memory 文件：${input.memory.repository.length}`,
+    '',
+    '来源状态',
+    ...(sourceLines.length > 0 ? sourceLines : ['- 没有来源状态']),
+    ...(weeklyRows.length > 0 ? ['', 'Feishu Weekly 要务', ...weeklyRows] : []),
+    ...(linearRows.length > 0 ? ['', 'Linear 任务', ...linearRows] : []),
+  ].join('\n');
 }
 
 function introFor(workflow: WorkflowName, content: string): string {
@@ -255,6 +284,16 @@ function linearItems(data: unknown): unknown[] {
   return [];
 }
 
+function sourceDataHint(name: string, data: unknown): string {
+  if (Array.isArray(data)) return `，${data.length} 条`;
+  if (typeof data === 'string' && data.trim()) return '，有内容';
+  if (!isRecord(data)) return '';
+  const items = linearItems(data);
+  if (items.length > 0) return `，${items.length} 条`;
+  if (name === 'weekly_priorities' && isRecord(data) && Array.isArray(data.items)) return `，${data.items.length} 条`;
+  return '';
+}
+
 function getArrayAtPath(data: unknown, path: string[]): unknown[] | null {
   let current = data;
   for (const key of path) {
@@ -299,6 +338,32 @@ function linearPriorityLabel(value: unknown): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function weeklyPriorityRows(evidence: Evidence): string[] {
+  const source = evidence.sources.weekly_priorities;
+  if (!source || source.state !== 'available' || !isRecord(source.data) || !Array.isArray(source.data.items)) return [];
+  return source.data.items
+    .filter((item): item is Record<string, unknown> => isRecord(item))
+    .slice(0, 8)
+    .map((item) => {
+      const scope = typeof item.scope === 'string' ? item.scope : 'weekly';
+      const okr = typeof item.okr === 'string' && item.okr ? ` ${completePhrase(item.okr, 24)}` : '';
+      const text = typeof item.item === 'string' ? completePhrase(item.item, 120) : '';
+      return text ? `- ${scope}${okr}：${text}` : '';
+    })
+    .filter(Boolean);
+}
+
+function linearIssueRows(evidence: Evidence): string[] {
+  const rows = Array.from(linearMetadataFromEvidence(evidence).values())
+    .slice(0, 8)
+    .map((item) => {
+      const title = item.title ? ` ${completePhrase(item.title, 90)}` : '';
+      const meta = [item.project, item.dueDate, item.priority].filter(Boolean).join(' · ');
+      return `- ${item.identifier}${title}${meta ? `（${meta}）` : ''}`;
+    });
+  return rows;
 }
 
 function strategyAlignmentRows(content: string, config?: AppConfig): string[] {
