@@ -12,7 +12,7 @@ import { handleFeishuFeedbackCommand } from '../src/feedback/feishu-feedback.js'
 import { shouldRunScheduledWorkflow } from '../src/service/launchd.js';
 import { formatRecentWorkflowRuns, listRecentWorkflowRuns } from '../src/workflows/run-ledger.js';
 import { runWorkflow } from '../src/workflows/run-workflow.js';
-import { formatWorkflowSummaryForFeishu } from '../src/workflows/summary.js';
+import { buildWorkflowEvidenceTrace, formatLatestWorkflowDetails, formatWorkflowSummaryForFeishu } from '../src/workflows/summary.js';
 import { extractWeeklyPrioritiesFromXml } from '../src/workflows/weekly-priorities.js';
 import { createPolicyCandidate, listPolicyCandidates } from '../src/decision/candidates.js';
 import { decisionPolicyFiles } from '../src/decision/policy.js';
@@ -30,6 +30,7 @@ try {
   await testFeedbackPollWorkflowCommandUsesCardSender();
   testDailyPlanSummaryShowsOpenLoopEvidence();
   testWorkflowSummaryQuotesLinearMetadata();
+  testWorkflowDetailsShowEvidenceTrace();
   testSchedulerSkipsDailyReviewOnWeeklyReviewDay();
   await testWorkflowRunLedgerRecordsSendFailure();
   testWeeklyReviewSummaryPrioritizesReviewEvidence();
@@ -341,6 +342,64 @@ function testWorkflowSummaryQuotesLinearMetadata(): void {
   );
   assert.match(summary, /> Linear：Job or PhD\? · Due 2026-06-15 · P0/);
   assert.doesNotMatch(summary, /\n\s+Linear：Project/);
+}
+
+function testWorkflowDetailsShowEvidenceTrace(): void {
+  const evidenceTrace = buildWorkflowEvidenceTrace({
+    evidence: {
+      generated_at: '2026-06-15T10:00:00.000Z',
+      date: '2026-06-15',
+      sources: {
+        weekly_priorities: {
+          state: 'available',
+          detail: 'Extracted 2 weekly priority items for 6.15-6.21',
+          data: {
+            week: '6.15-6.21',
+            items: [
+              {
+                source: 'Weekly2026',
+                scope: '🐶',
+                week: '6.15-6.21',
+                okr: 'P0 O1',
+                item: '个人 portfolio：把首版页面发给小企鹅 review，并按反馈改 1 轮',
+              },
+            ],
+          },
+        },
+        linear: {
+          state: 'available',
+          data: {
+            items: [{ identifier: 'LEO-66', title: 'Show Daily OS evidence trace for plan and weekly review cards' }],
+          },
+        },
+        feishu_calendar: { state: 'empty', detail: 'No events today' },
+      },
+    },
+    memory: {
+      repositoryPath: '/tmp/daily-os-memory',
+      repository: [
+        { path: 'decision-policy.yaml', content: 'rules: []' },
+        { path: 'decision-policy.md', content: '# 决策规则' },
+      ],
+      longTerm: '',
+      recentDaily: [],
+    },
+  });
+
+  const details = formatLatestWorkflowDetails({
+    workflow: 'weekly_review',
+    date: '2026-06-15',
+    generated_at: '2026-06-15T10:05:00.000Z',
+    content: '完整复盘正文',
+    evidence_trace: evidenceTrace,
+  });
+
+  assert.match(details, /这次用了这些依据/);
+  assert.match(details, /decision-policy\.yaml：已读/);
+  assert.match(details, /decision-policy\.md：已读/);
+  assert.match(details, /weekly_priorities：available/);
+  assert.match(details, /个人 portfolio/);
+  assert.match(details, /LEO-66/);
 }
 
 function testSchedulerSkipsDailyReviewOnWeeklyReviewDay(): void {

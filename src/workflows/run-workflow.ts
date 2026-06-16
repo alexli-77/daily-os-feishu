@@ -4,7 +4,7 @@ import { collectEvidence } from './evidence.js';
 import { todayInTimezone } from '../utils/date.js';
 import { appendDailyMemory, loadMemory, writeLatestWorkflowOutput, writeWorkflowDetailCache } from '../storage/memory.js';
 import { sendFeishuMessage } from '../connectors/lark-cli.js';
-import { formatWorkflowSummaryForFeishu } from './summary.js';
+import { buildWorkflowEvidenceTrace, formatWorkflowSummaryForFeishu } from './summary.js';
 import {
   markWorkflowRunFailed,
   markWorkflowRunGenerated,
@@ -50,10 +50,11 @@ export async function runWorkflowDetailed(
     const evidence = await collectEvidence(config, date);
     const memory = loadMemory(config);
     const text = await runAgentWithNonEmptyOutput({ config, workflow, date, evidence, memory });
+    const evidenceTrace = buildWorkflowEvidenceTrace({ evidence, memory });
 
     appendDailyMemory(config, workflow, date, text);
-    writeLatestWorkflowOutput(config, workflow, date, text);
-    const detail = writeWorkflowDetailCache(config, workflow, date, text);
+    writeLatestWorkflowOutput(config, workflow, date, text, evidenceTrace);
+    const detail = writeWorkflowDetailCache(config, workflow, date, text, evidenceTrace);
     run = markWorkflowRunGenerated(config, run, { outputChars: text.length, detailId: detail.id });
     if (sendEnabled) {
       try {
