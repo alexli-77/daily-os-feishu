@@ -5,6 +5,44 @@ private enum Constants {
   static let launchAgentLabel = "com.daily-os-feishu.agent"
 }
 
+final class FloatingBadgeButton: NSButton {
+  override func mouseDown(with event: NSEvent) {
+    guard let window else {
+      super.mouseDown(with: event)
+      return
+    }
+
+    let startMouse = NSEvent.mouseLocation
+    let startFrame = window.frame
+    var didDrag = false
+
+    while let nextEvent = NSApp.nextEvent(
+      matching: [.leftMouseDragged, .leftMouseUp],
+      until: .distantFuture,
+      inMode: .eventTracking,
+      dequeue: true
+    ) {
+      switch nextEvent.type {
+      case .leftMouseDragged:
+        let currentMouse = NSEvent.mouseLocation
+        let deltaX = currentMouse.x - startMouse.x
+        let deltaY = currentMouse.y - startMouse.y
+        if abs(deltaX) > 3 || abs(deltaY) > 3 {
+          didDrag = true
+        }
+        window.setFrameOrigin(NSPoint(x: startFrame.origin.x + deltaX, y: startFrame.origin.y + deltaY))
+      case .leftMouseUp:
+        if !didDrag {
+          performClick(nil)
+        }
+        return
+      default:
+        break
+      }
+    }
+  }
+}
+
 final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
   private var statusItem: NSStatusItem!
   private var floatingWindows: [NSPanel] = []
@@ -64,7 +102,7 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
     }
 
     for screen in NSScreen.screens {
-      let button = NSButton(frame: NSRect(x: 0, y: 0, width: 52, height: 32))
+      let button = FloatingBadgeButton(frame: NSRect(x: 0, y: 0, width: 52, height: 32))
       button.title = "DO"
       button.target = self
       button.action = #selector(showFloatingMenu(_:))

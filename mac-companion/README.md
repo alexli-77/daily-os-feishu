@@ -2,7 +2,7 @@
 
 This is a local macOS companion prototype for LEO-46. It is intentionally small and optional: it opens the existing Daily OS dashboard, shows service state, triggers existing workflow actions through the local UI API, and reads recent workflow run records.
 
-The app shows a short `DO` menu bar marker. On crowded menu bars where macOS may hide status items, it also shows a small floating `DO` button near the upper-right corner of each screen.
+The app shows a short `DO` menu bar marker. On crowded menu bars where macOS may hide status items, it also shows a small floating `DO` button near the upper-right corner of each screen. Click the floating button to open the Daily OS menu; drag it to move it anywhere on screen.
 
 It does not replace the Feishu bot, scheduler, or web dashboard. It also does not package a release build, sign an app, or add a new runtime dependency.
 
