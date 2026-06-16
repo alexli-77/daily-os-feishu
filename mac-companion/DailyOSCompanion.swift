@@ -5,17 +5,32 @@ private enum Constants {
   static let launchAgentLabel = "com.daily-os-feishu.agent"
 }
 
-@main
 final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
   private var statusItem: NSStatusItem!
+  private var floatingWindows: [NSPanel] = []
+  private var floatingButtons: [NSButton] = []
   private let repoRoot = RepositoryLocator.find()
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
 
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    statusItem.button?.title = "Daily OS"
+    configureStatusButton(isBusy: false)
     rebuildMenu()
+    showFloatingBadge()
+  }
+
+  private func configureStatusButton(isBusy: Bool) {
+    guard let button = statusItem.button else {
+      return
+    }
+
+    button.title = isBusy ? "DO*" : "DO"
+    button.image = nil
+    button.toolTip = "Daily OS"
+    for floatingButton in floatingButtons {
+      floatingButton.title = isBusy ? "DO*" : "DO"
+    }
   }
 
   private func rebuildMenu(status: String? = nil) {
@@ -43,10 +58,56 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
     statusItem.menu = menu
   }
 
+  private func showFloatingBadge() {
+    guard floatingWindows.isEmpty else {
+      return
+    }
+
+    for screen in NSScreen.screens {
+      let button = NSButton(frame: NSRect(x: 0, y: 0, width: 52, height: 32))
+      button.title = "DO"
+      button.target = self
+      button.action = #selector(showFloatingMenu(_:))
+      button.isBordered = false
+      button.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .bold)
+      button.contentTintColor = .white
+      button.toolTip = "Daily OS"
+      button.wantsLayer = true
+      button.layer?.backgroundColor = NSColor.systemBlue.cgColor
+      button.layer?.cornerRadius = 10
+
+      let panel = NSPanel(
+        contentRect: NSRect(x: 0, y: 0, width: 52, height: 32),
+        styleMask: [.borderless, .nonactivatingPanel],
+        backing: .buffered,
+        defer: false
+      )
+      panel.contentView = button
+      panel.backgroundColor = .clear
+      panel.isOpaque = false
+      panel.hasShadow = true
+      panel.level = .statusBar
+      panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+      panel.isMovableByWindowBackground = true
+
+      let frame = screen.visibleFrame
+      panel.setFrameOrigin(NSPoint(x: frame.maxX - 72, y: frame.maxY - 48))
+
+      floatingButtons.append(button)
+      floatingWindows.append(panel)
+      panel.orderFrontRegardless()
+    }
+  }
+
   private func item(_ title: String, _ action: Selector, _ key: String = "") -> NSMenuItem {
     let menuItem = NSMenuItem(title: title, action: action, keyEquivalent: key)
     menuItem.target = self
     return menuItem
+  }
+
+  @objc private func showFloatingMenu(_ sender: NSButton) {
+    rebuildMenu()
+    statusItem.menu?.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.maxY + 4), in: sender)
   }
 
   @objc private func openDashboard() {
@@ -224,14 +285,14 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
 
   private func setBusy(_ text: String) {
     DispatchQueue.main.async {
-      self.statusItem.button?.title = "Daily OS..."
+      self.configureStatusButton(isBusy: true)
       self.rebuildMenu(status: text)
     }
   }
 
   private func setReady(_ text: String) {
     DispatchQueue.main.async {
-      self.statusItem.button?.title = "Daily OS"
+      self.configureStatusButton(isBusy: false)
       self.rebuildMenu(status: text)
     }
   }
@@ -246,6 +307,7 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
       alert.runModal()
     }
   }
+
 }
 
 private enum CommandResult {
@@ -344,3 +406,8 @@ private enum RepositoryLocator {
     return text.contains("\"name\": \"daily-os-feishu\"")
   }
 }
+
+private let app = NSApplication.shared
+private let delegate = DailyOSCompanionApp()
+app.delegate = delegate
+app.run()

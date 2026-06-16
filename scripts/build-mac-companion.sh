@@ -12,7 +12,6 @@ BIN="$MACOS_DIR/DailyOSCompanion"
 mkdir -p "$MACOS_DIR"
 
 swiftc \
-  -parse-as-library \
   "$ROOT/mac-companion/DailyOSCompanion.swift" \
   -o "$BIN" \
   -framework AppKit \
