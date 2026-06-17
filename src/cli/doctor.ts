@@ -41,6 +41,15 @@ export async function runDoctor(config: AppConfig, configPath = 'config/config.y
       detail: exists ? codexHomeDetail() : 'Set CODEX_BIN to the Codex CLI path, or install Codex CLI and make it available in PATH.',
     });
     if (exists) checks.push(await codexLoginCheck(codexBin, codexEnv));
+  } else if (config.llm.provider === 'claude') {
+    const claudeBin = process.env.CLAUDE_BIN || 'claude';
+    const exists = await commandExists(claudeBin);
+    checks.push({
+      name: `Claude Code CLI (${claudeBin})`,
+      ok: exists,
+      detail: exists ? 'found' : 'Set CLAUDE_BIN to the Claude Code CLI path, or install Claude Code and make it available in PATH.',
+    });
+    if (exists) checks.push(await claudeAuthCheck(claudeBin));
   } else {
     checks.push({ name: 'OPENAI_API_KEY', ok: Boolean(process.env.OPENAI_API_KEY) });
   }
@@ -210,6 +219,23 @@ async function codexLoginCheck(codexBin: string, env: NodeJS.ProcessEnv): Promis
     name: 'Codex login',
     ok: false,
     detail: `Run \`${codexBin} login\` in Terminal, then rerun checks. ${(result.stderr || result.stdout).trim()}`.trim(),
+  };
+}
+
+async function claudeAuthCheck(claudeBin: string): Promise<DoctorCheck> {
+  const result = await runCommand(claudeBin, ['auth', 'status'], { timeoutMs: 10000 });
+  const loggedIn = result.ok && /"loggedIn"\s*:\s*true/.test(result.stdout);
+  if (loggedIn) {
+    return {
+      name: 'Claude Code auth',
+      ok: true,
+      detail: (result.stdout.match(/"authMethod"\s*:\s*"([^"]+)"/)?.[1]) ?? 'authenticated',
+    };
+  }
+  return {
+    name: 'Claude Code auth',
+    ok: false,
+    detail: `Run \`${claudeBin} auth login\` in Terminal, then rerun checks. ${(result.stderr || result.stdout).trim()}`.trim(),
   };
 }
 

@@ -53,7 +53,7 @@ export const AppConfigSchema = z.object({
     timezone: z.string().default('UTC'),
   }),
   llm: z.object({
-    provider: z.enum(['codex', 'openai']).default('codex'),
+    provider: z.enum(['codex', 'openai', 'claude']).default('codex'),
     model: z.string().default('default'),
   }),
   workflows: z.object({

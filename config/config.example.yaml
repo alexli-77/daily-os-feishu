@@ -8,8 +8,8 @@ user:
   timezone: "America/Toronto"
 
 llm:
-  provider: "codex" # codex | openai
-  model: "default" # default uses the local Codex CLI account's supported model
+  provider: "codex" # codex | openai | claude
+  model: "default" # codex/claude: 'default' uses the CLI account's model; openai: an API model id
 
 workflows:
   daily_plan:
