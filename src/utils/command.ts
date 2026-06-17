@@ -10,10 +10,10 @@ export interface CommandResult {
 export function runCommand(
   command: string,
   args: string[],
-  options: { timeoutMs?: number; input?: string; env?: NodeJS.ProcessEnv } = {},
+  options: { timeoutMs?: number; input?: string; env?: NodeJS.ProcessEnv; cwd?: string } = {},
 ): Promise<CommandResult> {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'], env: options.env });
+    const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'], env: options.env, cwd: options.cwd });
     const timer = options.timeoutMs
       ? setTimeout(() => {
           child.kill('SIGTERM');
