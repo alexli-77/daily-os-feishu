@@ -4,8 +4,8 @@ import Foundation
 
 private enum Constants {
   static let launchAgentLabel = "com.daily-os-feishu.agent"
-  static let floatingBadgeSize = NSSize(width: 152, height: 152)
-  static let penguinImageSize = NSSize(width: 116, height: 116)
+  static let floatingBadgeSize = NSSize(width: 124, height: 124)
+  static let penguinImageSize = NSSize(width: 96, height: 96)
 }
 
 final class FloatingBadgeButton: NSButton {
