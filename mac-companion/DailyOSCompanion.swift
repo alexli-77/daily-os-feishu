@@ -4,7 +4,8 @@ import Foundation
 
 private enum Constants {
   static let launchAgentLabel = "com.daily-os-feishu.agent"
-  static let floatingBadgeSize = NSSize(width: 104, height: 104)
+  static let floatingBadgeSize = NSSize(width: 152, height: 152)
+  static let penguinImageSize = NSSize(width: 116, height: 116)
 }
 
 final class FloatingBadgeButton: NSButton {
@@ -68,7 +69,7 @@ final class FloatingBadgeButton: NSButton {
 
   private func animateHover() {
     wantsLayer = true
-    layer?.anchorPoint = CGPoint(x: 0.5, y: 0.45)
+    layer?.masksToBounds = false
 
     var perspective = CATransform3DIdentity
     perspective.m34 = -1.0 / 700.0
@@ -208,6 +209,7 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
     button.wantsLayer = true
     button.layer?.backgroundColor = NSColor.clear.cgColor
     button.layer?.cornerRadius = 18
+    button.layer?.masksToBounds = false
     button.alphaValue = isBusy ? 0.78 : 1
 
     if let image = penguinAvatarImage() {
@@ -382,7 +384,7 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
     guard let image = NSImage(contentsOf: fileURL) else {
       return nil
     }
-    image.size = Constants.floatingBadgeSize
+    image.size = Constants.penguinImageSize
     return image
   }
 
