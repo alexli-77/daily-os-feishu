@@ -1,10 +1,12 @@
 import AppKit
+import AVFoundation
 import Foundation
 
 private enum Constants {
   static let launchAgentLabel = "com.daily-os-feishu.agent"
   static let floatingBadgeSize = NSSize(width: 124, height: 124)
   static let penguinImageSize = NSSize(width: 96, height: 96)
+  static let effectFileNames = ["penguin-fx-flap.mov", "penguin-fx-roll.mov", "penguin-fx-jump.mov"]
 }
 
 final class FloatingBadgeButton: NSButton {
@@ -13,6 +15,11 @@ final class FloatingBadgeButton: NSButton {
 
   private var trackingArea: NSTrackingArea?
   private var blinkWorkItems: [DispatchWorkItem] = []
+
+  private var effectPlayer: AVPlayer?
+  private var effectLayer: AVPlayerLayer?
+  private var effectEndObserver: NSObjectProtocol?
+  private var isPlayingEffect = false
 
   override func updateTrackingAreas() {
     if let trackingArea {
@@ -27,10 +34,16 @@ final class FloatingBadgeButton: NSButton {
   }
 
   override func mouseEntered(with event: NSEvent) {
+    guard !isPlayingEffect else {
+      return
+    }
     playBlink()
   }
 
   override func mouseExited(with event: NSEvent) {
+    guard !isPlayingEffect else {
+      return
+    }
     showIdleImage()
   }
 
@@ -68,6 +81,49 @@ final class FloatingBadgeButton: NSButton {
         break
       }
     }
+  }
+
+  func playEffect(url: URL) {
+    cancelBlink()
+    stopEffect()
+
+    let player = AVPlayer(url: url)
+    player.actionAtItemEnd = .pause
+
+    let layer = AVPlayerLayer(player: player)
+    layer.frame = bounds
+    layer.videoGravity = .resizeAspect
+    layer.backgroundColor = NSColor.clear.cgColor
+
+    wantsLayer = true
+    self.layer?.addSublayer(layer)
+    image = nil
+    isPlayingEffect = true
+
+    effectPlayer = player
+    effectLayer = layer
+    effectEndObserver = NotificationCenter.default.addObserver(
+      forName: .AVPlayerItemDidPlayToEndTime,
+      object: player.currentItem,
+      queue: .main
+    ) { [weak self] _ in
+      self?.stopEffect()
+    }
+
+    player.play()
+  }
+
+  private func stopEffect() {
+    if let effectEndObserver {
+      NotificationCenter.default.removeObserver(effectEndObserver)
+    }
+    effectEndObserver = nil
+    effectPlayer?.pause()
+    effectPlayer = nil
+    effectLayer?.removeFromSuperlayer()
+    effectLayer = nil
+    isPlayingEffect = false
+    setIdleImage()
   }
 
   private func playBlink() {
@@ -153,6 +209,8 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
     menu.addItem(item("Run Daily Plan", #selector(runDailyPlan), "p"))
     menu.addItem(item("Run Daily Review", #selector(runDailyReview), "r"))
     menu.addItem(item("Run Weekly Review", #selector(runWeeklyReview), "w"))
+    menu.addItem(.separator())
+    menu.addItem(item("Random Effect", #selector(playRandomEffect), "e"))
     menu.addItem(.separator())
     menu.addItem(item("Recent Runs", #selector(showRecentRuns), "l"))
     menu.addItem(item("Service Status", #selector(showServiceStatus), "s"))
@@ -255,6 +313,24 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
 
   @objc private func runWeeklyReview() {
     runWorkflow(action: "weekly", label: "weekly review")
+  }
+
+  @objc private func playRandomEffect() {
+    guard let pick = Constants.effectFileNames.randomElement() else {
+      return
+    }
+
+    let url = URL(fileURLWithPath: repoRoot)
+      .appendingPathComponent("mac-companion/assets/\(pick)")
+
+    guard FileManager.default.fileExists(atPath: url.path) else {
+      showAlert(title: "随机效果", message: "找不到动效文件:\(pick)")
+      return
+    }
+
+    for button in floatingButtons {
+      button.playEffect(url: url)
+    }
   }
 
   @objc private func showRecentRuns() {
