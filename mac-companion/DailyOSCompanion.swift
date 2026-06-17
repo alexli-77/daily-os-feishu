@@ -1,5 +1,4 @@
 import AppKit
-import QuartzCore
 import Foundation
 
 private enum Constants {
@@ -9,7 +8,11 @@ private enum Constants {
 }
 
 final class FloatingBadgeButton: NSButton {
+  var idleImage: NSImage?
+  var blinkImage: NSImage?
+
   private var trackingArea: NSTrackingArea?
+  private var blinkWorkItems: [DispatchWorkItem] = []
 
   override func updateTrackingAreas() {
     if let trackingArea {
@@ -24,11 +27,11 @@ final class FloatingBadgeButton: NSButton {
   }
 
   override func mouseEntered(with event: NSEvent) {
-    animateHover()
+    playBlink()
   }
 
   override func mouseExited(with event: NSEvent) {
-    animateRest()
+    showIdleImage()
   }
 
   override func mouseDown(with event: NSEvent) {
@@ -67,57 +70,51 @@ final class FloatingBadgeButton: NSButton {
     }
   }
 
-  private func animateHover() {
-    wantsLayer = true
-    layer?.masksToBounds = false
+  private func playBlink() {
+    guard blinkImage != nil else {
+      return
+    }
 
-    var perspective = CATransform3DIdentity
-    perspective.m34 = -1.0 / 700.0
-    layer?.sublayerTransform = perspective
-
-    let bounce = CAKeyframeAnimation(keyPath: "transform.scale")
-    bounce.values = [1.0, 1.14, 0.97, 1.08]
-    bounce.keyTimes = [0, 0.35, 0.68, 1]
-    bounce.duration = 0.38
-    bounce.timingFunctions = [
-      CAMediaTimingFunction(name: .easeOut),
-      CAMediaTimingFunction(name: .easeInEaseOut),
-      CAMediaTimingFunction(name: .easeOut)
-    ]
-    bounce.fillMode = .forwards
-    bounce.isRemovedOnCompletion = false
-
-    let turn = CAKeyframeAnimation(keyPath: "transform.rotation.y")
-    turn.values = [0, -0.18, 0.14, 0]
-    turn.keyTimes = [0, 0.32, 0.72, 1]
-    turn.duration = 0.42
-    turn.timingFunctions = [
-      CAMediaTimingFunction(name: .easeOut),
-      CAMediaTimingFunction(name: .easeInEaseOut),
-      CAMediaTimingFunction(name: .easeOut)
-    ]
-
-    layer?.add(bounce, forKey: "penguin-bounce")
-    layer?.add(turn, forKey: "penguin-turn")
+    cancelBlink()
+    setBlinkImage()
+    scheduleBlinkFrame(after: 0.10) { [weak self] in self?.setIdleImage() }
+    scheduleBlinkFrame(after: 0.22) { [weak self] in self?.setBlinkImage() }
+    scheduleBlinkFrame(after: 0.32) { [weak self] in self?.setIdleImage() }
   }
 
-  private func animateRest() {
-    wantsLayer = true
+  private func showIdleImage() {
+    cancelBlink()
+    setIdleImage()
+  }
 
-    let settle = CABasicAnimation(keyPath: "transform")
-    settle.fromValue = layer?.presentation()?.transform
-    settle.toValue = CATransform3DIdentity
-    settle.duration = 0.18
-    settle.timingFunction = CAMediaTimingFunction(name: .easeOut)
-    layer?.transform = CATransform3DIdentity
-    layer?.add(settle, forKey: "penguin-rest")
+  private func setIdleImage() {
+    if let idleImage {
+      image = idleImage
+    }
+  }
+
+  private func setBlinkImage() {
+    if let blinkImage {
+      image = blinkImage
+    }
+  }
+
+  private func scheduleBlinkFrame(after delay: TimeInterval, _ frame: @escaping () -> Void) {
+    let workItem = DispatchWorkItem(block: frame)
+    blinkWorkItems.append(workItem)
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+  }
+
+  private func cancelBlink() {
+    blinkWorkItems.forEach { $0.cancel() }
+    blinkWorkItems.removeAll()
   }
 }
 
 final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
   private var statusItem: NSStatusItem!
   private var floatingWindows: [NSPanel] = []
-  private var floatingButtons: [NSButton] = []
+  private var floatingButtons: [FloatingBadgeButton] = []
   private let repoRoot = RepositoryLocator.find()
 
   func applicationDidFinishLaunching(_ notification: Notification) {
@@ -201,7 +198,7 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
     }
   }
 
-  private func configureFloatingButton(_ button: NSButton, isBusy: Bool) {
+  private func configureFloatingButton(_ button: FloatingBadgeButton, isBusy: Bool) {
     button.isBordered = false
     button.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .bold)
     button.contentTintColor = nil
@@ -212,12 +209,16 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
     button.layer?.masksToBounds = false
     button.alphaValue = isBusy ? 0.78 : 1
 
-    if let image = penguinAvatarImage() {
+    if let idleImage = penguinImage(named: "penguin-idle.png") ?? penguinImage(named: "penguin-avatar.png") {
       button.title = ""
-      button.image = image
+      button.idleImage = idleImage
+      button.blinkImage = penguinImage(named: "penguin-blink.png")
+      button.image = idleImage
       button.imagePosition = .imageOnly
       button.imageScaling = .scaleProportionallyUpOrDown
     } else {
+      button.idleImage = nil
+      button.blinkImage = nil
       button.title = isBusy ? "DO*" : "DO"
       button.image = nil
       button.contentTintColor = .white
@@ -378,9 +379,9 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
     return URL(string: "http://127.0.0.1:14573")!
   }
 
-  private func penguinAvatarImage() -> NSImage? {
+  private func penguinImage(named fileName: String) -> NSImage? {
     let fileURL = URL(fileURLWithPath: repoRoot)
-      .appendingPathComponent("mac-companion/assets/penguin-avatar.png")
+      .appendingPathComponent("mac-companion/assets/\(fileName)")
     guard let image = NSImage(contentsOf: fileURL) else {
       return nil
     }

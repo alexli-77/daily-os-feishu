@@ -4,7 +4,7 @@ This is a local macOS companion prototype for LEO-46. It is intentionally small 
 
 The app shows a short `DO` menu bar marker. On crowded menu bars where macOS may hide status items, it also shows a small floating desktop character near the upper-right corner of each screen. Click the character to open the Daily OS menu; drag it to move it anywhere on screen.
 
-The prototype loads `mac-companion/assets/penguin-avatar.png` when present. If the asset is missing, it falls back to the blue `DO` badge. Hovering over the character plays a small bubble bounce and half-turn animation.
+The prototype loads `mac-companion/assets/penguin-idle.png` and `mac-companion/assets/penguin-blink.png` when present. Keep both frames on the same transparent canvas size so the character does not jump while blinking. If the frame assets are missing, it falls back to `penguin-avatar.png`, then to the blue `DO` badge.
 
 It does not replace the Feishu bot, scheduler, or web dashboard. It also does not package a release build, sign an app, or add a new runtime dependency.
 
