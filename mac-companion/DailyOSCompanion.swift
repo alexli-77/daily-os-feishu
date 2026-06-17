@@ -191,7 +191,7 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
     button.image = nil
     button.toolTip = "Daily OS"
     for floatingButton in floatingButtons {
-      configureFloatingButton(floatingButton, isBusy: isBusy)
+      floatingButton.alphaValue = isBusy ? 0.78 : 1.0
     }
   }
 
@@ -316,6 +316,10 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
   }
 
   @objc private func playRandomEffect() {
+    triggerRandomEffect()
+  }
+
+  private func triggerRandomEffect() {
     guard let pick = Constants.effectFileNames.randomElement() else {
       return
     }
@@ -324,12 +328,13 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
       .appendingPathComponent("mac-companion/assets/\(pick)")
 
     guard FileManager.default.fileExists(atPath: url.path) else {
-      showAlert(title: "随机效果", message: "找不到动效文件:\(pick)")
       return
     }
 
-    for button in floatingButtons {
-      button.playEffect(url: url)
+    DispatchQueue.main.async {
+      for button in self.floatingButtons {
+        button.playEffect(url: url)
+      }
     }
   }
 
@@ -349,6 +354,7 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
       switch result {
       case .success(let body):
         self?.setReady("Checks finished")
+        self?.triggerRandomEffect()
         self?.showAlert(title: "Daily OS Checks", message: actionText(from: body))
       case .failure(let message):
         self?.setReady("Checks failed")
@@ -364,6 +370,7 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
       switch result {
       case .success:
         self?.setReady("Service restarted")
+        self?.triggerRandomEffect()
       case .failure(let message):
         self?.setReady("Restart failed")
         self?.showAlert(title: "Service restart failed", message: message)
@@ -381,6 +388,7 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
       switch result {
       case .success:
         self?.setReady("\(label) finished")
+        self?.triggerRandomEffect()
       case .failure(let message):
         self?.setReady("\(label) failed")
         self?.showAlert(
