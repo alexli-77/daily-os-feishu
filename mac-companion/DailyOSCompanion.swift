@@ -1,11 +1,35 @@
 import AppKit
+import QuartzCore
 import Foundation
 
 private enum Constants {
   static let launchAgentLabel = "com.daily-os-feishu.agent"
+  static let floatingBadgeSize = NSSize(width: 104, height: 104)
 }
 
 final class FloatingBadgeButton: NSButton {
+  private var trackingArea: NSTrackingArea?
+
+  override func updateTrackingAreas() {
+    if let trackingArea {
+      removeTrackingArea(trackingArea)
+    }
+
+    let options: NSTrackingArea.Options = [.mouseEnteredAndExited, .activeAlways, .inVisibleRect]
+    let nextTrackingArea = NSTrackingArea(rect: bounds, options: options, owner: self, userInfo: nil)
+    addTrackingArea(nextTrackingArea)
+    trackingArea = nextTrackingArea
+    super.updateTrackingAreas()
+  }
+
+  override func mouseEntered(with event: NSEvent) {
+    animateHover()
+  }
+
+  override func mouseExited(with event: NSEvent) {
+    animateRest()
+  }
+
   override func mouseDown(with event: NSEvent) {
     guard let window else {
       super.mouseDown(with: event)
@@ -41,6 +65,52 @@ final class FloatingBadgeButton: NSButton {
       }
     }
   }
+
+  private func animateHover() {
+    wantsLayer = true
+    layer?.anchorPoint = CGPoint(x: 0.5, y: 0.45)
+
+    var perspective = CATransform3DIdentity
+    perspective.m34 = -1.0 / 700.0
+    layer?.sublayerTransform = perspective
+
+    let bounce = CAKeyframeAnimation(keyPath: "transform.scale")
+    bounce.values = [1.0, 1.14, 0.97, 1.08]
+    bounce.keyTimes = [0, 0.35, 0.68, 1]
+    bounce.duration = 0.38
+    bounce.timingFunctions = [
+      CAMediaTimingFunction(name: .easeOut),
+      CAMediaTimingFunction(name: .easeInEaseOut),
+      CAMediaTimingFunction(name: .easeOut)
+    ]
+    bounce.fillMode = .forwards
+    bounce.isRemovedOnCompletion = false
+
+    let turn = CAKeyframeAnimation(keyPath: "transform.rotation.y")
+    turn.values = [0, -0.18, 0.14, 0]
+    turn.keyTimes = [0, 0.32, 0.72, 1]
+    turn.duration = 0.42
+    turn.timingFunctions = [
+      CAMediaTimingFunction(name: .easeOut),
+      CAMediaTimingFunction(name: .easeInEaseOut),
+      CAMediaTimingFunction(name: .easeOut)
+    ]
+
+    layer?.add(bounce, forKey: "penguin-bounce")
+    layer?.add(turn, forKey: "penguin-turn")
+  }
+
+  private func animateRest() {
+    wantsLayer = true
+
+    let settle = CABasicAnimation(keyPath: "transform")
+    settle.fromValue = layer?.presentation()?.transform
+    settle.toValue = CATransform3DIdentity
+    settle.duration = 0.18
+    settle.timingFunction = CAMediaTimingFunction(name: .easeOut)
+    layer?.transform = CATransform3DIdentity
+    layer?.add(settle, forKey: "penguin-rest")
+  }
 }
 
 final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
@@ -67,7 +137,7 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
     button.image = nil
     button.toolTip = "Daily OS"
     for floatingButton in floatingButtons {
-      floatingButton.title = isBusy ? "DO*" : "DO"
+      configureFloatingButton(floatingButton, isBusy: isBusy)
     }
   }
 
@@ -102,20 +172,13 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
     }
 
     for screen in NSScreen.screens {
-      let button = FloatingBadgeButton(frame: NSRect(x: 0, y: 0, width: 52, height: 32))
-      button.title = "DO"
+      let button = FloatingBadgeButton(frame: NSRect(origin: .zero, size: Constants.floatingBadgeSize))
       button.target = self
       button.action = #selector(showFloatingMenu(_:))
-      button.isBordered = false
-      button.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .bold)
-      button.contentTintColor = .white
-      button.toolTip = "Daily OS"
-      button.wantsLayer = true
-      button.layer?.backgroundColor = NSColor.systemBlue.cgColor
-      button.layer?.cornerRadius = 10
+      configureFloatingButton(button, isBusy: false)
 
       let panel = NSPanel(
-        contentRect: NSRect(x: 0, y: 0, width: 52, height: 32),
+        contentRect: NSRect(origin: .zero, size: Constants.floatingBadgeSize),
         styleMask: [.borderless, .nonactivatingPanel],
         backing: .buffered,
         defer: false
@@ -129,11 +192,34 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
       panel.isMovableByWindowBackground = true
 
       let frame = screen.visibleFrame
-      panel.setFrameOrigin(NSPoint(x: frame.maxX - 72, y: frame.maxY - 48))
+      panel.setFrameOrigin(NSPoint(x: frame.maxX - Constants.floatingBadgeSize.width - 24, y: frame.maxY - Constants.floatingBadgeSize.height - 24))
 
       floatingButtons.append(button)
       floatingWindows.append(panel)
       panel.orderFrontRegardless()
+    }
+  }
+
+  private func configureFloatingButton(_ button: NSButton, isBusy: Bool) {
+    button.isBordered = false
+    button.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .bold)
+    button.contentTintColor = nil
+    button.toolTip = "Daily OS"
+    button.wantsLayer = true
+    button.layer?.backgroundColor = NSColor.clear.cgColor
+    button.layer?.cornerRadius = 18
+    button.alphaValue = isBusy ? 0.78 : 1
+
+    if let image = penguinAvatarImage() {
+      button.title = ""
+      button.image = image
+      button.imagePosition = .imageOnly
+      button.imageScaling = .scaleProportionallyUpOrDown
+    } else {
+      button.title = isBusy ? "DO*" : "DO"
+      button.image = nil
+      button.contentTintColor = .white
+      button.layer?.backgroundColor = NSColor.systemBlue.cgColor
     }
   }
 
@@ -288,6 +374,16 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
     }
 
     return URL(string: "http://127.0.0.1:14573")!
+  }
+
+  private func penguinAvatarImage() -> NSImage? {
+    let fileURL = URL(fileURLWithPath: repoRoot)
+      .appendingPathComponent("mac-companion/assets/penguin-avatar.png")
+    guard let image = NSImage(contentsOf: fileURL) else {
+      return nil
+    }
+    image.size = Constants.floatingBadgeSize
+    return image
   }
 
   private func recentRunsText() -> String {
