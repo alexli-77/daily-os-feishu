@@ -321,9 +321,10 @@ Memory repository 区域用于配置 Daily OS 的长期记忆库。`memory.repos
 用户自己的私有 memory repository 文件夹。每日运行日志和手动 `remember` 内容仍默认写到
 被 git 忽略的 `data/memory` 路径。
 
-决策校准也放在 memory repository 中。内置模板包含 `decision-policy.yaml`、
-`decision-policy.md` 和 `policy-skill/SKILL.md`。第一天不要要求用户填写复杂权重，
-而是通过对话逐步磨合规则。
+决策校准也放在 memory repository 中。内置模板包含 `decision-policy.example.yaml`、
+`decision-policy.example.md` 和 `policy-skill/SKILL.md`。真实运行时的
+`decision-policy.yaml`、`decision-policy.md` 是用户本地记忆，缺失时会自动生成，
+不应提交到 Git。第一天不要要求用户填写复杂权重，而是通过对话逐步磨合规则。
 
 `Logs` 页会显示本地 UI/API 请求状态和 action 执行生命周期。日志保存在
 `data/logs/ui-network.jsonl`，不记录请求正文、响应正文或密钥，并自动只保留最近 7 天。
@@ -398,7 +399,7 @@ npm run dev -- onboarding start
 - `daily-os calibrate`：创建或复用决策校准群，并引导用户去那里继续磨合规则。
 
 决策校准群创建后，用户可以在该群里直接自然聊天，不需要每句话都带 `daily-os` 前缀，也不需要
-@bot。系统会用当前 `decision-policy.yaml`、`decision-policy.md` 和候选规则记录作为上下文，
+@bot。系统会用当前本地 `decision-policy.yaml`、`decision-policy.md` 和候选规则记录作为上下文，
 生成中文回复，并把本轮校准对话追加到 `decision.candidates_path`。第一版只记录候选和对话，
 不会静默改写长期规则。
 

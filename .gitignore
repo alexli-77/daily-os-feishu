@@ -1,5 +1,7 @@
 .env
 config/config.yaml
+memory-vault/default/decision-policy.md
+memory-vault/default/decision-policy.yaml
 data/**
 !data/.gitkeep
 !data/memory/

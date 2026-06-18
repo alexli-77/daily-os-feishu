@@ -390,9 +390,11 @@ repository folder. Daily run logs and manual `remember` entries still default to
 ignored `data/memory` paths.
 
 Decision calibration also lives in the memory repository. The built-in template
-includes `decision-policy.yaml`, `decision-policy.md`, and
-`policy-skill/SKILL.md`. Users should refine these through conversation rather
-than editing weights on day one.
+includes `decision-policy.example.yaml`, `decision-policy.example.md`, and
+`policy-skill/SKILL.md`. Runtime `decision-policy.yaml` and
+`decision-policy.md` files are local user memory, are generated when missing,
+and must not be committed. Users should refine these through conversation
+rather than editing weights on day one.
 
 The `Logs` tab shows local UI/API request status and action lifecycle events.
 Logs are stored in `data/logs/ui-network.jsonl`, do not include request bodies,
@@ -491,7 +493,7 @@ In Feishu interaction mode, the user can also send:
   policy conversation there.
 
 After the decision calibration group exists, users can chat naturally in that
-group without the `daily-os` prefix or @mention. Daily OS uses the current
+group without the `daily-os` prefix or @mention. Daily OS uses the current local
 `decision-policy.yaml`, `decision-policy.md`, and pending candidate log as
 context, replies in Chinese, and appends each calibration turn to
 `decision.candidates_path`. The first version records candidates and dialogue
