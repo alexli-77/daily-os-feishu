@@ -99,6 +99,7 @@ export const AppConfigSchema = z.object({
       identity: z.enum(['bot', 'user']).default('bot'),
       chat_id_env: z.string().default('FEISHU_CHAT_ID'),
       send_mode: z.enum(['markdown', 'text']).default('markdown'),
+      summary_style: z.enum(['style1', 'style2']).default('style1'),
     }),
   }),
   feedback: z

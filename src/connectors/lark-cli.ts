@@ -114,7 +114,36 @@ async function collectFeishuProfile(profile: FeishuProfileConfig, date: string):
     out[`${prefix}_im_history`] = { state: 'disabled' };
   }
 
+  if (id === 'minutes_bot') {
+    out[`${prefix}_latest_docs`] = await collectMinutesBotLatestDocs(out[`${prefix}_im_history`], profile.identity);
+  }
+
   return out;
+}
+
+async function collectMinutesBotLatestDocs(messages: EvidenceSource | undefined, identity: FeishuProfileConfig['identity']): Promise<EvidenceSource> {
+  if (!messages || messages.state !== 'available') return { state: 'missing', detail: 'minutes bot IM history is unavailable' };
+  const urls = extractFeishuDocUrls(messages.data).slice(0, 5);
+  if (urls.length === 0) return { state: 'empty', detail: 'No Feishu docx links found in recent minutes bot messages' };
+
+  const docs: Record<string, EvidenceSource> = {};
+  for (const [index, url] of urls.entries()) {
+    docs[`minutes_${index + 1}`] = await runLarkJson(['docs', '+fetch', '--api-version', 'v2', '--doc', url, '--as', identity]);
+  }
+  return {
+    ...sourceFromDocuments(docs),
+    detail: `Fetched ${Object.values(docs).filter((source) => source.state === 'available').length}/${urls.length} latest minutes docs; focus keyword: @张篛`,
+  };
+}
+
+function extractFeishuDocUrls(data: unknown): string[] {
+  const text = JSON.stringify(data);
+  const urls = text
+    .split('http')
+    .slice(1)
+    .map((part) => `http${part.split(/["\\\s<>]/)[0] || ''}`.replace(/\\u0026/g, '&'))
+    .filter((url) => /feishu\.cn\/docx\//.test(url));
+  return Array.from(new Set(urls));
 }
 
 function sanitizeSourceId(value: string): string {

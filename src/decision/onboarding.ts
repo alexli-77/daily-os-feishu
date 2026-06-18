@@ -38,7 +38,6 @@ export async function startDecisionOnboarding(
 
   const chatEnv = config.decision.onboarding.chat_id_env;
   const existingChatId = decisionOnboardingChatId(config);
-  const ownerOpenId = await resolveOwnerOpenId(config);
   const chatName = config.decision.onboarding.chat_name;
   const welcomeText = onboardingWelcomeText(config);
 
@@ -46,9 +45,11 @@ export async function startDecisionOnboarding(
     process.env[chatEnv] = existingChatId;
     if (options.envPath) writeEnvValue(options.envPath, chatEnv, existingChatId);
     const welcomeSent = await sendWelcomeMessageIfDue(config, existingChatId, welcomeText, options.channel);
+    const ownerOpenId = process.env[config.decision.onboarding.owner_open_id_env]?.trim() || '';
     return { chatId: existingChatId, chatName, created: false, ownerOpenId, welcomeText, welcomeSent };
   }
 
+  const ownerOpenId = await resolveOwnerOpenId(config);
   const chatId = options.channel
     ? await createDecisionChatWithChannel(options.channel, chatName, ownerOpenId)
     : feishuSdkStatus().ok

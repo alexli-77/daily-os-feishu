@@ -19,11 +19,19 @@ export async function runOpenAiAgent(input: AgentInput): Promise<string> {
   const response = await client.chat.completions.create({
     model: input.config.llm.model,
     messages: [
-      { role: 'system', content: readPrompt('system.md') },
+      { role: 'system', content: buildSystemPrompt() },
       { role: 'user', content: buildUserPrompt(input) },
     ],
   });
-  return response.choices[0]?.message.content?.trim() || '';
+  return normalizeAgentOutput(response.choices[0]?.message.content || '');
+}
+
+export function buildSystemPrompt(): string {
+  return [readPrompt('system.md'), outputContract()].join('\n\n');
+}
+
+export function buildCliPrompt(input: AgentInput): string {
+  return [`# System\n${buildSystemPrompt()}`, buildUserPrompt(input)].join('\n\n');
 }
 
 export function buildUserPrompt(input: AgentInput): string {
@@ -38,6 +46,35 @@ export function buildUserPrompt(input: AgentInput): string {
     '# 输出',
     '只返回最终可直接发送到飞书的消息。不要包含工具调用或隐藏推理过程。',
   ].join('\n\n');
+}
+
+export function normalizeAgentOutput(text: string): string {
+  return text
+    .replace(/^\s*```(?:markdown|md|text)?\s*/i, '')
+    .replace(/\s*```\s*$/i, '')
+    .split('\n')
+    .map((line) =>
+      line
+        .replace(/^\s*-{3,}\s*$/, '')
+        .replace(/^(\s*#{1,4}\s*)?\*\*\s*\d+[.)、]\s*([^*]+?)\s*\*\*\s*$/, '**$2**')
+        .replace(/^(\s*#{1,4}\s*)?\d+[.)、]\s+(今日重点|为什么|Codex|用户|暂不|阻塞|重要信号|已完成|已推进|没完成|未闭环|需要您|明天|缺失|本周|下周|OKR|优先级|MIT)(.*)$/, '$1$2$3'),
+    )
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function outputContract(): string {
+  return [
+    '# Daily OS 输出契约',
+    '- 这个契约对 codex、claude、openai 三种 provider 都生效；provider 只能影响调用方式，不能影响用户看到的结构和语气。',
+    '- 严格按当前 Workflow 要求的栏目输出；不要擅自新增“总结”“分析”“建议”等报告模板栏目。',
+    '- 栏目标题不要编号；写“已完成 / 已推进”，不要写“1. 已完成 / 已推进”。',
+    '- 不要使用 Markdown 分隔线 `---`、代码块、表格，除非 Workflow 明确要求。',
+    '- 语气像真人助理给老板发工作便签：短句、具体、可执行。不要写成长篇项目报告。',
+    '- 每条事项必须说明：是什么、为什么重要、下一步怎么处理；不能只写短标签。',
+    '- 飞书卡片和看详情使用同一份正文，因此正文必须适合直接展示给用户。',
+  ].join('\n');
 }
 
 function readPrompt(name: string): string {

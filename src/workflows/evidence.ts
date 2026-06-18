@@ -35,7 +35,17 @@ export async function collectEvidence(config: AppConfig, date: string): Promise<
     date,
     sources: {
       ...sources,
-      weekly_priorities: extractWeeklyPrioritiesFromFeishuDocs(sources.feishu_docs, date),
+      weekly_priorities: extractWeeklyPrioritiesFromFeishuDocs(feishuDocsSource(sources), date),
     },
+  };
+}
+
+export function feishuDocsSource(sources: Record<string, EvidenceSource>): EvidenceSource | undefined {
+  const docs = Object.entries(sources).filter(([name, source]) => name === 'feishu_docs' || (name.startsWith('feishu_') && name.endsWith('_docs') && source.state === 'available'));
+  if (docs.length === 0) return sources.feishu_docs;
+  if (docs.length === 1) return docs[0]?.[1];
+  return {
+    state: 'available',
+    data: Object.fromEntries(docs.map(([name, source]) => [name, source.data])),
   };
 }

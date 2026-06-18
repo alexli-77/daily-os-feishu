@@ -12,23 +12,29 @@ import { handleFeishuFeedbackCommand } from '../src/feedback/feishu-feedback.js'
 import { shouldRunScheduledWorkflow } from '../src/service/launchd.js';
 import { formatRecentWorkflowRuns, listRecentWorkflowRuns } from '../src/workflows/run-ledger.js';
 import { runWorkflow } from '../src/workflows/run-workflow.js';
+import { feishuDocsSource } from '../src/workflows/evidence.js';
 import { buildWorkflowEvidenceTrace, formatLatestWorkflowDetails, formatWorkflowSummaryForFeishu } from '../src/workflows/summary.js';
-import { extractWeeklyPrioritiesFromXml } from '../src/workflows/weekly-priorities.js';
+import { extractWeeklyPrioritiesFromFeishuDocs, extractWeeklyPrioritiesFromXml } from '../src/workflows/weekly-priorities.js';
 import { createPolicyCandidate, listPolicyCandidates } from '../src/decision/candidates.js';
 import { decisionPolicyFiles } from '../src/decision/policy.js';
 import { collectFeishuUserMessageRecords, isFeishuAppMessageRecord } from '../src/utils/feishu-message-records.js';
+import { buildCliPrompt, normalizeAgentOutput } from '../src/agent/openai-agent.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-os-regression-'));
 
 try {
   testFeishuUserMessageFiltering();
   testChatSuggestionCoalescing();
+  testUnifiedProviderPromptContract();
+  testAgentOutputNormalization();
   testDailyOsCommandParsing();
   testEveryFeishuInteractionWorkflowCommandHasCardSender();
   await testWorkflowCommandUsesCardCallback();
   await testWeeklyWorkflowCommandPassesEvidenceToCardSummary();
   await testFeedbackPollWorkflowCommandUsesCardSender();
   testDailyPlanSummaryShowsOpenLoopEvidence();
+  testDailyPlanSummaryKeepsReadableRowsAndUrgentQuestion();
+  testDailyPlanSummaryStyle2RemovesGroupsAndMarksAi();
   testWorkflowSummaryQuotesLinearMetadata();
   testWorkflowDetailsShowEvidenceTrace();
   testSchedulerSkipsDailyReviewOnWeeklyReviewDay();
@@ -36,12 +42,62 @@ try {
   testWeeklyReviewSummaryPrioritizesReviewEvidence();
   testWeeklyReviewSummaryShowsStructuredPriorityItems();
   testWeeklyPrioritiesExtractPortfolioReviewItem();
+  testWeeklyPrioritiesUseProfileDocsSource();
   await testConfirmLatestPolicyCandidateWithoutId();
   testBackgroundSuggestionDismissAllFromAmbiguousDismiss();
   testWorkflowCardRendering();
   console.log('Regression tests passed.');
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+function testUnifiedProviderPromptContract(): void {
+  const prompt = buildCliPrompt({
+    config: testConfig(),
+    workflow: 'daily_review',
+    date: '2026-06-17',
+    evidence: {
+      generated_at: '2026-06-17T21:30:00.000Z',
+      date: '2026-06-17',
+      sources: {},
+    },
+    memory: {
+      repositoryPath: tmp,
+      repository: [],
+      longTerm: '',
+      recentDaily: [],
+    },
+  });
+
+  assert.match(prompt, /你是 Daily OS Feishu/);
+  assert.match(prompt, /Daily OS 输出契约/);
+  assert.match(prompt, /provider 只能影响调用方式/);
+  assert.match(prompt, /复盘今天/);
+  assert.match(prompt, /只返回最终可直接发送到飞书的消息/);
+}
+
+function testAgentOutputNormalization(): void {
+  const normalized = normalizeAgentOutput(
+    [
+      '```markdown',
+      '老板，我帮您整理了今天的进展。',
+      '',
+      '---',
+      '',
+      '**1. 已完成 / 已推进**',
+      '- LEO-7 邮件已经进入发送前检查。',
+      '',
+      '2. 没完成 / 未闭环',
+      '- LEO-10 还没有看到完成证据。',
+      '```',
+    ].join('\n'),
+  );
+
+  assert.doesNotMatch(normalized, /```/);
+  assert.doesNotMatch(normalized, /^---$/m);
+  assert.doesNotMatch(normalized, /\*\*1\./);
+  assert.match(normalized, /\*\*已完成 \/ 已推进\*\*/);
+  assert.match(normalized, /^没完成 \/ 未闭环$/m);
 }
 
 function testFeishuUserMessageFiltering(): void {
@@ -306,6 +362,53 @@ function testDailyPlanSummaryShowsOpenLoopEvidence(): void {
   assert.match(summary, /LEO-7/);
   assert.match(summary, /未来 4 周唯一主线/);
   assert.match(summary, /飞书文档/);
+}
+
+function testDailyPlanSummaryKeepsReadableRowsAndUrgentQuestion(): void {
+  const content = [
+    '老板您好，我帮您整理了今天的安排。',
+    '',
+    '**今日重点**',
+    '- CUTTO-355「script 滚动及 frame 大小 Verify」今天必须闭环，因为 Linear 显示今天到期，完成标准是您给出通过、修改点或延期原因。',
+    '- PR8 / PR42 / open PR 对账表：预期产物是一张按仓库、PR 编号、open/merged、是否可 merge、风险点拆好的检查表。',
+    '',
+    '**Codex 可以做**',
+    '- AI 解释对比材料：预期产物是一版用 Claude Code 解释李传彬分支 demo 和您理解的 demo 的区别。',
+  ].join('\n');
+  const config = testConfig();
+  config.output.feishu.summary_style = 'style1';
+  const summary = formatWorkflowSummaryForFeishu('daily_plan', '2026-06-18', content, undefined, config);
+  assert.match(summary, /CUTTO-355「script 滚动及 frame 大小 Verify」/);
+  assert.match(summary, /PR8 \/ PR42 \/ open PR 对账表/);
+  assert.doesNotMatch(summary, /\*\*P1｜Codex\*\*：\s*PR\s*\n/);
+  assert.doesNotMatch(summary, /Ver\s*\n/);
+  assert.match(summary, /额外紧急事项/);
+}
+
+function testDailyPlanSummaryStyle2RemovesGroupsAndMarksAi(): void {
+  const content = [
+    '老板您好，我帮您整理了今天的安排。',
+    '',
+    '**今日重点**',
+    'MIT：CUTTO-355「script 滚动及 frame 大小 Verify」今天必须闭环，因为 Linear 显示今天到期，完成标准是您给出通过、修改点或延期原因。',
+    '辅助重点 1：今天进度日会后产出的 copilot 组件库修改，包括去掉 skip、卡片改 fit；完成标准是修改 demo 并更新 PR。',
+    '',
+    '**Codex 可以做**',
+    '- AI 解释对比材料：预期产物是一版用 Claude Code 解释李传彬分支 demo 和您理解的 demo 的区别。',
+    '',
+    '**暂不处理 / 阻塞**',
+    '- CUTTO-357「拉片 Verify」今天不进 MIT，因为它明天到期。',
+  ].join('\n');
+  const config = testConfig();
+  config.output.feishu.summary_style = 'style2';
+  const summary = formatWorkflowSummaryForFeishu('daily_plan', '2026-06-18', content, undefined, config);
+  assert.doesNotMatch(summary, /确认的|新增的|暂缓的/);
+  assert.doesNotMatch(summary, /P[0-2]\s*[｜|]/);
+  assert.doesNotMatch(summary, /目标：/);
+  assert.match(summary, /copilot 组件库修改.*（AI）/);
+  assert.match(summary, /AI 解释对比材料.*（AI）/);
+  assert.match(summary, /CUTTO-355「script 滚动及 frame 大小 Verify」/);
+  assert.match(summary, /额外紧急事项/);
 }
 
 function testWorkflowSummaryQuotesLinearMetadata(): void {
@@ -594,6 +697,34 @@ function testWeeklyPrioritiesExtractPortfolioReviewItem(): void {
     items.some((item) => item.scope === '🐶' && /个人 portfolio/.test(item.item) && /小企鹅 review/.test(item.item)),
     'weekly priorities must preserve the portfolio review item as its own row',
   );
+}
+
+function testWeeklyPrioritiesUseProfileDocsSource(): void {
+  const xml = [
+    '<table>',
+    '<tbody>',
+    '<tr><td><p>🐶 重点OKR</p></td><td><p>6.15-6.21 要务</p></td></tr>',
+    '<tr>',
+    '<td><p>Cutto</p></td>',
+    '<td><ul><li>CUTTO-318 收成可 review / handoff 状态</li></ul></td>',
+    '</tr>',
+    '</tbody>',
+    '</table>',
+  ].join('');
+  const source = feishuDocsSource({
+    feishu_work_docs: {
+      state: 'available',
+      data: {
+        Weekly2026: {
+          state: 'available',
+          data: xml,
+        },
+      },
+    },
+  });
+  const weekly = extractWeeklyPrioritiesFromFeishuDocs(source, '2026-06-16');
+  assert.equal(weekly.state, 'available');
+  assert.match(JSON.stringify(weekly.data), /CUTTO-318/);
 }
 
 function testBackgroundSuggestionDismissAllFromAmbiguousDismiss(): void {
