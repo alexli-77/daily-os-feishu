@@ -4,8 +4,8 @@ import type { Evidence } from './types.js';
 
 const MAX_SUMMARY_CHARS = 2200;
 const MAX_DETAIL_CHARS = 7000;
-const MAX_ROW_TITLE_CHARS = 38;
-const MAX_ROW_GOAL_CHARS = 30;
+const MAX_ROW_TITLE_CHARS = 96;
+const MAX_ROW_GOAL_CHARS = 80;
 
 export function formatWorkflowSummaryForFeishu(workflow: WorkflowName, date: string, content: string, evidence?: Evidence, config?: AppConfig): string {
   const clean = normalize(content);
@@ -91,6 +91,7 @@ function workflowOverview(workflow: WorkflowName, content: string, evidence?: Ev
 }
 
 function dailyPlanOverview(content: string, evidence?: Evidence, config?: AppConfig): string[] {
+  if (config?.output.feishu.summary_style === 'style2') return dailyPlanOverviewStyle2(content, evidence, config);
   const linear = linearMetadataFromEvidence(evidence);
   const alignment = strategyAlignmentRows(content, config);
   const alignmentTitle = strategyAlignmentTitle(config);
@@ -120,6 +121,38 @@ function dailyPlanOverview(content: string, evidence?: Evidence, config?: AppCon
     ...(openLoopRows.length > 0 ? ['', '**未闭环依据**', ...openLoopRows] : []),
   ];
   return contextRows.length === 0 ? overview : [overview[0], '', ...contextRows, ...overview.slice(1)];
+}
+
+function dailyPlanOverviewStyle2(content: string, evidence?: Evidence, config?: AppConfig): string[] {
+  const linear = linearMetadataFromEvidence(evidence);
+  const alignment = strategyAlignmentRows(content, config);
+  const alignmentTitle = strategyAlignmentTitle(config);
+  const openLoopRows = dailyPlanOpenLoopRows(content);
+  const priorities = extractSectionBullets(content, ['今日重点'], 3);
+  const codex = extractSectionBullets(content, ['Codex 可以做', '我可以帮您', '我可以帮您安排 Codex 做'], 3);
+  const user = extractSectionBullets(content, ['用户必须做', '需要您批示', '需要您本人处理'], 3);
+  const paused = extractSectionBullets(content, ['暂不处理', '阻塞'], 2);
+
+  const tasks = [
+    ...priorities.map((item, index) => taskRowStyle2(item, ownerFor(item, codex, user), index, '今天有明确价值，先推进到可检查结果', linear)),
+    ...codex
+      .filter((item) => !overlapsAny(item, priorities))
+      .map((item, index) => taskRowStyle2(item, 'Codex', 20 + index, '先产出草稿、检查结果或拆解方案', linear)),
+    ...user
+      .filter((item) => !overlapsAny(item, priorities))
+      .map((item, index) => taskRowStyle2(item, '您', 40 + index, '需要您判断、沟通或拍板', linear)),
+    ...paused.map((item, index) => taskRowStyle2(item, '暂缓', 80 + index, '今天先不抢主线，避免分散注意力', linear)),
+  ]
+    .sort((left, right) => left.rank - right.rank)
+    .filter((task, index, all) => all.findIndex((candidate) => normalizedTextKey(candidate.title) === normalizedTextKey(task.title)) === index)
+    .slice(0, 8);
+
+  const taskLines = tasks.flatMap((task, index) => [`${index + 1}. ${task.title}`, ...(task.meta ? [`   > Linear：${task.meta}`] : [])]);
+  const contextRows = [
+    ...(alignment.length > 0 ? [`**${alignmentTitle}**`, ...alignment, ''] : []),
+    ...(openLoopRows.length > 0 ? ['**未闭环依据**', ...openLoopRows, ''] : []),
+  ];
+  return ['**今天先看这几件事**', '', ...contextRows, ...taskLines];
 }
 
 function dailyReviewOverview(content: string, evidence?: Evidence): string[] {
@@ -190,8 +223,26 @@ function taskRow(item: string, priority: string, owner: string, goal: string, li
   return `**${priority}｜${owner}**：${clean}\n   目标：${goalFromItem(item, goal)}${meta ? `\n   > Linear：${meta}` : ''}`;
 }
 
+function taskRowStyle2(
+  item: string,
+  owner: string,
+  rank: number,
+  goal: string,
+  linear: Map<string, LinearIssueMetadata> = new Map(),
+): { title: string; goal: string; meta: string; rank: number } {
+  const clean = compactItem(item);
+  const suffix = owner === 'Codex' ? '（AI）' : '';
+  return {
+    title: `**${clean}${suffix}**`,
+    goal: goalFromItem(item, goal),
+    meta: linearMetadataLine(item, linear),
+    rank,
+  };
+}
+
 function ownerFor(item: string, codexItems: string[], userItems: string[]): string {
   const key = normalizedTextKey(item);
+  if (/verify|验收|亲自|本人|您需要|判断|确认/.test(item.toLowerCase())) return '您';
   if (codexItems.some((candidate) => key.includes(normalizedTextKey(candidate).slice(0, 18)))) return 'Codex';
   if (userItems.some((candidate) => key.includes(normalizedTextKey(candidate).slice(0, 18)))) return '您';
   const codexLike = /codex|我可以帮|助手|自动|生成|整理|检查|草稿|修复|修改|改成|实现|写|补齐/i.test(item);
@@ -206,6 +257,8 @@ function compactItem(item: string): string {
     removeEvidenceTail(
       stripMarkdown(item)
         .replace(/^(MIT|P[0-3]|优先级[:：]?)\s*/i, '')
+        .replace(/^辅助重点\s*\d*\s*[:：]\s*/, '')
+        .replace(/^[:：]\s*/, '')
         .replace(/^(确认的|暂缓的|新增的|未闭环)[:：\s]*/, '')
         .replace(/^(完成|已推进|未闭环|下一步|P[0-3])\s*[|｜]\s*(?:已推进|您|Codex)?\s*[:：]\s*/, '')
         .replace(/^(完成|已推进|未闭环|下一步|P[0-3])[:：\s]*/, '')
@@ -439,6 +492,7 @@ function splitOpenLoopItems(value: string): string[] {
 
 function removeEvidenceTail(value: string): string {
   return value
+    .split(/(?:因为|完成标准|今天完成标准|；今天|，今天)/)[0]
     .split(/(?:证据来自|证据为|依据[:：]?|来源[:：]?|Feishu IM|Linear |local files|Chrome snapshot|GitHub |Vault )/i)[0]
     .split(/(?:。|；|;)\s*(?:证据|依据|来源|Linear|Feishu|Vault|GitHub|Chrome)/i)[0]
     .split(/(?:，|,)\s*(?:证据|依据|来源|Linear|Feishu|Vault|GitHub|Chrome|但|不过)/i)[0]
@@ -453,13 +507,16 @@ function completePhrase(value: string, max: number): string {
     .trim()
     .replace(/^[「“"']+|[」”"']+$/g, '');
   if (clean.length <= max) return clean;
-  const explicitTask = clean.match(/(?:LEO|CUTTO|POLY|MOOSE|SWAT|PR|#)-?\d*[\w-]*\s*[^，。；;]{0,24}/i)?.[0]?.trim();
+  const explicitTask = clean.match(/(?:(?:LEO|CUTTO|POLY|MOOSE|SWAT)-\d+|PR\s*#?\d+|#\d+)[\w-]*\s*[^，。；;]{0,48}/i)?.[0]?.trim();
   if (explicitTask && explicitTask.length <= max) return tidyPhrase(explicitTask);
   for (const delimiter of ['。', '；', ';', '，', ',', '：', ':', '（', '(']) {
     const head = clean.split(delimiter)[0]?.trim();
     if (head && head.length >= 6 && head.length <= max) return tidyPhrase(head);
   }
-  return tidyPhrase(clean.slice(0, max).replace(/[，,、：:｜|/\\\s-]+$/u, '').trim());
+  const soft = clean.slice(0, max);
+  const boundary = soft.match(/^(.+?)(?:\s+(?:和|与|及|以及|还有)\s*)[^和与及还有]*$/u)?.[1];
+  const phrase = tidyPhrase((boundary || soft).replace(/[，,、：:｜|/\\\s-]+$/u, '').trim());
+  return phrase && phrase.length < clean.length ? `${phrase}…` : phrase;
 }
 
 function escapeRegExp(value: string): string {
@@ -481,7 +538,7 @@ function actionHint(workflow: WorkflowName): string {
 }
 
 function closingLine(workflow: WorkflowName): string {
-  if (workflow === 'daily_plan') return '您看这样排可以吗？';
+  if (workflow === 'daily_plan') return '您看这样排可以吗？今天还有没有额外紧急事项需要加入？';
   if (workflow === 'daily_review') return '您确认一下，哪些可以记为今天完成？';
   return '您确认一下：本周结论和下周带走项对吗？';
 }
@@ -512,6 +569,13 @@ function looksLikeHeading(line: string): boolean {
 }
 
 function extractBullets(text: string): string[] {
+  const focusRows = text
+    .split('\n')
+    .map((line) => stripMarkdown(line).trim())
+    .filter((line) => /^(?:MIT|辅助重点\s*\d*)[:：]/.test(line))
+    .map((line) => completePhrase(line, 220));
+  if (focusRows.length > 0) return focusRows;
+
   const bullets = text
     .split('\n')
     .map((line) => stripMarkdown(line).trim())
