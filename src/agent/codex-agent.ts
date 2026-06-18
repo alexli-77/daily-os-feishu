@@ -3,11 +3,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { runCommand } from '../utils/command.js';
 import type { AgentInput } from './openai-agent.js';
-import { buildUserPrompt } from './openai-agent.js';
+import { buildCliPrompt, normalizeAgentOutput } from './openai-agent.js';
 
 export async function runCodexAgent(input: AgentInput): Promise<string> {
   const codexBin = process.env.CODEX_BIN || 'codex';
-  const prompt = buildUserPrompt(input);
+  const prompt = buildCliPrompt(input);
   const outputPath = path.join(os.tmpdir(), `daily-os-feishu-${Date.now()}-${process.pid}.md`);
   const args = [
     'exec',
@@ -30,5 +30,5 @@ export async function runCodexAgent(input: AgentInput): Promise<string> {
   }
   const text = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, 'utf8') : result.stdout;
   fs.rmSync(outputPath, { force: true });
-  return text.trim();
+  return normalizeAgentOutput(text);
 }

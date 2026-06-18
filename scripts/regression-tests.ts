@@ -17,12 +17,15 @@ import { extractWeeklyPrioritiesFromXml } from '../src/workflows/weekly-prioriti
 import { createPolicyCandidate, listPolicyCandidates } from '../src/decision/candidates.js';
 import { decisionPolicyFiles } from '../src/decision/policy.js';
 import { collectFeishuUserMessageRecords, isFeishuAppMessageRecord } from '../src/utils/feishu-message-records.js';
+import { buildCliPrompt, normalizeAgentOutput } from '../src/agent/openai-agent.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-os-regression-'));
 
 try {
   testFeishuUserMessageFiltering();
   testChatSuggestionCoalescing();
+  testUnifiedProviderPromptContract();
+  testAgentOutputNormalization();
   testDailyOsCommandParsing();
   testEveryFeishuInteractionWorkflowCommandHasCardSender();
   await testWorkflowCommandUsesCardCallback();
@@ -42,6 +45,55 @@ try {
   console.log('Regression tests passed.');
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+function testUnifiedProviderPromptContract(): void {
+  const prompt = buildCliPrompt({
+    config: testConfig(),
+    workflow: 'daily_review',
+    date: '2026-06-17',
+    evidence: {
+      generated_at: '2026-06-17T21:30:00.000Z',
+      date: '2026-06-17',
+      sources: {},
+    },
+    memory: {
+      repositoryPath: tmp,
+      repository: [],
+      longTerm: '',
+      recentDaily: [],
+    },
+  });
+
+  assert.match(prompt, /你是 Daily OS Feishu/);
+  assert.match(prompt, /Daily OS 输出契约/);
+  assert.match(prompt, /provider 只能影响调用方式/);
+  assert.match(prompt, /复盘今天/);
+  assert.match(prompt, /只返回最终可直接发送到飞书的消息/);
+}
+
+function testAgentOutputNormalization(): void {
+  const normalized = normalizeAgentOutput(
+    [
+      '```markdown',
+      '老板，我帮您整理了今天的进展。',
+      '',
+      '---',
+      '',
+      '**1. 已完成 / 已推进**',
+      '- LEO-7 邮件已经进入发送前检查。',
+      '',
+      '2. 没完成 / 未闭环',
+      '- LEO-10 还没有看到完成证据。',
+      '```',
+    ].join('\n'),
+  );
+
+  assert.doesNotMatch(normalized, /```/);
+  assert.doesNotMatch(normalized, /^---$/m);
+  assert.doesNotMatch(normalized, /\*\*1\./);
+  assert.match(normalized, /\*\*已完成 \/ 已推进\*\*/);
+  assert.match(normalized, /^没完成 \/ 未闭环$/m);
 }
 
 function testFeishuUserMessageFiltering(): void {
