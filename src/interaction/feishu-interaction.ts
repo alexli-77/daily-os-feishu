@@ -935,17 +935,21 @@ async function handleSkillCardAction(input: {
       return;
     }
     try {
+      await input.channel.send(input.event.chatId, { text: '正在写回 Feishu Weekly；我会先校验目标列，不会覆盖已有不同内容。' }, { replyTo: input.event.messageId });
       const result = await executeLifeReviewOsWriteback(input.config, input.action.skillId, input.action.token);
       await input.channel.send(
         input.event.chatId,
         {
           text: [
-            '已写回 Feishu Weekly。',
+            result.alreadyWritten ? 'Feishu Weekly 已经有这次写回内容；我没有重复写入。' : '已写回 Feishu Weekly。',
             '',
             `周列：${result.taskHeader}`,
-            `写入：${result.itemCount} 条要务`,
+            `本次新写入：${result.itemCount} 条要务`,
+            result.skippedCount ? `已存在并跳过：${result.skippedCount} 条要务` : '',
             result.insertedColumns ? '操作：已插入新周列' : '操作：写入已有空周列',
-          ].join('\n'),
+          ]
+            .filter(Boolean)
+            .join('\n'),
         },
         { replyTo: input.event.messageId },
       );

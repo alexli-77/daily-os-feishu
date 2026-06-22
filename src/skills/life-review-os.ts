@@ -44,7 +44,9 @@ export interface LifeReviewOsWritebackPreview {
 export interface LifeReviewOsWritebackResult {
   taskHeader: string;
   itemCount: number;
+  skippedCount: number;
   insertedColumns: boolean;
+  alreadyWritten: boolean;
 }
 
 export function isLifeReviewOsEntry(entry: SkillEntry): boolean {
@@ -106,7 +108,9 @@ export async function executeLifeReviewOsWriteback(config: AppConfig, skillId: s
   return {
     taskHeader: stringValue(parsed.task_header),
     itemCount: numberValue(parsed.item_count),
+    skippedCount: numberValue(parsed.skipped_count),
     insertedColumns: Boolean(parsed.inserted_columns),
+    alreadyWritten: Boolean(parsed.already_written),
   };
 }
 
