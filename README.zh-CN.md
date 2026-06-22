@@ -486,6 +486,9 @@ npm run interaction:feishu
 - `/new` 或 `daily-os new`：清除当前飞书 chat/topic 的远程会话。
 - `daily-os details`：展开最近一次计划、日复盘或周复盘的完整内容。
 - `daily-os chat [todo|review]`：按场景分析飞书聊天上下文，提出 todo、日历、文档和计划变更建议。
+- `daily-os skill list`：列出本地已配置的 skill。
+- `daily-os skill run <id>: <text>`：把 Daily OS 本周上下文整理成 input pack，并以草稿模式运行本地 skill。
+- `daily-os weekly deep`：`weekly-review` skill 的快捷入口。
 - `daily-os remember <text>`：写入 long-term memory。
 - `daily-os feedback <text>`：写入本地 feedback log。
 - `daily-os policy`：查看当前决策 policy 和 policy-skill 路径。
@@ -507,6 +510,10 @@ sender id、thread id、message id、scope id、当前 session metadata、Daily 
 Agent mode 会回复一张持续更新的飞书运行卡片，而不是一次性文本。卡片会显示运行状态、
 最近的 Codex 进度、最终成功/失败/超时状态；运行中可以直接点 **停止**。最终卡片也能把
 结构化 follow-up callback 送回同一个飞书 scope，让 Codex 继续这段对话。
+
+Skill run 第一版只做草稿模式。Daily OS 会在 `skills.inputs_dir` 下生成本地 input pack，
+交给配置好的 skill；不会读取或外传 skill 自己的私有 `config.yaml`。飞书写回、workspace
+写入等外部效果后续需要单独确认流程。
 
 Agent mode 控制命令：
 
@@ -571,6 +578,8 @@ npm run feedback:poll
 - `daily-os status`
 - `daily-os remember <text>`
 - `daily-os feedback <text>`
+- `daily-os skill list`
+- `daily-os skill run <id>: <text>`
 - `daily-os plan`
 - `daily-os review`
 - `daily-os weekly`

@@ -598,6 +598,10 @@ Supported messages are the same as feedback polling:
 - `daily-os details` expands the latest full plan/review/weekly output.
 - `daily-os chat [todo|review]` analyzes Feishu chat context and suggests todo,
   calendar, document, and plan updates.
+- `daily-os skill list` lists configured local skills.
+- `daily-os skill run <id>: <text>` runs a configured local skill in draft-only
+  mode with a Daily OS input pack.
+- `daily-os weekly deep` is a convenience alias for the `weekly-review` skill.
 - `daily-os remember <text>` appends to long-term memory.
 - `daily-os feedback <text>` appends to the local feedback log.
 - `daily-os policy` shows the current decision policy and policy-skill paths.
@@ -623,6 +627,12 @@ user must decide personally.
 Agent mode replies with an updating Feishu run card instead of a one-shot
 message. The card shows the running state, recent Codex progress events, final
 success/failure/timeout state, and a **Stop** button while the run is active.
+
+Skill runs are intentionally draft-only in this version. Daily OS writes a local
+input pack under `skills.inputs_dir`, passes it to the configured skill, and
+does not read or expose the skill's private `config.yaml`. Feishu write-back,
+workspace writes, and other external effects require a later explicit
+confirmation flow.
 Final cards can send structured follow-up callbacks back into the same Feishu
 scope so Codex can continue the conversation.
 
@@ -702,6 +712,8 @@ Supported messages:
 - `daily-os status`
 - `daily-os remember <text>`
 - `daily-os feedback <text>`
+- `daily-os skill list`
+- `daily-os skill run <id>: <text>`
 - `daily-os plan`
 - `daily-os review`
 - `daily-os weekly`

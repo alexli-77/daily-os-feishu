@@ -250,3 +250,17 @@ memory:
   long_term_path: "./data/memory/long-term.md"
   daily_dir: "./data/memory/daily"
   workflow_runs_dir: "./data/memory/workflow-runs"
+
+skills:
+  # Optional local skill bridge. Real skill configs, document tokens, and
+  # user-specific paths belong in the skill's own ignored config.yaml, not here.
+  enabled: false
+  inputs_dir: "./data/memory/skill-inputs"
+  registry:
+    - id: "weekly-review"
+      provider: "auto" # auto | codex | claude
+      path: "~/.codex/skills/weekly-review/SKILL.md"
+      workdir: "~/.codex/skills/weekly-review"
+      default_mode: "weekly"
+      effects: ["read", "draft", "feishu_write"]
+      require_confirmation_for: ["feishu_write"]

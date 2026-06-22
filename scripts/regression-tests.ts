@@ -28,6 +28,7 @@ try {
   testUnifiedProviderPromptContract();
   testAgentOutputNormalization();
   testDailyOsCommandParsing();
+  await testSkillRunCommandUsesConfiguredRunner();
   testEveryFeishuInteractionWorkflowCommandHasCardSender();
   await testWorkflowCommandUsesCardCallback();
   await testWeeklyWorkflowCommandPassesEvidenceToCardSummary();
@@ -180,6 +181,13 @@ function testDailyOsCommandParsing(): void {
   assert.deepEqual(parseDailyOsCommand('daily-os plan', 'daily-os'), { type: 'workflow', workflow: 'daily_plan' });
   assert.deepEqual(parseDailyOsCommand('daily-os review', 'daily-os'), { type: 'workflow', workflow: 'daily_review' });
   assert.deepEqual(parseDailyOsCommand('daily-os weekly', 'daily-os'), { type: 'workflow', workflow: 'weekly_review' });
+  assert.deepEqual(parseDailyOsCommand('daily-os skill list', 'daily-os'), { type: 'skill_list' });
+  assert.deepEqual(parseDailyOsCommand('daily-os skill run weekly-review: 本周卡在 portfolio review', 'daily-os'), {
+    type: 'skill_run',
+    skillId: 'weekly-review',
+    text: '本周卡在 portfolio review',
+  });
+  assert.deepEqual(parseDailyOsCommand('daily-os weekly deep', 'daily-os'), { type: 'skill_run', skillId: 'weekly-review', mode: 'weekly' });
   assert.deepEqual(parseDailyOsCommand('daily-os 保存规则', 'daily-os'), { type: 'confirm_policy_candidate' });
   assert.deepEqual(parseDailyOsCommand('daily-os 确认保存', 'daily-os'), { type: 'confirm_policy_candidate' });
   assert.deepEqual(parseDailyOsCommand('daily-os 确认保存：daily-os 保存规则 pol-20260605202553-801f4cf6', 'daily-os'), {
@@ -193,6 +201,53 @@ function testDailyOsCommandParsing(): void {
     assert.equal(revision.workflow, 'daily_plan');
     assert.match(revision.text, /LEO-12/);
   }
+}
+
+async function testSkillRunCommandUsesConfiguredRunner(): Promise<void> {
+  const config = testConfig();
+  config.skills.enabled = true;
+  config.skills.registry = [
+    {
+      id: 'weekly-review',
+      provider: 'auto',
+      path: '/tmp/weekly-review/SKILL.md',
+      workdir: '/tmp/weekly-review',
+      default_mode: 'weekly',
+      effects: ['read', 'draft', 'feishu_write'],
+      require_confirmation_for: ['feishu_write'],
+    },
+  ];
+  const replies: string[] = [];
+  await runParsedDailyOsCommand(
+    {
+      config,
+      messageId: 'message-1',
+      text: 'daily-os skill run weekly-review: 本周重点是对齐 Weekly',
+      source: 'regression-test',
+      prefix: 'daily-os',
+      reply: async (text) => {
+        replies.push(text);
+      },
+      runSkillForCommand: async (input) => {
+        assert.equal(input.skillId, 'weekly-review');
+        assert.equal(input.userText, '本周重点是对齐 Weekly');
+        return {
+          skillId: input.skillId,
+          provider: 'codex',
+          mode: input.mode || 'weekly',
+          inputPackPath: '/tmp/daily-os/weekly-review.md',
+          output: '## 本周执行对比\n\n**完成** ✅\n- 已整理 Daily OS input pack',
+          draftOnly: true,
+        };
+      },
+    },
+    { type: 'skill_run', skillId: 'weekly-review', text: '本周重点是对齐 Weekly' },
+  );
+
+  assert.match(replies[0] || '', /Running skill weekly-review/);
+  assert.match(replies[1] || '', /Skill: weekly-review/);
+  assert.match(replies[1] || '', /Write-back: not performed/);
+  assert.match(replies[1] || '', /本周执行对比/);
 }
 
 async function testWorkflowCommandUsesCardCallback(): Promise<void> {
