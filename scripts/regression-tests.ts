@@ -8,7 +8,7 @@ import type { ChatContextSuggestion } from '../src/chat/context-analysis.js';
 import { parseDailyOsCommand, runParsedDailyOsCommand } from '../src/interaction/daily-os-command.js';
 import { handlePendingBackgroundSuggestionReply } from '../src/service/background-suggestions.js';
 import { renderFeishuSkillCard, renderFeishuWorkflowCard } from '../src/connectors/feishu-sdk.js';
-import { handleFeishuFeedbackCommand } from '../src/feedback/feishu-feedback.js';
+import { handleFeishuFeedbackCommand, shouldTreatAsFeedbackWorkflowRevision } from '../src/feedback/feishu-feedback.js';
 import { shouldRunScheduledWorkflow } from '../src/service/launchd.js';
 import { formatRecentWorkflowRuns, listRecentWorkflowRuns } from '../src/workflows/run-ledger.js';
 import { runWorkflow } from '../src/workflows/run-workflow.js';
@@ -35,6 +35,7 @@ try {
   await testSkillRunCommandUsesCardCallback();
   await testWeeklyWorkflowCommandPassesEvidenceToCardSummary();
   await testFeedbackPollWorkflowCommandUsesCardSender();
+  testFeedbackRevisionIgnoresDailyOsCommands();
   testDailyPlanSummaryShowsOpenLoopEvidence();
   testDailyPlanSummaryKeepsReadableRowsAndUrgentQuestion();
   testDailyPlanSummaryStyle2RemovesGroupsAndMarksAi();
@@ -407,6 +408,14 @@ async function testFeedbackPollWorkflowCommandUsesCardSender(): Promise<void> {
   assert.equal(cards.length, 1);
   assert.equal(cards[0]?.workflow, 'daily_plan');
   assert.match(cards[0]?.summary || '', /LEO-7/);
+}
+
+function testFeedbackRevisionIgnoresDailyOsCommands(): void {
+  const config = testConfig();
+  assert.equal(shouldTreatAsFeedbackWorkflowRevision(config, 'daily-os weekly deep'), false);
+  assert.equal(shouldTreatAsFeedbackWorkflowRevision(config, 'daily-os skill run weekly-review: 本周重点'), false);
+  assert.equal(shouldTreatAsFeedbackWorkflowRevision(config, '/daily-os weekly deep'), false);
+  assert.equal(shouldTreatAsFeedbackWorkflowRevision(config, '把 LEO-12 降级，明天再跟进'), true);
 }
 
 async function testConfirmLatestPolicyCandidateWithoutId(): Promise<void> {

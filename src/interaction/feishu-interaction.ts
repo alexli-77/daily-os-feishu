@@ -379,7 +379,7 @@ async function runBatch(input: {
     return;
   }
 
-  if (isWorkflowRevisionFollowUp(last, text)) {
+  if (isWorkflowRevisionFollowUp(input.config, last, text)) {
     const control = decideFeishuControl(input.config, accessDecision, { effect: 'memory_write' });
     if (!control.ok) {
       await replyToMessage(input.channel, last, `权限不足：${control.reason}`, input.config.interaction.feishu.reply_mode);
@@ -509,8 +509,26 @@ function isDetailReply(text: string): boolean {
   return ['详情', '查看详情', '全文', '完整内容', 'details', 'detail'].includes(normalized);
 }
 
-function isWorkflowRevisionFollowUp(message: NormalizedMessage, text: string): boolean {
-  return Boolean((message.replyToMessageId || message.threadId) && !isGeneratedDailyOsText(text) && isLikelyWorkflowRevisionText(text));
+function isWorkflowRevisionFollowUp(config: AppConfig, message: NormalizedMessage, text: string): boolean {
+  return Boolean(
+    (message.replyToMessageId || message.threadId) &&
+      !isGeneratedDailyOsText(text) &&
+      !isDailyOsCommandText(text, config.interaction.feishu.command_prefix) &&
+      isLikelyWorkflowRevisionText(text),
+  );
+}
+
+function isDailyOsCommandText(text: string, prefix: string): boolean {
+  const normalized = text.replace(/\s+/g, ' ').trim().toLowerCase();
+  const commandPrefix = prefix.replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!normalized || !commandPrefix) return false;
+  return [commandPrefix, `/${commandPrefix}`].some(
+    (candidate) =>
+      normalized === candidate ||
+      normalized.startsWith(`${candidate} `) ||
+      normalized.startsWith(`${candidate}:`) ||
+      normalized.startsWith(`${candidate}：`),
+  );
 }
 
 function isLikelyWorkflowRevisionText(text: string): boolean {
