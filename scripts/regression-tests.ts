@@ -912,10 +912,13 @@ function testSkillCardRendering(): void {
   }) as { elements?: unknown[] };
   const serialized = JSON.stringify(card);
   assert.match(serialized, /Skill: weekly-review/);
-  assert.match(serialized, /确认写回/);
+  assert.match(serialized, /草稿预览/);
+  assert.match(serialized, /写回说明/);
   assert.match(serialized, /重新生成/);
-  assert.match(serialized, /不写回/);
-  assert.match(serialized, /confirm_writeback/);
+  assert.match(serialized, /先不写回/);
+  assert.match(serialized, /writeback_info/);
+  assert.doesNotMatch(serialized, /确认写回/);
+  assert.doesNotMatch(serialized, /confirm_writeback/);
 }
 
 function testConfig(): ReturnType<typeof loadConfig> {

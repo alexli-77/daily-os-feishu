@@ -59,7 +59,7 @@ type WorkflowCardCommand = {
 };
 
 type SkillCardAction = {
-  action: 'confirm_writeback' | 'rerun' | 'dismiss';
+  action: 'confirm_writeback' | 'writeback_info' | 'rerun' | 'dismiss';
   skillId: string;
   mode?: string;
 };
@@ -887,15 +887,15 @@ async function handleSkillCardAction(input: {
     await input.channel.send(input.event.chatId, { text: '好的，这次不写回 Feishu 文档。' }, { replyTo: input.event.messageId });
     return;
   }
-  if (input.action.action === 'confirm_writeback') {
+  if (input.action.action === 'confirm_writeback' || input.action.action === 'writeback_info') {
     await input.channel.send(
       input.event.chatId,
       {
         text: [
-          '收到，你选择了写回 Feishu 文档。',
+          '这张卡片现在只是 skill 草稿预览。',
           '',
-          '当前版本还没有开放真实写回执行流，所以我没有修改 Feishu Doc。',
-          '下一步需要接入：读取最近一次 skill 草稿 -> 调用 weekly-review 的写回步骤 -> 写入前再次确认目标文档、周列和 retro/要务列。',
+          '写回 Feishu Doc 的执行流还没开放，所以我没有修改文档。',
+          '开放后会先让你确认目标文档、周列，以及写入「要务」还是「retro」，确认后才会执行。',
         ].join('\n'),
       },
       { replyTo: input.event.messageId },
@@ -1018,7 +1018,7 @@ function parseSkillCardAction(value: unknown): SkillCardAction | null {
   const raw = value as { daily_os_skill_action?: unknown; skill_id?: unknown; mode?: unknown };
   const action = raw.daily_os_skill_action;
   const skillId = raw.skill_id;
-  if ((action !== 'confirm_writeback' && action !== 'rerun' && action !== 'dismiss') || typeof skillId !== 'string' || !skillId) return null;
+  if ((action !== 'confirm_writeback' && action !== 'writeback_info' && action !== 'rerun' && action !== 'dismiss') || typeof skillId !== 'string' || !skillId) return null;
   return {
     action,
     skillId,

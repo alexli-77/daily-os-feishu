@@ -161,7 +161,7 @@ export function renderFeishuSkillCard(text: string, options: FeishuSkillCardOpti
         content: [
           stripTextOnlyInstructions(text),
           '',
-          '> 本次是草稿模式：还没有写回 Feishu 文档。',
+          '> 本次是草稿预览：不会自动修改 Feishu 文档。',
         ].join('\n'),
       },
       { tag: 'hr' },
@@ -172,9 +172,9 @@ export function renderFeishuSkillCard(text: string, options: FeishuSkillCardOpti
       {
         tag: 'action',
         actions: [
-          cardButton('确认写回', { daily_os_skill_action: 'confirm_writeback', skill_id: options.skillId, mode: options.mode }, 'primary'),
-          cardButton('重新生成', { daily_os_skill_action: 'rerun', skill_id: options.skillId, mode: options.mode }, 'default'),
-          cardButton('不写回', { daily_os_skill_action: 'dismiss', skill_id: options.skillId, mode: options.mode }, 'default'),
+          cardButton('重新生成', { daily_os_skill_action: 'rerun', skill_id: options.skillId, mode: options.mode }, 'primary'),
+          cardButton('写回说明', { daily_os_skill_action: 'writeback_info', skill_id: options.skillId, mode: options.mode }, 'default'),
+          cardButton('先不写回', { daily_os_skill_action: 'dismiss', skill_id: options.skillId, mode: options.mode }, 'default'),
         ],
       },
       {
@@ -182,7 +182,7 @@ export function renderFeishuSkillCard(text: string, options: FeishuSkillCardOpti
         elements: [
           {
             tag: 'plain_text',
-            content: '写回按钮目前只做确认入口；真正写回 Feishu doc 的执行流会在下一步接入。',
+            content: '写回执行流还未开放；开放后会先确认目标文档、周列和写入位置。',
           },
         ],
       },
