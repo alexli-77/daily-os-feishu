@@ -7,7 +7,7 @@ import { coalesceChatSuggestions } from '../src/chat/context-analysis.js';
 import type { ChatContextSuggestion } from '../src/chat/context-analysis.js';
 import { parseDailyOsCommand, runParsedDailyOsCommand } from '../src/interaction/daily-os-command.js';
 import { handlePendingBackgroundSuggestionReply } from '../src/service/background-suggestions.js';
-import { renderFeishuWorkflowCard } from '../src/connectors/feishu-sdk.js';
+import { renderFeishuSkillCard, renderFeishuWorkflowCard } from '../src/connectors/feishu-sdk.js';
 import { handleFeishuFeedbackCommand } from '../src/feedback/feishu-feedback.js';
 import { shouldRunScheduledWorkflow } from '../src/service/launchd.js';
 import { formatRecentWorkflowRuns, listRecentWorkflowRuns } from '../src/workflows/run-ledger.js';
@@ -30,7 +30,9 @@ try {
   testDailyOsCommandParsing();
   await testSkillRunCommandUsesConfiguredRunner();
   testEveryFeishuInteractionWorkflowCommandHasCardSender();
+  testEveryFeishuInteractionCommandHasSkillCardSender();
   await testWorkflowCommandUsesCardCallback();
+  await testSkillRunCommandUsesCardCallback();
   await testWeeklyWorkflowCommandPassesEvidenceToCardSummary();
   await testFeedbackPollWorkflowCommandUsesCardSender();
   testDailyPlanSummaryShowsOpenLoopEvidence();
@@ -47,6 +49,7 @@ try {
   await testConfirmLatestPolicyCandidateWithoutId();
   testBackgroundSuggestionDismissAllFromAmbiguousDismiss();
   testWorkflowCardRendering();
+  testSkillCardRendering();
   console.log('Regression tests passed.');
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
@@ -177,6 +180,14 @@ function testEveryFeishuInteractionWorkflowCommandHasCardSender(): void {
   assert.equal(workflowCardSenderCount, commandHandlerCount, 'every Feishu command handler must pass sendWorkflowCard');
 }
 
+function testEveryFeishuInteractionCommandHasSkillCardSender(): void {
+  const source = fs.readFileSync(path.resolve('src/interaction/feishu-interaction.ts'), 'utf8');
+  const commandHandlerCount = source.match(/handleDailyOsCommand\(\{/g)?.length || 0;
+  const skillCardSenderCount = source.match(/sendSkillCard:/g)?.length || 0;
+  assert.ok(commandHandlerCount >= 3, 'expected Feishu interaction command handlers to be discoverable');
+  assert.equal(skillCardSenderCount, commandHandlerCount, 'every Feishu command handler must pass sendSkillCard');
+}
+
 function testDailyOsCommandParsing(): void {
   assert.deepEqual(parseDailyOsCommand('daily-os plan', 'daily-os'), { type: 'workflow', workflow: 'daily_plan' });
   assert.deepEqual(parseDailyOsCommand('daily-os review', 'daily-os'), { type: 'workflow', workflow: 'daily_review' });
@@ -248,6 +259,42 @@ async function testSkillRunCommandUsesConfiguredRunner(): Promise<void> {
   assert.match(replies[1] || '', /Skill: weekly-review/);
   assert.match(replies[1] || '', /Write-back: not performed/);
   assert.match(replies[1] || '', /本周执行对比/);
+}
+
+async function testSkillRunCommandUsesCardCallback(): Promise<void> {
+  const config = testConfig();
+  config.skills.enabled = true;
+  const replies: string[] = [];
+  const cards: Array<{ result: { skillId: string }; text: string }> = [];
+  await runParsedDailyOsCommand(
+    {
+      config,
+      messageId: 'message-1',
+      text: 'daily-os weekly deep',
+      source: 'regression-test',
+      prefix: 'daily-os',
+      reply: async (text) => {
+        replies.push(text);
+      },
+      sendSkillCard: async (input) => {
+        cards.push(input);
+      },
+      runSkillForCommand: async (input) => ({
+        skillId: input.skillId,
+        provider: 'codex',
+        mode: input.mode || 'weekly',
+        inputPackPath: '/tmp/daily-os/weekly-review.md',
+        output: '## 本周执行对比\n\n**完成** ✅\n- 已整理 Daily OS input pack',
+        draftOnly: true,
+      }),
+    },
+    { type: 'skill_run', skillId: 'weekly-review', mode: 'weekly' },
+  );
+
+  assert.deepEqual(replies, ['Running skill weekly-review (weekly)...']);
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0]?.result.skillId, 'weekly-review');
+  assert.match(cards[0]?.text || '', /Write-back: not performed/);
 }
 
 async function testWorkflowCommandUsesCardCallback(): Promise<void> {
@@ -844,6 +891,22 @@ function testWorkflowCardRendering(): void {
   assert.match(serialized, /今日安排/);
   assert.match(serialized, /重排一次/);
   assert.match(serialized, /daily_plan/);
+}
+
+function testSkillCardRendering(): void {
+  const card = renderFeishuSkillCard('## 本周执行对比\n\n**完成** ✅\n- 已整理 input pack', {
+    skillId: 'weekly-review',
+    mode: 'weekly',
+    provider: 'codex',
+    inputPackPath: '/tmp/daily-os/weekly-review.md',
+    draftOnly: true,
+  }) as { elements?: unknown[] };
+  const serialized = JSON.stringify(card);
+  assert.match(serialized, /Skill: weekly-review/);
+  assert.match(serialized, /确认写回/);
+  assert.match(serialized, /重新生成/);
+  assert.match(serialized, /不写回/);
+  assert.match(serialized, /confirm_writeback/);
 }
 
 function testConfig(): ReturnType<typeof loadConfig> {

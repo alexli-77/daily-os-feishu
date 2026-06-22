@@ -9,6 +9,14 @@ export interface FeishuSdkMessageOptions {
   detailId?: string;
 }
 
+export interface FeishuSkillCardOptions {
+  skillId: string;
+  mode: string;
+  provider: string;
+  inputPackPath: string;
+  draftOnly: boolean;
+}
+
 export interface FeishuSdkStatus {
   ok: boolean;
   missing: string[];
@@ -136,6 +144,48 @@ export function renderFeishuWorkflowCard(text: string, options?: FeishuSdkMessag
             { tag: 'note', elements: [{ tag: 'plain_text', content: '想看原因点详情；想改安排点调整；按钮不可用时直接回复 daily-os details。' }] },
           ]
         : []),
+    ],
+  };
+}
+
+export function renderFeishuSkillCard(text: string, options: FeishuSkillCardOptions): object {
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      template: 'purple',
+      title: { tag: 'plain_text', content: `Skill: ${options.skillId}` },
+    },
+    elements: [
+      {
+        tag: 'markdown',
+        content: [
+          stripTextOnlyInstructions(text),
+          '',
+          '> 本次是草稿模式：还没有写回 Feishu 文档。',
+        ].join('\n'),
+      },
+      { tag: 'hr' },
+      {
+        tag: 'markdown',
+        content: [`Provider：${options.provider}`, `Mode：${options.mode}`, `Input pack：${options.inputPackPath}`].join('\n'),
+      },
+      {
+        tag: 'action',
+        actions: [
+          cardButton('确认写回', { daily_os_skill_action: 'confirm_writeback', skill_id: options.skillId, mode: options.mode }, 'primary'),
+          cardButton('重新生成', { daily_os_skill_action: 'rerun', skill_id: options.skillId, mode: options.mode }, 'default'),
+          cardButton('不写回', { daily_os_skill_action: 'dismiss', skill_id: options.skillId, mode: options.mode }, 'default'),
+        ],
+      },
+      {
+        tag: 'note',
+        elements: [
+          {
+            tag: 'plain_text',
+            content: '写回按钮目前只做确认入口；真正写回 Feishu doc 的执行流会在下一步接入。',
+          },
+        ],
+      },
     ],
   };
 }

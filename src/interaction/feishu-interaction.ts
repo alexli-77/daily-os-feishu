@@ -35,8 +35,9 @@ import { appendDailyMemory, appendFeedbackLog, readLatestWorkflowOutput, readWor
 import { formatLatestWorkflowDetails, formatWorkflowSummaryForFeishu } from '../workflows/summary.js';
 import { markWorkflowRunFailed, markWorkflowRunSucceeded } from '../workflows/run-ledger.js';
 import { handlePendingBackgroundSuggestionReply } from '../service/background-suggestions.js';
-import { renderFeishuWorkflowCard } from '../connectors/feishu-sdk.js';
+import { renderFeishuSkillCard, renderFeishuWorkflowCard } from '../connectors/feishu-sdk.js';
 import { sendFeishuCard } from '../connectors/lark-cli.js';
+import type { SkillRunResult } from '../skills/runner.js';
 
 interface FeishuInteractionControls {
   stop: () => Promise<void>;
@@ -55,6 +56,12 @@ type ConfigProvider = AppConfig | (() => AppConfig);
 type WorkflowCardCommand = {
   command: 'details' | 'progress' | 'chat todo' | 'chat review' | 'confirm_todo' | 'confirm_review' | 'revise_todo';
   detailId?: string;
+};
+
+type SkillCardAction = {
+  action: 'confirm_writeback' | 'rerun' | 'dismiss';
+  skillId: string;
+  mode?: string;
 };
 
 const CARD_ACTION_DEDUPE_MS = 30_000;
@@ -311,6 +318,9 @@ async function runBatch(input: {
       sendWorkflowCard: async ({ workflow, date, summary }) => {
         await sendWorkflowCardOutput(input.config, workflow, date, summary, `interaction:${input.scope}`);
       },
+      sendSkillCard: async ({ result: skillResult, text: skillText }) => {
+        await sendSkillCardOutput(input.config, skillText, skillResult, `interaction:${input.scope}`);
+      },
       reply: async (reply) => {
         await replyToMessage(input.channel, last, reply, input.config.interaction.feishu.reply_mode);
       },
@@ -345,6 +355,9 @@ async function runBatch(input: {
     stopAgentRun: async () => stopAgentRun(input.activeAgentRuns, input.scope),
     sendWorkflowCard: async ({ workflow, date, summary }) => {
       await sendWorkflowCardOutput(input.config, workflow, date, summary, `interaction:${input.scope}`);
+    },
+    sendSkillCard: async ({ result: skillResult, text: skillText }) => {
+      await sendSkillCardOutput(input.config, skillText, skillResult, `interaction:${input.scope}`);
     },
     reply: async (reply) => {
       await replyToMessage(input.channel, last, reply, input.config.interaction.feishu.reply_mode);
@@ -594,6 +607,11 @@ async function handleCardAction(input: {
     await handleAgentRunCardAction({ ...input, action: agentAction });
     return;
   }
+  const skillAction = parseSkillCardAction(input.event.action.value);
+  if (skillAction) {
+    await handleSkillCardAction({ ...input, action: skillAction });
+    return;
+  }
   const commandAction = parseWorkflowCardCommand(input.event.action.value);
   if (commandAction) {
     await handleWorkflowCardCommand({ ...input, command: commandAction });
@@ -726,6 +744,9 @@ async function handleWorkflowCardCommand(input: {
     sendWorkflowCard: async ({ workflow, date, summary }) => {
       await sendWorkflowCardOutput(input.config, workflow, date, summary, `card-command:${input.event.chatId}`);
     },
+    sendSkillCard: async ({ result: skillResult, text: skillText }) => {
+      await sendSkillCardOutput(input.config, skillText, skillResult, `card-command:${input.event.chatId}`);
+    },
     reply: async (reply) => {
       await input.channel.send(input.event.chatId, toSendInput(reply, input.config.interaction.feishu.reply_mode), {
         replyTo: input.event.messageId,
@@ -828,6 +849,68 @@ async function handleAgentRunCardAction(input: {
   await input.channel.send(input.event.chatId, { text: `已加入后续消息队列（${queued}）。` }, { replyTo: input.event.messageId });
 }
 
+async function handleSkillCardAction(input: {
+  config: AppConfig;
+  channel: LarkChannel;
+  event: CardActionEvent;
+  activeAgentRuns: Map<string, ActiveAgentRun>;
+  action: SkillCardAction;
+}): Promise<void> {
+  const access = decideFeishuAccess(input.config, {
+    senderOpenId: input.event.operator.openId,
+    chatId: input.event.chatId,
+    chatType: 'group',
+  });
+  if (!access.ok) {
+    console.warn(`[interaction] denied skill card action ${input.event.chatId}; operator=${input.event.operator.openId.slice(-6)}; reason=${access.reason}`);
+    return;
+  }
+  if (input.action.action === 'dismiss') {
+    await input.channel.send(input.event.chatId, { text: '好的，这次不写回 Feishu 文档。' }, { replyTo: input.event.messageId });
+    return;
+  }
+  if (input.action.action === 'confirm_writeback') {
+    await input.channel.send(
+      input.event.chatId,
+      {
+        text: [
+          '收到，你选择了写回 Feishu 文档。',
+          '',
+          '当前版本还没有开放真实写回执行流，所以我没有修改 Feishu Doc。',
+          '下一步需要接入：读取最近一次 skill 草稿 -> 调用 weekly-review 的写回步骤 -> 写入前再次确认目标文档、周列和 retro/要务列。',
+        ].join('\n'),
+      },
+      { replyTo: input.event.messageId },
+    );
+    return;
+  }
+
+  const commandText = `${input.config.interaction.feishu.command_prefix} skill run ${input.action.skillId}${input.action.mode ? ` ${input.action.mode}` : ''}`;
+  const result = await handleDailyOsCommand({
+    config: input.config,
+    messageId: input.event.messageId,
+    text: commandText,
+    source: `skill-card:${input.event.chatId}`,
+    prefix: input.config.interaction.feishu.command_prefix,
+    sendWorkflowOutput: false,
+    accessDecision: access,
+    sessionScopeId: input.event.chatId,
+    stopAgentRun: async () => stopAgentRun(input.activeAgentRuns, input.event.chatId),
+    sendWorkflowCard: async ({ workflow, date, summary }) => {
+      await sendWorkflowCardOutput(input.config, workflow, date, summary, `skill-card:${input.event.chatId}`);
+    },
+    sendSkillCard: async ({ result: skillResult, text: skillText }) => {
+      await sendSkillCardOutput(input.config, skillText, skillResult, `skill-card:${input.event.chatId}`);
+    },
+    reply: async (reply) => {
+      await input.channel.send(input.event.chatId, toSendInput(reply, input.config.interaction.feishu.reply_mode), {
+        replyTo: input.event.messageId,
+      });
+    },
+  });
+  if (result.handled) console.log(`[interaction] handled ${input.event.chatId}; skill-card=${input.action.action}`);
+}
+
 async function lookupMessageThreadId(channel: LarkChannel, messageId: string): Promise<string | undefined> {
   try {
     const response = (await channel.rawClient.im.v1.message.get({
@@ -912,6 +995,19 @@ function parseWorkflowCardCommand(value: unknown): WorkflowCardCommand | null {
   return null;
 }
 
+function parseSkillCardAction(value: unknown): SkillCardAction | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as { daily_os_skill_action?: unknown; skill_id?: unknown; mode?: unknown };
+  const action = raw.daily_os_skill_action;
+  const skillId = raw.skill_id;
+  if ((action !== 'confirm_writeback' && action !== 'rerun' && action !== 'dismiss') || typeof skillId !== 'string' || !skillId) return null;
+  return {
+    action,
+    skillId,
+    ...(typeof raw.mode === 'string' && raw.mode ? { mode: raw.mode } : {}),
+  };
+}
+
 function claimCardAction(recent: Map<string, number>, event: CardActionEvent): boolean {
   const now = Date.now();
   for (const [key, expiresAt] of recent) {
@@ -945,6 +1041,22 @@ async function sendWorkflowCardOutput(config: AppConfig, workflow: WorkflowName,
   console.log(`[interaction] sending workflow-card source=${source}; workflow=${workflow}; bytes=${Buffer.byteLength(summary, 'utf8')}`);
   await sendFeishuCard(config, renderFeishuWorkflowCard(summary, { workflow, date }), summary);
   console.log(`[interaction] sent workflow-card source=${source}; workflow=${workflow}`);
+}
+
+async function sendSkillCardOutput(config: AppConfig, text: string, result: SkillRunResult, source: string): Promise<void> {
+  console.log(`[interaction] sending skill-card source=${source}; skill=${result.skillId}; bytes=${Buffer.byteLength(text, 'utf8')}`);
+  await sendFeishuCard(
+    config,
+    renderFeishuSkillCard(result.output, {
+      skillId: result.skillId,
+      mode: result.mode,
+      provider: result.provider,
+      inputPackPath: result.inputPackPath,
+      draftOnly: result.draftOnly,
+    }),
+    text,
+  );
+  console.log(`[interaction] sent skill-card source=${source}; skill=${result.skillId}`);
 }
 
 function toSendInput(text: string, mode: 'markdown' | 'text'): { markdown: string } | { text: string } {

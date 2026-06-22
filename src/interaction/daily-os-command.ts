@@ -48,6 +48,7 @@ export interface DailyOsCommandContext {
   prefix: string;
   reply: (text: string) => Promise<void>;
   sendWorkflowCard?: (input: { workflow: WorkflowName; date: string; text: string; summary: string }) => Promise<void>;
+  sendSkillCard?: (input: { result: SkillRunResult; text: string }) => Promise<void>;
   sendWorkflowOutput?: boolean;
   runWorkflowForCommand?: typeof runWorkflow;
   collectEvidenceForSummary?: typeof collectEvidence;
@@ -216,7 +217,12 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
         source: context.source,
         messageId: context.messageId,
       });
-      await context.reply(formatSkillRunResult(result));
+      const text = formatSkillRunResult(result);
+      if (context.sendSkillCard) {
+        await context.sendSkillCard({ result, text });
+      } else {
+        await context.reply(text);
+      }
       return;
     }
     case 'progress': {
