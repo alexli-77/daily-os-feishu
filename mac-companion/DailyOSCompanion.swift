@@ -1,12 +1,20 @@
 import AppKit
 import AVFoundation
+import CoreImage
 import Foundation
 
 private enum Constants {
   static let launchAgentLabel = "com.daily-os-feishu.agent"
   static let floatingBadgeSize = NSSize(width: 124, height: 124)
   static let penguinImageSize = NSSize(width: 96, height: 96)
-  static let effectFileNames = ["penguin-fx-flap.mov", "penguin-fx-roll.mov", "penguin-fx-jump.mov"]
+  static let effectFileNames = [
+    "penguin-fx-video.mp4",
+    "penguin-fx-video-alt.mp4",
+    "penguin-fx-thinking.mp4",
+    "penguin-fx-celebrating.mp4",
+    "penguin-fx-roll.mov",
+    "penguin-fx-jump.mov"
+  ]
 }
 
 final class FloatingBadgeButton: NSButton {
@@ -20,6 +28,19 @@ final class FloatingBadgeButton: NSButton {
   private var effectLayer: AVPlayerLayer?
   private var effectEndObserver: NSObjectProtocol?
   private var isPlayingEffect = false
+  private static let transparentBlackKernel = CIColorKernel(source: """
+  kernel vec4 transparentBlack(__sample pixel) {
+    float key = max(max(pixel.r, pixel.g), pixel.b);
+    if (key < 0.018) {
+      return vec4(pixel.r, pixel.g, pixel.b, 0.0);
+    }
+    return pixel;
+  }
+  """)
+
+  override func highlight(_ flag: Bool) {
+    // Keep the desktop character visually stable while pressed.
+  }
 
   override func updateTrackingAreas() {
     if let trackingArea {
@@ -74,7 +95,9 @@ final class FloatingBadgeButton: NSButton {
         window.setFrameOrigin(NSPoint(x: startFrame.origin.x + deltaX, y: startFrame.origin.y + deltaY))
       case .leftMouseUp:
         if !didDrag {
-          performClick(nil)
+          if let action {
+            _ = NSApp.sendAction(action, to: target, from: self)
+          }
         }
         return
       default:
@@ -87,7 +110,8 @@ final class FloatingBadgeButton: NSButton {
     cancelBlink()
     stopEffect()
 
-    let player = AVPlayer(url: url)
+    let item = effectPlayerItem(for: url)
+    let player = AVPlayer(playerItem: item)
     player.actionAtItemEnd = .pause
 
     let layer = AVPlayerLayer(player: player)
@@ -124,6 +148,22 @@ final class FloatingBadgeButton: NSButton {
     effectLayer = nil
     isPlayingEffect = false
     setIdleImage()
+  }
+
+  private func effectPlayerItem(for url: URL) -> AVPlayerItem {
+    let asset = AVURLAsset(url: url)
+    let item = AVPlayerItem(asset: asset)
+    if url.pathExtension.lowercased() == "mp4" {
+      item.videoComposition = AVMutableVideoComposition(asset: asset) { request in
+        let source = request.sourceImage
+        guard let keyed = Self.transparentBlackKernel?.apply(extent: source.extent, arguments: [source]) else {
+          request.finish(with: source, context: nil)
+          return
+        }
+        request.finish(with: keyed, context: nil)
+      }
+    }
+    return item
   }
 
   private func playBlink() {
