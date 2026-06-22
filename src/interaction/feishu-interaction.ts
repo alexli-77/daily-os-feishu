@@ -38,7 +38,7 @@ import { handlePendingBackgroundSuggestionReply } from '../service/background-su
 import { renderFeishuSkillCard, renderFeishuSkillWritebackPreviewCard, renderFeishuWorkflowCard } from '../connectors/feishu-sdk.js';
 import { sendFeishuCard } from '../connectors/lark-cli.js';
 import type { SkillRunResult } from '../skills/runner.js';
-import { executeWeeklyReviewWriteback, prepareWeeklyReviewWriteback } from '../skills/weekly-review-writeback.js';
+import { executeLifeReviewOsWriteback, prepareLifeReviewOsWriteback } from '../skills/life-review-os.js';
 
 interface FeishuInteractionControls {
   stop: () => Promise<void>;
@@ -897,7 +897,7 @@ async function handleSkillCardAction(input: {
       return;
     }
     try {
-      const plan = await prepareWeeklyReviewWriteback({
+      const plan = await prepareLifeReviewOsWriteback({
         config: input.config,
         skillId: input.action.skillId,
         ...(input.action.mode ? { mode: input.action.mode } : {}),
@@ -935,7 +935,7 @@ async function handleSkillCardAction(input: {
       return;
     }
     try {
-      const result = await executeWeeklyReviewWriteback(input.config, input.action.token);
+      const result = await executeLifeReviewOsWriteback(input.config, input.action.skillId, input.action.token);
       await input.channel.send(
         input.event.chatId,
         {

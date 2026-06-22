@@ -20,6 +20,7 @@ import { decisionPolicyFiles } from '../src/decision/policy.js';
 import { collectFeishuUserMessageRecords, isFeishuAppMessageRecord } from '../src/utils/feishu-message-records.js';
 import { buildCliPrompt, normalizeAgentOutput } from '../src/agent/openai-agent.js';
 import { detectTableLayout, extractWeeklyWritebackItems, targetWeekLabelForDate } from '../src/skills/weekly-review-writeback.js';
+import { executeLifeReviewOsWriteback, prepareLifeReviewOsWriteback, runLifeReviewOsSkill } from '../src/skills/life-review-os.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-os-regression-'));
 
@@ -54,6 +55,7 @@ try {
   testSkillCardRendering();
   testSkillWritebackPreviewCardRendering();
   testWeeklyReviewWritebackParsing();
+  await testLifeReviewOsBridgeUsesExternalCli();
   console.log('Regression tests passed.');
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
@@ -989,6 +991,68 @@ function testWeeklyReviewWritebackParsing(): void {
     'MIT 🔴 发出 BEI 核实邮件，问清学签中断对注册的影响',
     '记录 BEI 预期回复时限，设置 follow-up 日期',
   ]);
+}
+
+async function testLifeReviewOsBridgeUsesExternalCli(): Promise<void> {
+  const root = path.join(tmp, 'fake-life-review-os');
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  const cli = path.join(bin, 'life-review-os.mjs');
+  fs.writeFileSync(
+    cli,
+    [
+      '#!/usr/bin/env node',
+      'const args = process.argv.slice(2);',
+      'if (args[0] === "run") {',
+      '  console.log(JSON.stringify({ ok: true, run_id: "11111111-1111-4111-8111-111111111111", draft: "## 复盘\\n内容\\n\\n```json\\n{\\\"writeback_plan\\\":[{\\\"row_index\\\":3,\\\"text\\\":\\\"Portfolio review\\\"}]}\\n```", writeback: { ready: true } }));',
+      '} else if (args[0] === "preview") {',
+      '  console.log(JSON.stringify({ ok: true, run_id: "11111111-1111-4111-8111-111111111111", mode: "weekly", writeback: { ready: true, doc_label: "Weekly 2026", target_week: "6.22-6.28", task_header: "6.22-6.28 要务", action: "append_to_existing_empty_column", items: [{ text: "Portfolio review", target_row: 3, target_row_label: "KR2 协助 portfolio", is_mit: false }] } }));',
+      '} else if (args[0] === "writeback") {',
+      '  console.log(JSON.stringify({ ok: true, task_header: "6.22-6.28 要务", item_count: 1, inserted_columns: false }));',
+      '}',
+    ].join('\n'),
+    'utf8',
+  );
+  const entry = {
+    id: 'weekly-review',
+    provider: 'claude' as const,
+    path: path.join(root, 'SKILL.md'),
+    workdir: root,
+    default_mode: 'weekly',
+    effects: ['read' as const, 'draft' as const, 'feishu_write' as const],
+    require_confirmation_for: ['feishu_write' as const],
+  };
+  fs.writeFileSync(entry.path, '# fake skill\n', 'utf8');
+
+  const run = await runLifeReviewOsSkill({
+    entry,
+    mode: 'weekly',
+    provider: 'claude',
+    userText: '',
+    inputPackPath: path.join(tmp, 'input.md'),
+  });
+  assert.equal(run.runId, '11111111-1111-4111-8111-111111111111');
+  assert.match(run.draft, /## 复盘/);
+  assert.doesNotMatch(run.draft, /writeback_plan/);
+
+  const config = testConfig();
+  config.skills.enabled = true;
+  config.skills.inputs_dir = path.join(tmp, 'skill-inputs');
+  config.skills.registry = [entry];
+  fs.mkdirSync(config.skills.inputs_dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(config.skills.inputs_dir, '_skill-runs.json'),
+    JSON.stringify([{ runId: run.runId, skillId: 'weekly-review', mode: 'weekly', output: run.draft, createdAt: new Date().toISOString() }]),
+    'utf8',
+  );
+
+  const preview = await prepareLifeReviewOsWriteback({ config, skillId: 'weekly-review', mode: 'weekly' });
+  assert.equal(preview.token, run.runId);
+  assert.equal(preview.items[0]?.targetRowLabel, 'KR2 协助 portfolio');
+
+  const written = await executeLifeReviewOsWriteback(config, 'weekly-review', preview.token);
+  assert.equal(written.taskHeader, '6.22-6.28 要务');
+  assert.equal(written.itemCount, 1);
 }
 
 function testConfig(): ReturnType<typeof loadConfig> {

@@ -9,6 +9,7 @@ import { loadMemory, readLatestWorkflowOutput } from '../storage/memory.js';
 import { readProgressLedger } from '../progress/capture.js';
 import { listRecentWorkflowRuns } from '../workflows/run-ledger.js';
 import { collectEvidence } from '../workflows/evidence.js';
+import { isLifeReviewOsEntry, runLifeReviewOsSkill } from './life-review-os.js';
 
 type SkillEntry = AppConfig['skills']['registry'][number];
 type SkillProvider = SkillEntry['provider'];
@@ -103,6 +104,27 @@ export async function runConfiguredSkill(input: SkillRunInput): Promise<SkillRun
     messageId: input.messageId,
   });
   const inputPackPath = writeSkillInputPack(input.config, entry.id, mode, inputPack);
+  const provider = resolveProvider(input.config, entry);
+  if (isLifeReviewOsEntry(entry) && mode === 'weekly') {
+    const lifeReview = await runLifeReviewOsSkill({
+      entry,
+      mode,
+      provider,
+      userText: input.userText || '',
+      inputPackPath,
+    });
+    const result = {
+      runId: lifeReview.runId,
+      skillId: entry.id,
+      provider,
+      mode,
+      inputPackPath,
+      output: normalizeSkillOutput(lifeReview.draft),
+      draftOnly: true,
+    };
+    recordLatestSkillRun(input.config, result);
+    return result;
+  }
   const prompt = buildSkillPrompt({
     entry,
     skillPath,
@@ -113,7 +135,6 @@ export async function runConfiguredSkill(input: SkillRunInput): Promise<SkillRun
     inputPackPath,
     skillFiles: loadSkillFiles(skillPath),
   });
-  const provider = resolveProvider(input.config, entry);
   const output = provider === 'claude' ? await runClaudeSkill(prompt, workdir, input.config) : await runCodexSkill(prompt, workdir, input.config);
   const result = {
     runId: crypto.randomUUID(),
