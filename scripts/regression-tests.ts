@@ -962,6 +962,33 @@ function testWeeklyReviewWritebackParsing(): void {
   ]);
   assert.equal(targetWeekLabelForDate('2026-06-22'), '6.22-6.28');
   assert.equal(detectTableLayout(['🐶 重点OKR', 'retro', '6.15-6.21 要务'], 'retro', '要务'), 'retro_before_task');
+
+  const blockedThenPlan = [
+    '🐶 重点OKR 章节可读取，下周计划据此生成。',
+    '',
+    '---',
+    '',
+    '## 📋 下周计划（6.22-6.28）',
+    '',
+    '> 基于 🐶 重点OKR：P0 O1',
+    '',
+    '**MIT 🔴**：今天上班时间发出 BEI 学签/注册中断核实邮件（LEO-71）',
+    '- 完成标准：邮件发出并留底',
+    '',
+    '---',
+    '',
+    '**KR：身份合法性（BEI 核实线）**',
+    '1. MIT 🔴 发出 BEI 核实邮件，问清学签中断对注册的影响',
+    '2. 记录 BEI 预期回复时限，设置 follow-up 日期',
+    '',
+    '[如有余力]',
+    '- Apple Watch 线下退货',
+  ].join('\n');
+  assert.deepEqual(extractWeeklyWritebackItems(blockedThenPlan), [
+    'MIT 🔴: 今天上班时间发出 BEI 学签/注册中断核实邮件（LEO-71）',
+    'MIT 🔴 发出 BEI 核实邮件，问清学签中断对注册的影响',
+    '记录 BEI 预期回复时限，设置 follow-up 日期',
+  ]);
 }
 
 function testConfig(): ReturnType<typeof loadConfig> {

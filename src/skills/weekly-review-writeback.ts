@@ -193,14 +193,17 @@ export async function executeWeeklyReviewWriteback(config: AppConfig, token: str
 
 export function extractWeeklyWritebackItems(output: string): string[] {
   const lines = output.split('\n').map((line) => line.trim()).filter(Boolean);
-  const startIndex = lines.findIndex((line) => /下周|next[-\s]?week|带走|计划/.test(stripMarkdown(line)));
+  const headingIndex = lines.findIndex((line) => isNextWeekPlanHeading(stripMarkdown(line)));
+  const startIndex = headingIndex >= 0 ? headingIndex : lines.findIndex((line) => /下周|next[-\s]?week|带走|计划/.test(stripMarkdown(line)));
   const relevant = startIndex >= 0 ? lines.slice(startIndex + 1) : lines;
   const items: string[] = [];
   for (let index = 0; index < relevant.length; index += 1) {
     const raw = stripMarkdown(relevant[index] || '');
     if (!raw) continue;
-    if (/^(如果|您确认|你确认|想看|按钮|已写入|目标文档|写回|---)/.test(raw)) break;
-    if (/^\[?如有余力\]?/.test(raw)) continue;
+    if (/^-{3,}$/.test(raw)) continue;
+    if (/^\[?如有余力\]?/.test(raw)) break;
+    if (/^(如果|您确认|你确认|想看|按钮|已写入|目标文档|写回)/.test(raw)) break;
+    if (/^>?\s*基于\s/.test(raw)) continue;
     const mit = raw.match(/^MIT\s*🔴?[：:]\s*(.+)$/i);
     if (mit?.[1]) {
       items.push(`MIT 🔴: ${mit[1].trim()}`);
@@ -209,6 +212,7 @@ export function extractWeeklyWritebackItems(output: string): string[] {
     const numbered = raw.match(/^(?:[-*]|\d+[.、])\s*(.+)$/);
     if (!numbered?.[1]) continue;
     let item = numbered[1].replace(/\s+MIT\/[—-]$/i, '').trim();
+    if (/^完成标准[：:]/.test(item)) continue;
     const next = stripMarkdown(relevant[index + 1] || '');
     if (/^目标[：:]/.test(next)) {
       item = `${item}；${next}`;
@@ -217,6 +221,10 @@ export function extractWeeklyWritebackItems(output: string): string[] {
     if (item && !/^目标[：:]/.test(item)) items.push(item);
   }
   return Array.from(new Set(items)).slice(0, 10);
+}
+
+function isNextWeekPlanHeading(value: string): boolean {
+  return /^(?:#{1,6}\s*)?(?:📋\s*)?(?:下周计划|下周带走|next[-\s]?week plan)(?:\s|（|\(|$)/i.test(value);
 }
 
 export function detectTableLayout(headers: string[], retroSuffix: string, taskSuffix: string): TableLayout {
