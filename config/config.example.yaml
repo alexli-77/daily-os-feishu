@@ -53,6 +53,7 @@ output:
     identity: "bot" # bot | user
     chat_id_env: "FEISHU_CHAT_ID"
     send_mode: "markdown" # markdown | text
+    summary_style: "style1" # style1 = grouped brief; style2 = action list
 
 feedback:
   feishu:

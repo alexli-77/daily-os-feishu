@@ -521,12 +521,17 @@ output:
     provider: "auto" # auto | sdk | lark_cli
     chat_id_env: "FEISHU_CHAT_ID"
     send_mode: "markdown"
+    summary_style: "style1" # style1 = grouped brief; style2 = action list
 ```
 
 `auto` is the recommended default: Daily OS sends through the official SDK when
 `LARK_APP_ID` and `LARK_APP_SECRET` are present, and falls back to `lark-cli`
 otherwise. Use `sdk` to require bot SDK output, or `lark_cli` to force the old
 CLI path.
+
+Choose `summary_style` from the UI Setup tab or `config.yaml`. `style1` keeps
+the current grouped brief format; `style2` uses a flatter action-list format for
+users who prefer fewer sections.
 
 When SDK output is used with `send_mode: "markdown"`, workflow summaries are
 sent as interactive Feishu cards with buttons for details, progress, review, and

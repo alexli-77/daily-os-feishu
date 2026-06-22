@@ -35,6 +35,7 @@ try {
   testDailyPlanSummaryShowsOpenLoopEvidence();
   testDailyPlanSummaryKeepsReadableRowsAndUrgentQuestion();
   testDailyPlanSummaryStyle2RemovesGroupsAndMarksAi();
+  testDashboardExposesSummaryStyleSetting();
   testWorkflowSummaryQuotesLinearMetadata();
   testWorkflowDetailsShowEvidenceTrace();
   testSchedulerSkipsDailyReviewOnWeeklyReviewDay();
@@ -409,6 +410,15 @@ function testDailyPlanSummaryStyle2RemovesGroupsAndMarksAi(): void {
   assert.match(summary, /AI 解释对比材料.*（AI）/);
   assert.match(summary, /CUTTO-355「script 滚动及 frame 大小 Verify」/);
   assert.match(summary, /额外紧急事项/);
+}
+
+function testDashboardExposesSummaryStyleSetting(): void {
+  const source = fs.readFileSync(path.resolve('src/ui/server.ts'), 'utf8');
+  assert.match(source, /id="output-summary-style"/);
+  assert.match(source, /Structured brief/);
+  assert.match(source, /Action list/);
+  assert.match(source, /set\('output-summary-style', config\.output\.feishu\.summary_style \|\| 'style1'\)/);
+  assert.match(source, /next\.output\.feishu\.summary_style = value\('output-summary-style'\) \|\| 'style1'/);
 }
 
 function testWorkflowSummaryQuotesLinearMetadata(): void {

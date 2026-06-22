@@ -424,9 +424,12 @@ output:
     provider: "auto" # auto | sdk | lark_cli
     chat_id_env: "FEISHU_CHAT_ID"
     send_mode: "markdown"
+    summary_style: "style1" # style1 = 分组简报；style2 = 行动清单
 ```
 
 推荐默认使用 `auto`：如果 `LARK_APP_ID` 和 `LARK_APP_SECRET` 已配置，就走官方 SDK；否则回退到 `lark-cli`。如果想强制 bot SDK 输出，选 `sdk`；如果想保持旧路径，选 `lark_cli`。
+
+`summary_style` 可以在 UI 的 Setup 页或 `config.yaml` 里选择。`style1` 保留现在的分组简报样式；`style2` 是更扁平的行动清单样式，适合不想看太多分组标题的用户。
 
 使用 SDK 输出且 `send_mode: "markdown"` 时，计划/复盘摘要会以飞书可交互卡片发送，卡片上有「展开完整内容」「确认今日进展」「生成复盘」「重新生成」等按钮。按钮回调需要飞书 interaction layer 正在运行，并且飞书应用已启用卡片 callback 事件。如果飞书提示“该应用的未配置卡片回调”，请到同一个 App ID 的飞书开发者后台启用交互卡片回调/事件投递，并保持本机 `npm run start` 运行。卡片也会保留文字兜底：`daily-os details`。
 

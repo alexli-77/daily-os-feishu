@@ -888,6 +888,7 @@ const HTML = String.raw`<!doctype html>
               </div>
               <label>Feishu output provider<select id="output-provider"><option>auto</option><option>sdk</option><option>lark_cli</option></select></label>
               <label>Feishu send mode<select id="output-send-mode"><option>markdown</option><option>text</option></select></label>
+              <label>Message style<select id="output-summary-style"><option value="style1">Structured brief</option><option value="style2">Action list</option></select></label>
               <label>Feedback prefix<input id="feedback-prefix" /></label>
               <label>Feedback poll limit<input id="feedback-poll-limit" type="number" min="1" max="100" /></label>
             </div>
@@ -1672,6 +1673,7 @@ function render() {
   set('env-FEISHU_OWNER_OPEN_ID', state.env.FEISHU_OWNER_OPEN_ID);
   set('output-provider', config.output.feishu.provider || 'auto');
   set('output-send-mode', config.output.feishu.send_mode);
+  set('output-summary-style', config.output.feishu.summary_style || 'style1');
   checked('output-feishu-enabled', config.output.feishu.enabled);
   checked('feedback-feishu-enabled', config.feedback.feishu.enabled);
   set('feedback-prefix', config.feedback.feishu.command_prefix);
@@ -1803,6 +1805,7 @@ async function saveAll() {
   next.output.feishu.enabled = isChecked('output-feishu-enabled');
   next.output.feishu.provider = value('output-provider');
   next.output.feishu.send_mode = value('output-send-mode');
+  next.output.feishu.summary_style = value('output-summary-style') || 'style1';
   next.feedback.feishu.enabled = isChecked('feedback-feishu-enabled');
   next.feedback.feishu.command_prefix = value('feedback-prefix');
   next.feedback.feishu.poll_limit = Number(value('feedback-poll-limit') || 20);
