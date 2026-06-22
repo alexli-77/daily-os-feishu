@@ -7,7 +7,7 @@ import { coalesceChatSuggestions } from '../src/chat/context-analysis.js';
 import type { ChatContextSuggestion } from '../src/chat/context-analysis.js';
 import { parseDailyOsCommand, runParsedDailyOsCommand } from '../src/interaction/daily-os-command.js';
 import { handlePendingBackgroundSuggestionReply } from '../src/service/background-suggestions.js';
-import { renderFeishuSkillCard, renderFeishuWorkflowCard } from '../src/connectors/feishu-sdk.js';
+import { renderFeishuSkillCard, renderFeishuSkillWritebackPreviewCard, renderFeishuWorkflowCard } from '../src/connectors/feishu-sdk.js';
 import { handleFeishuFeedbackCommand, shouldTreatAsFeedbackWorkflowRevision } from '../src/feedback/feishu-feedback.js';
 import { shouldRunScheduledWorkflow } from '../src/service/launchd.js';
 import { formatRecentWorkflowRuns, listRecentWorkflowRuns } from '../src/workflows/run-ledger.js';
@@ -19,6 +19,7 @@ import { createPolicyCandidate, listPolicyCandidates } from '../src/decision/can
 import { decisionPolicyFiles } from '../src/decision/policy.js';
 import { collectFeishuUserMessageRecords, isFeishuAppMessageRecord } from '../src/utils/feishu-message-records.js';
 import { buildCliPrompt, normalizeAgentOutput } from '../src/agent/openai-agent.js';
+import { detectTableLayout, extractWeeklyWritebackItems, targetWeekLabelForDate } from '../src/skills/weekly-review-writeback.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-os-regression-'));
 
@@ -51,6 +52,8 @@ try {
   testBackgroundSuggestionDismissAllFromAmbiguousDismiss();
   testWorkflowCardRendering();
   testSkillCardRendering();
+  testSkillWritebackPreviewCardRendering();
+  testWeeklyReviewWritebackParsing();
   console.log('Regression tests passed.');
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
@@ -913,12 +916,52 @@ function testSkillCardRendering(): void {
   const serialized = JSON.stringify(card);
   assert.match(serialized, /Skill: weekly-review/);
   assert.match(serialized, /草稿预览/);
-  assert.match(serialized, /写回说明/);
+  assert.match(serialized, /准备写回/);
   assert.match(serialized, /重新生成/);
   assert.match(serialized, /先不写回/);
-  assert.match(serialized, /writeback_info/);
+  assert.match(serialized, /prepare_writeback/);
   assert.doesNotMatch(serialized, /确认写回/);
   assert.doesNotMatch(serialized, /confirm_writeback/);
+}
+
+function testSkillWritebackPreviewCardRendering(): void {
+  const card = renderFeishuSkillWritebackPreviewCard({
+    token: 'confirm-token',
+    skillId: 'weekly-review',
+    mode: 'weekly',
+    docLabel: 'Weekly 2026',
+    weekLabel: '6.22-6.28',
+    taskHeader: '6.22-6.28 要务',
+    action: 'insert_columns',
+    items: [{ text: 'MIT 🔴: LEO-7 发送前最终检查', targetRowLabel: 'KR1 完成博士研究方向提案', isMit: true }],
+  });
+  const serialized = JSON.stringify(card);
+  assert.match(serialized, /确认写回 Feishu/);
+  assert.match(serialized, /6.22-6.28 要务/);
+  assert.match(serialized, /execute_writeback/);
+  assert.match(serialized, /confirm-token/);
+}
+
+function testWeeklyReviewWritebackParsing(): void {
+  const output = [
+    '## 📋 下周计划（6.22-6.28）',
+    '',
+    '**MIT 🔴**：LEO-7 Heng Li 意向邮件发送前最终检查',
+    '',
+    '1. P0 | 您：LEO-7 Heng Li 意向邮件',
+    '目标：下周唯一主线',
+    '2. P1 | Codex：Feishu 文档 / 方案 / 会议记录更新检查',
+    '目标：让 Weekly 的 MIT、Linear 状态、真实发出一致',
+    '',
+    '如果本周结论或下周带走项要改，直接回复：daily-os 修改周计划：……',
+  ].join('\n');
+  assert.deepEqual(extractWeeklyWritebackItems(output), [
+    'MIT 🔴: LEO-7 Heng Li 意向邮件发送前最终检查',
+    'P0 | 您：LEO-7 Heng Li 意向邮件；目标：下周唯一主线',
+    'P1 | Codex：Feishu 文档 / 方案 / 会议记录更新检查；目标：让 Weekly 的 MIT、Linear 状态、真实发出一致',
+  ]);
+  assert.equal(targetWeekLabelForDate('2026-06-22'), '6.22-6.28');
+  assert.equal(detectTableLayout(['🐶 重点OKR', 'retro', '6.15-6.21 要务'], 'retro', '要务'), 'retro_before_task');
 }
 
 function testConfig(): ReturnType<typeof loadConfig> {

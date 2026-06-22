@@ -35,9 +35,10 @@ import { appendDailyMemory, appendFeedbackLog, readLatestWorkflowOutput, readWor
 import { formatLatestWorkflowDetails, formatWorkflowSummaryForFeishu } from '../workflows/summary.js';
 import { markWorkflowRunFailed, markWorkflowRunSucceeded } from '../workflows/run-ledger.js';
 import { handlePendingBackgroundSuggestionReply } from '../service/background-suggestions.js';
-import { renderFeishuSkillCard, renderFeishuWorkflowCard } from '../connectors/feishu-sdk.js';
+import { renderFeishuSkillCard, renderFeishuSkillWritebackPreviewCard, renderFeishuWorkflowCard } from '../connectors/feishu-sdk.js';
 import { sendFeishuCard } from '../connectors/lark-cli.js';
 import type { SkillRunResult } from '../skills/runner.js';
+import { executeWeeklyReviewWriteback, prepareWeeklyReviewWriteback } from '../skills/weekly-review-writeback.js';
 
 interface FeishuInteractionControls {
   stop: () => Promise<void>;
@@ -59,9 +60,11 @@ type WorkflowCardCommand = {
 };
 
 type SkillCardAction = {
-  action: 'confirm_writeback' | 'writeback_info' | 'rerun' | 'dismiss';
+  action: 'confirm_writeback' | 'writeback_info' | 'prepare_writeback' | 'execute_writeback' | 'rerun' | 'dismiss';
   skillId: string;
   mode?: string;
+  runId?: string;
+  token?: string;
 };
 
 const CARD_ACTION_DEDUPE_MS = 30_000;
@@ -887,15 +890,79 @@ async function handleSkillCardAction(input: {
     await input.channel.send(input.event.chatId, { text: '好的，这次不写回 Feishu 文档。' }, { replyTo: input.event.messageId });
     return;
   }
-  if (input.action.action === 'confirm_writeback' || input.action.action === 'writeback_info') {
+  if (input.action.action === 'prepare_writeback' || input.action.action === 'confirm_writeback') {
+    const control = decideFeishuControl(input.config, access, { effect: 'memory_write' });
+    if (!control.ok) {
+      await input.channel.send(input.event.chatId, { text: `权限不足：${control.reason}` }, { replyTo: input.event.messageId });
+      return;
+    }
+    try {
+      const plan = await prepareWeeklyReviewWriteback({
+        config: input.config,
+        skillId: input.action.skillId,
+        ...(input.action.mode ? { mode: input.action.mode } : {}),
+        ...(input.action.runId ? { runId: input.action.runId } : {}),
+      });
+      await input.channel.send(
+        input.event.chatId,
+        {
+          card: renderFeishuSkillWritebackPreviewCard({
+            token: plan.token,
+            skillId: plan.skillId,
+            mode: plan.mode,
+            docLabel: plan.target.docLabel,
+            weekLabel: plan.target.weekLabel,
+            taskHeader: plan.target.taskHeader,
+            action: plan.target.action,
+            items: plan.items,
+          }),
+        },
+        { replyTo: input.event.messageId },
+      );
+    } catch (error) {
+      await input.channel.send(input.event.chatId, { text: `写回预检失败：${error instanceof Error ? error.message : String(error)}` }, { replyTo: input.event.messageId });
+    }
+    return;
+  }
+  if (input.action.action === 'execute_writeback') {
+    const control = decideFeishuControl(input.config, access, { effect: 'memory_write' });
+    if (!control.ok) {
+      await input.channel.send(input.event.chatId, { text: `权限不足：${control.reason}` }, { replyTo: input.event.messageId });
+      return;
+    }
+    if (!input.action.token) {
+      await input.channel.send(input.event.chatId, { text: '缺少写回确认 token，请重新点「准备写回」。' }, { replyTo: input.event.messageId });
+      return;
+    }
+    try {
+      const result = await executeWeeklyReviewWriteback(input.config, input.action.token);
+      await input.channel.send(
+        input.event.chatId,
+        {
+          text: [
+            '已写回 Feishu Weekly。',
+            '',
+            `周列：${result.taskHeader}`,
+            `写入：${result.itemCount} 条要务`,
+            result.insertedColumns ? '操作：已插入新周列' : '操作：写入已有空周列',
+          ].join('\n'),
+        },
+        { replyTo: input.event.messageId },
+      );
+    } catch (error) {
+      await input.channel.send(input.event.chatId, { text: `写回失败：${error instanceof Error ? error.message : String(error)}` }, { replyTo: input.event.messageId });
+    }
+    return;
+  }
+  if (input.action.action === 'writeback_info') {
     await input.channel.send(
       input.event.chatId,
       {
         text: [
-          '这张卡片现在只是 skill 草稿预览。',
+          '这张卡片是 skill 草稿预览。',
           '',
-          '写回 Feishu Doc 的执行流还没开放，所以我没有修改文档。',
-          '开放后会先让你确认目标文档、周列，以及写入「要务」还是「retro」，确认后才会执行。',
+          '点「准备写回」会先生成二次确认卡，列出目标 Weekly、周列和要写入的要务。',
+          '只有在二次确认卡里点「确认写回」后，才会修改 Feishu Doc。',
         ].join('\n'),
       },
       { replyTo: input.event.messageId },
@@ -1015,14 +1082,27 @@ function parseWorkflowCardCommand(value: unknown): WorkflowCardCommand | null {
 
 function parseSkillCardAction(value: unknown): SkillCardAction | null {
   if (!value || typeof value !== 'object') return null;
-  const raw = value as { daily_os_skill_action?: unknown; skill_id?: unknown; mode?: unknown };
+  const raw = value as { daily_os_skill_action?: unknown; skill_id?: unknown; mode?: unknown; run_id?: unknown; token?: unknown };
   const action = raw.daily_os_skill_action;
   const skillId = raw.skill_id;
-  if ((action !== 'confirm_writeback' && action !== 'writeback_info' && action !== 'rerun' && action !== 'dismiss') || typeof skillId !== 'string' || !skillId) return null;
+  if (
+    (action !== 'confirm_writeback' &&
+      action !== 'writeback_info' &&
+      action !== 'prepare_writeback' &&
+      action !== 'execute_writeback' &&
+      action !== 'rerun' &&
+      action !== 'dismiss') ||
+    typeof skillId !== 'string' ||
+    !skillId
+  ) {
+    return null;
+  }
   return {
     action,
     skillId,
     ...(typeof raw.mode === 'string' && raw.mode ? { mode: raw.mode } : {}),
+    ...(typeof raw.run_id === 'string' && raw.run_id ? { runId: raw.run_id } : {}),
+    ...(typeof raw.token === 'string' && raw.token ? { token: raw.token } : {}),
   };
 }
 
@@ -1071,6 +1151,7 @@ async function sendSkillCardOutput(config: AppConfig, text: string, result: Skil
       provider: result.provider,
       inputPackPath: result.inputPackPath,
       draftOnly: result.draftOnly,
+      ...(result.runId ? { runId: result.runId } : {}),
     }),
     text,
   );

@@ -511,9 +511,12 @@ Agent mode 会回复一张持续更新的飞书运行卡片，而不是一次性
 最近的 Codex 进度、最终成功/失败/超时状态；运行中可以直接点 **停止**。最终卡片也能把
 结构化 follow-up callback 送回同一个飞书 scope，让 Codex 继续这段对话。
 
-Skill run 第一版只做草稿模式。Daily OS 会在 `skills.inputs_dir` 下生成本地 input pack，
-交给配置好的 skill；不会读取或外传 skill 自己的私有 `config.yaml`。飞书写回、workspace
-写入等外部效果后续需要单独确认流程。
+Skill run 会先以草稿模式执行。Daily OS 会在 `skills.inputs_dir` 下生成本地 input pack，
+交给配置好的 skill；不会把 skill 自己的私有 `config.yaml` 放进 LLM prompt 或发到聊天里。
+`weekly-review` skill 另外有飞书写回确认流：第一张卡片只预览草稿，点「准备写回」会生成
+第二张确认卡，列出目标周列和将写入的要务；只有在第二张卡片里点「确认写回」才会修改
+Feishu Weekly 文档。写回代码只在本地进程内读取 skill 的 ignored `config.yaml`，用于拿
+doc token 和 table block id；如果无法验证目标表格 marker，或目标周列已有内容，会停止写回。
 
 Agent mode 控制命令：
 

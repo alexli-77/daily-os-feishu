@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import type { AppConfig } from '../config/schema.js';
@@ -33,6 +34,7 @@ export interface SkillRunInput {
 }
 
 export interface SkillRunResult {
+  runId?: string;
   skillId: string;
   provider: 'codex' | 'claude';
   mode: string;
@@ -113,7 +115,8 @@ export async function runConfiguredSkill(input: SkillRunInput): Promise<SkillRun
   });
   const provider = resolveProvider(input.config, entry);
   const output = provider === 'claude' ? await runClaudeSkill(prompt, workdir, input.config) : await runCodexSkill(prompt, workdir, input.config);
-  return {
+  const result = {
+    runId: crypto.randomUUID(),
     skillId: entry.id,
     provider,
     mode,
@@ -121,6 +124,23 @@ export async function runConfiguredSkill(input: SkillRunInput): Promise<SkillRun
     output: normalizeSkillOutput(output),
     draftOnly: true,
   };
+  recordLatestSkillRun(input.config, result);
+  return result;
+}
+
+export interface StoredSkillRunResult extends SkillRunResult {
+  runId: string;
+  createdAt: string;
+}
+
+export function readLatestSkillRun(config: AppConfig, skillId: string, mode?: string, runId?: string): StoredSkillRunResult | null {
+  const runs = readSkillRunState(config);
+  const candidates = runs
+    .filter((run) => run.skillId === skillId)
+    .filter((run) => !mode || run.mode === mode)
+    .filter((run) => !runId || run.runId === runId)
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  return candidates[0] || null;
 }
 
 async function buildSkillInputPack(
@@ -191,6 +211,35 @@ function writeSkillInputPack(config: AppConfig, skillId: string, mode: string, c
   const filePath = path.join(dir, `${safeSkill}-${safeMode}-${Date.now()}.md`);
   fs.writeFileSync(filePath, content, 'utf8');
   return filePath;
+}
+
+function recordLatestSkillRun(config: AppConfig, result: SkillRunResult): void {
+  if (!result.runId) return;
+  const filePath = skillRunStatePath(config);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const runs = readSkillRunState(config).filter((run) => run.runId !== result.runId);
+  runs.push({ ...result, runId: result.runId, createdAt: new Date().toISOString() });
+  const kept = runs
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    .slice(-20);
+  fs.writeFileSync(filePath, `${JSON.stringify(kept, null, 2)}\n`, 'utf8');
+}
+
+function readSkillRunState(config: AppConfig): StoredSkillRunResult[] {
+  const filePath = skillRunStatePath(config);
+  if (!fs.existsSync(filePath)) return [];
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as StoredSkillRunResult[];
+    return Array.isArray(parsed)
+      ? parsed.filter((run) => run && typeof run.runId === 'string' && typeof run.skillId === 'string' && typeof run.output === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function skillRunStatePath(config: AppConfig): string {
+  return path.resolve(config.skills.inputs_dir, '_skill-runs.json');
 }
 
 function buildSkillPrompt(input: {

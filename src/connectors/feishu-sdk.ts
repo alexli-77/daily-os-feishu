@@ -15,6 +15,18 @@ export interface FeishuSkillCardOptions {
   provider: string;
   inputPackPath: string;
   draftOnly: boolean;
+  runId?: string;
+}
+
+export interface FeishuSkillWritebackPreviewCardOptions {
+  token: string;
+  skillId: string;
+  mode: string;
+  docLabel: string;
+  weekLabel: string;
+  taskHeader: string;
+  action: 'append_to_existing_empty_column' | 'insert_columns';
+  items: Array<{ text: string; targetRowLabel: string; isMit: boolean }>;
 }
 
 export interface FeishuSdkStatus {
@@ -173,7 +185,16 @@ export function renderFeishuSkillCard(text: string, options: FeishuSkillCardOpti
         tag: 'action',
         actions: [
           cardButton('重新生成', { daily_os_skill_action: 'rerun', skill_id: options.skillId, mode: options.mode }, 'primary'),
-          cardButton('写回说明', { daily_os_skill_action: 'writeback_info', skill_id: options.skillId, mode: options.mode }, 'default'),
+          cardButton(
+            '准备写回',
+            {
+              daily_os_skill_action: 'prepare_writeback',
+              skill_id: options.skillId,
+              mode: options.mode,
+              ...(options.runId ? { run_id: options.runId } : {}),
+            },
+            'default',
+          ),
           cardButton('先不写回', { daily_os_skill_action: 'dismiss', skill_id: options.skillId, mode: options.mode }, 'default'),
         ],
       },
@@ -182,9 +203,48 @@ export function renderFeishuSkillCard(text: string, options: FeishuSkillCardOpti
         elements: [
           {
             tag: 'plain_text',
-            content: '写回执行流还未开放；开放后会先确认目标文档、周列和写入位置。',
+            content: '点「准备写回」只会生成二次确认卡；确认目标周列和内容后才会修改 Feishu Doc。',
           },
         ],
+      },
+    ],
+  };
+}
+
+export function renderFeishuSkillWritebackPreviewCard(options: FeishuSkillWritebackPreviewCardOptions): object {
+  const itemLines = options.items
+    .map((item, index) => `${index + 1}. ${item.isMit ? '**MIT** ' : ''}${item.text}\n   > ${item.targetRowLabel}`)
+    .join('\n');
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      template: 'orange',
+      title: { tag: 'plain_text', content: '确认写回 Feishu' },
+    },
+    elements: [
+      {
+        tag: 'markdown',
+        content: [
+          '我准备把这次 weekly-review 草稿写回 Feishu Weekly。',
+          '',
+          `> 目标：${options.docLabel} · ${options.weekLabel} · ${options.taskHeader}`,
+          `> 操作：${options.action === 'insert_columns' ? '插入新周列并写入' : '写入已有空周列'}`,
+          '',
+          '**将写入这些要务**',
+          itemLines || '（没有可写入要务）',
+        ].join('\n'),
+      },
+      { tag: 'hr' },
+      {
+        tag: 'action',
+        actions: [
+          cardButton('确认写回', { daily_os_skill_action: 'execute_writeback', skill_id: options.skillId, mode: options.mode, token: options.token }, 'primary'),
+          cardButton('取消', { daily_os_skill_action: 'dismiss', skill_id: options.skillId, mode: options.mode }, 'default'),
+        ],
+      },
+      {
+        tag: 'note',
+        elements: [{ tag: 'plain_text', content: '如果目标列已有内容，执行会自动停止，不会覆盖。确认 token 30 分钟内有效。' }],
       },
     ],
   };
