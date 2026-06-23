@@ -17,6 +17,8 @@ import { todayInTimezone } from '../utils/date.js';
 import { analyzeChatContext, formatChatContextAnalysis, type ChatAnalysisMode } from '../chat/context-analysis.js';
 import { formatRecentWorkflowRuns, listRecentWorkflowRuns } from '../workflows/run-ledger.js';
 import { markWorkflowRunFailed, markWorkflowRunSucceeded } from '../workflows/run-ledger.js';
+import { formatSkillList, runConfiguredSkill } from '../skills/runner.js';
+import type { SkillRunResult } from '../skills/runner.js';
 
 export type ParsedDailyOsCommand =
   | { type: 'ignore' }
@@ -31,6 +33,8 @@ export type ParsedDailyOsCommand =
   | { type: 'confirm_policy_candidate'; id?: string }
   | { type: 'reject_policy_candidate'; id: string; reason?: string }
   | { type: 'calibrate' }
+  | { type: 'skill_list' }
+  | { type: 'skill_run'; skillId: string; mode?: string; text?: string }
   | { type: 'remember'; text: string }
   | { type: 'feedback'; text: string }
   | { type: 'revision_request'; workflow: WorkflowName; text: string }
@@ -44,9 +48,18 @@ export interface DailyOsCommandContext {
   prefix: string;
   reply: (text: string) => Promise<void>;
   sendWorkflowCard?: (input: { workflow: WorkflowName; date: string; text: string; summary: string }) => Promise<void>;
+  sendSkillCard?: (input: { result: SkillRunResult; text: string }) => Promise<void>;
   sendWorkflowOutput?: boolean;
   runWorkflowForCommand?: typeof runWorkflow;
   collectEvidenceForSummary?: typeof collectEvidence;
+  runSkillForCommand?: (input: {
+    config: AppConfig;
+    skillId: string;
+    mode?: string;
+    userText?: string;
+    source: string;
+    messageId: string;
+  }) => Promise<SkillRunResult>;
   accessDecision?: FeishuAccessDecision;
   sessionScopeId?: string;
   stopAgentRun?: () => Promise<boolean>;
@@ -96,6 +109,8 @@ export function parseDailyOsCommand(text: string, prefix: string): ParsedDailyOs
   if (chatCommand) {
     return chatCommand;
   }
+  const skillCommand = parseSkillCommand(normalized);
+  if (skillCommand) return skillCommand;
   if (['progress', '进展', '今日进展', '进展确认'].includes(lower)) return { type: 'progress' };
   if (['policy', 'decision policy', '规则', '决策规则'].includes(lower)) return { type: 'policy' };
   if (['candidates', 'policy candidates', '候选规则', '待确认规则'].includes(lower)) return { type: 'policy_candidates' };
@@ -116,6 +131,9 @@ export function parseDailyOsCommand(text: string, prefix: string): ParsedDailyOs
   if (/^(rerun\s+)?(weekly|weekly review)$/.test(lower) || ['周复盘', '重跑周复盘'].includes(normalized)) {
     return { type: 'workflow', workflow: 'weekly_review' };
   }
+  if (/^(?:weekly|weekly review)\s+(?:deep|skill)$/i.test(lower) || ['深度周复盘', '周复盘加强版'].includes(normalized)) {
+    return { type: 'skill_run', skillId: 'weekly-review', mode: 'weekly' };
+  }
 
   return { type: 'ignore' };
 }
@@ -131,6 +149,8 @@ export function dailyOsStatusText(prefix: string, config?: AppConfig): string {
     `- ${prefix} stop`,
     `- ${prefix} details`,
     `- ${prefix} chat [todo|review]`,
+    `- ${prefix} skill list`,
+    `- ${prefix} skill run <id>: <text>`,
     `- ${prefix} progress`,
     `- ${prefix} remember <text>`,
     `- ${prefix} feedback <text>`,
@@ -182,6 +202,27 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
       }
       const date = todayInTimezone(context.config);
       await context.reply(formatChatContextAnalysis(await analyzeChatContext(context.config, date, command.mode || context.config.chat_analysis.default_mode)));
+      return;
+    }
+    case 'skill_list':
+      await context.reply(formatSkillList(context.config));
+      return;
+    case 'skill_run': {
+      await context.reply(`Running skill ${command.skillId}${command.mode ? ` (${command.mode})` : ''}...`);
+      const result = await (context.runSkillForCommand || runConfiguredSkill)({
+        config: context.config,
+        skillId: command.skillId,
+        ...(command.mode ? { mode: command.mode } : {}),
+        ...(command.text ? { userText: command.text } : {}),
+        source: context.source,
+        messageId: context.messageId,
+      });
+      const text = formatSkillRunResult(result);
+      if (context.sendSkillCard) {
+        await context.sendSkillCard({ result, text });
+      } else {
+        await context.reply(text);
+      }
       return;
     }
     case 'progress': {
@@ -320,11 +361,45 @@ function parseChatAnalysisCommand(text: string): ParsedDailyOsCommand | null {
   return { type: 'chat_analysis', ...(match[1] ? { mode: normalizeChatAnalysisMode(match[1]) } : {}) };
 }
 
+function parseSkillCommand(text: string): ParsedDailyOsCommand | null {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  const lower = normalized.toLowerCase();
+  if (lower === 'skill' || lower === 'skills' || lower === 'skill list' || lower === 'skills list' || normalized === '技能列表') {
+    return { type: 'skill_list' };
+  }
+
+  const match =
+    normalized.match(/^skills?\s+run\s+([a-z0-9_-]+)(?:\s+(weekly|biweekly|quarterly))?(?:\s*[:：]\s*(.*))?$/i) ||
+    normalized.match(/^运行技能\s+([a-z0-9_-]+)(?:\s+(weekly|biweekly|quarterly))?(?:\s*[:：]\s*(.*))?$/i);
+  if (!match?.[1]) return null;
+  return {
+    type: 'skill_run',
+    skillId: match[1],
+    ...(match[2] ? { mode: match[2] } : {}),
+    ...(match[3]?.trim() ? { text: match[3].trim() } : {}),
+  };
+}
+
 function normalizeChatAnalysisMode(value: string): ChatAnalysisMode {
   const normalized = value.toLowerCase();
   if (normalized === 'todo' || normalized === '待办' || normalized === '计划') return 'todo';
   if (normalized === 'review' || normalized === '复盘') return 'review';
   return 'manual';
+}
+
+function formatSkillRunResult(result: SkillRunResult): string {
+  return [
+    `# Skill: ${result.skillId}`,
+    '',
+    `Provider: ${result.provider}`,
+    `Mode: ${result.mode}`,
+    `Input pack: ${result.inputPackPath}`,
+    result.draftOnly ? 'Write-back: not performed; this was a draft-only run.' : '',
+    '',
+    result.output,
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 function authorizeRemoteCommand(context: DailyOsCommandContext, command: ParsedDailyOsCommand): { ok: boolean; reason?: string } {
@@ -344,7 +419,10 @@ function commandEffect(command: ParsedDailyOsCommand): FeishuControlEffect {
     case 'details':
     case 'progress':
     case 'chat_analysis':
+    case 'skill_list':
       return 'read';
+    case 'skill_run':
+      return 'workflow_trigger';
     case 'workflow':
       return 'workflow_trigger';
     case 'remember':

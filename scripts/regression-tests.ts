@@ -7,8 +7,8 @@ import { coalesceChatSuggestions } from '../src/chat/context-analysis.js';
 import type { ChatContextSuggestion } from '../src/chat/context-analysis.js';
 import { parseDailyOsCommand, runParsedDailyOsCommand } from '../src/interaction/daily-os-command.js';
 import { handlePendingBackgroundSuggestionReply } from '../src/service/background-suggestions.js';
-import { renderFeishuWorkflowCard } from '../src/connectors/feishu-sdk.js';
-import { handleFeishuFeedbackCommand } from '../src/feedback/feishu-feedback.js';
+import { renderFeishuSkillCard, renderFeishuSkillWritebackPreviewCard, renderFeishuWorkflowCard } from '../src/connectors/feishu-sdk.js';
+import { handleFeishuFeedbackCommand, shouldTreatAsFeedbackWorkflowRevision } from '../src/feedback/feishu-feedback.js';
 import { shouldRunScheduledWorkflow } from '../src/service/launchd.js';
 import { formatRecentWorkflowRuns, listRecentWorkflowRuns } from '../src/workflows/run-ledger.js';
 import { runWorkflow } from '../src/workflows/run-workflow.js';
@@ -19,6 +19,8 @@ import { createPolicyCandidate, listPolicyCandidates } from '../src/decision/can
 import { decisionPolicyFiles } from '../src/decision/policy.js';
 import { collectFeishuUserMessageRecords, isFeishuAppMessageRecord } from '../src/utils/feishu-message-records.js';
 import { buildCliPrompt, normalizeAgentOutput } from '../src/agent/openai-agent.js';
+import { detectTableLayout, extractWeeklyWritebackItems, targetWeekLabelForDate } from '../src/skills/weekly-review-writeback.js';
+import { executeLifeReviewOsWriteback, prepareLifeReviewOsWriteback, runLifeReviewOsSkill } from '../src/skills/life-review-os.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-os-regression-'));
 
@@ -28,10 +30,14 @@ try {
   testUnifiedProviderPromptContract();
   testAgentOutputNormalization();
   testDailyOsCommandParsing();
+  await testSkillRunCommandUsesConfiguredRunner();
   testEveryFeishuInteractionWorkflowCommandHasCardSender();
+  testEveryFeishuInteractionCommandHasSkillCardSender();
   await testWorkflowCommandUsesCardCallback();
+  await testSkillRunCommandUsesCardCallback();
   await testWeeklyWorkflowCommandPassesEvidenceToCardSummary();
   await testFeedbackPollWorkflowCommandUsesCardSender();
+  testFeedbackRevisionIgnoresDailyOsCommands();
   testDailyPlanSummaryShowsOpenLoopEvidence();
   testDailyPlanSummaryKeepsReadableRowsAndUrgentQuestion();
   testDailyPlanSummaryStyle2RemovesGroupsAndMarksAi();
@@ -46,6 +52,10 @@ try {
   await testConfirmLatestPolicyCandidateWithoutId();
   testBackgroundSuggestionDismissAllFromAmbiguousDismiss();
   testWorkflowCardRendering();
+  testSkillCardRendering();
+  testSkillWritebackPreviewCardRendering();
+  testWeeklyReviewWritebackParsing();
+  await testLifeReviewOsBridgeUsesExternalCli();
   console.log('Regression tests passed.');
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
@@ -176,10 +186,25 @@ function testEveryFeishuInteractionWorkflowCommandHasCardSender(): void {
   assert.equal(workflowCardSenderCount, commandHandlerCount, 'every Feishu command handler must pass sendWorkflowCard');
 }
 
+function testEveryFeishuInteractionCommandHasSkillCardSender(): void {
+  const source = fs.readFileSync(path.resolve('src/interaction/feishu-interaction.ts'), 'utf8');
+  const commandHandlerCount = source.match(/handleDailyOsCommand\(\{/g)?.length || 0;
+  const skillCardSenderCount = source.match(/sendSkillCard:/g)?.length || 0;
+  assert.ok(commandHandlerCount >= 3, 'expected Feishu interaction command handlers to be discoverable');
+  assert.equal(skillCardSenderCount, commandHandlerCount, 'every Feishu command handler must pass sendSkillCard');
+}
+
 function testDailyOsCommandParsing(): void {
   assert.deepEqual(parseDailyOsCommand('daily-os plan', 'daily-os'), { type: 'workflow', workflow: 'daily_plan' });
   assert.deepEqual(parseDailyOsCommand('daily-os review', 'daily-os'), { type: 'workflow', workflow: 'daily_review' });
   assert.deepEqual(parseDailyOsCommand('daily-os weekly', 'daily-os'), { type: 'workflow', workflow: 'weekly_review' });
+  assert.deepEqual(parseDailyOsCommand('daily-os skill list', 'daily-os'), { type: 'skill_list' });
+  assert.deepEqual(parseDailyOsCommand('daily-os skill run weekly-review: 本周卡在 portfolio review', 'daily-os'), {
+    type: 'skill_run',
+    skillId: 'weekly-review',
+    text: '本周卡在 portfolio review',
+  });
+  assert.deepEqual(parseDailyOsCommand('daily-os weekly deep', 'daily-os'), { type: 'skill_run', skillId: 'weekly-review', mode: 'weekly' });
   assert.deepEqual(parseDailyOsCommand('daily-os 保存规则', 'daily-os'), { type: 'confirm_policy_candidate' });
   assert.deepEqual(parseDailyOsCommand('daily-os 确认保存', 'daily-os'), { type: 'confirm_policy_candidate' });
   assert.deepEqual(parseDailyOsCommand('daily-os 确认保存：daily-os 保存规则 pol-20260605202553-801f4cf6', 'daily-os'), {
@@ -193,6 +218,89 @@ function testDailyOsCommandParsing(): void {
     assert.equal(revision.workflow, 'daily_plan');
     assert.match(revision.text, /LEO-12/);
   }
+}
+
+async function testSkillRunCommandUsesConfiguredRunner(): Promise<void> {
+  const config = testConfig();
+  config.skills.enabled = true;
+  config.skills.registry = [
+    {
+      id: 'weekly-review',
+      provider: 'auto',
+      path: '/tmp/weekly-review/SKILL.md',
+      workdir: '/tmp/weekly-review',
+      default_mode: 'weekly',
+      effects: ['read', 'draft', 'feishu_write'],
+      require_confirmation_for: ['feishu_write'],
+    },
+  ];
+  const replies: string[] = [];
+  await runParsedDailyOsCommand(
+    {
+      config,
+      messageId: 'message-1',
+      text: 'daily-os skill run weekly-review: 本周重点是对齐 Weekly',
+      source: 'regression-test',
+      prefix: 'daily-os',
+      reply: async (text) => {
+        replies.push(text);
+      },
+      runSkillForCommand: async (input) => {
+        assert.equal(input.skillId, 'weekly-review');
+        assert.equal(input.userText, '本周重点是对齐 Weekly');
+        return {
+          skillId: input.skillId,
+          provider: 'codex',
+          mode: input.mode || 'weekly',
+          inputPackPath: '/tmp/daily-os/weekly-review.md',
+          output: '## 本周执行对比\n\n**完成** ✅\n- 已整理 Daily OS input pack',
+          draftOnly: true,
+        };
+      },
+    },
+    { type: 'skill_run', skillId: 'weekly-review', text: '本周重点是对齐 Weekly' },
+  );
+
+  assert.match(replies[0] || '', /Running skill weekly-review/);
+  assert.match(replies[1] || '', /Skill: weekly-review/);
+  assert.match(replies[1] || '', /Write-back: not performed/);
+  assert.match(replies[1] || '', /本周执行对比/);
+}
+
+async function testSkillRunCommandUsesCardCallback(): Promise<void> {
+  const config = testConfig();
+  config.skills.enabled = true;
+  const replies: string[] = [];
+  const cards: Array<{ result: { skillId: string }; text: string }> = [];
+  await runParsedDailyOsCommand(
+    {
+      config,
+      messageId: 'message-1',
+      text: 'daily-os weekly deep',
+      source: 'regression-test',
+      prefix: 'daily-os',
+      reply: async (text) => {
+        replies.push(text);
+      },
+      sendSkillCard: async (input) => {
+        cards.push(input);
+      },
+      runSkillForCommand: async (input) => ({
+        skillId: input.skillId,
+        provider: 'codex',
+        mode: input.mode || 'weekly',
+        inputPackPath: '/tmp/daily-os/weekly-review.md',
+        output: '## 本周执行对比\n\n**完成** ✅\n- 已整理 Daily OS input pack',
+        draftOnly: true,
+      }),
+    },
+    { type: 'skill_run', skillId: 'weekly-review', mode: 'weekly' },
+  );
+
+  assert.deepEqual(replies, ['Running skill weekly-review (weekly)...']);
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0]?.result.skillId, 'weekly-review');
+  assert.match(cards[0]?.text || '', /Write-back: not performed/);
 }
 
 async function testWorkflowCommandUsesCardCallback(): Promise<void> {
@@ -305,6 +413,14 @@ async function testFeedbackPollWorkflowCommandUsesCardSender(): Promise<void> {
   assert.equal(cards.length, 1);
   assert.equal(cards[0]?.workflow, 'daily_plan');
   assert.match(cards[0]?.summary || '', /LEO-7/);
+}
+
+function testFeedbackRevisionIgnoresDailyOsCommands(): void {
+  const config = testConfig();
+  assert.equal(shouldTreatAsFeedbackWorkflowRevision(config, 'daily-os weekly deep'), false);
+  assert.equal(shouldTreatAsFeedbackWorkflowRevision(config, 'daily-os skill run weekly-review: 本周重点'), false);
+  assert.equal(shouldTreatAsFeedbackWorkflowRevision(config, '/daily-os weekly deep'), false);
+  assert.equal(shouldTreatAsFeedbackWorkflowRevision(config, '把 LEO-12 降级，明天再跟进'), true);
 }
 
 async function testConfirmLatestPolicyCandidateWithoutId(): Promise<void> {
@@ -789,6 +905,154 @@ function testWorkflowCardRendering(): void {
   assert.match(serialized, /今日安排/);
   assert.match(serialized, /重排一次/);
   assert.match(serialized, /daily_plan/);
+}
+
+function testSkillCardRendering(): void {
+  const card = renderFeishuSkillCard('## 本周执行对比\n\n**完成** ✅\n- 已整理 input pack', {
+    skillId: 'weekly-review',
+    mode: 'weekly',
+    provider: 'codex',
+    inputPackPath: '/tmp/daily-os/weekly-review.md',
+    draftOnly: true,
+  }) as { elements?: unknown[] };
+  const serialized = JSON.stringify(card);
+  assert.match(serialized, /Skill: weekly-review/);
+  assert.match(serialized, /草稿预览/);
+  assert.match(serialized, /准备写回/);
+  assert.match(serialized, /重新生成/);
+  assert.match(serialized, /先不写回/);
+  assert.match(serialized, /prepare_writeback/);
+  assert.doesNotMatch(serialized, /确认写回/);
+  assert.doesNotMatch(serialized, /confirm_writeback/);
+}
+
+function testSkillWritebackPreviewCardRendering(): void {
+  const card = renderFeishuSkillWritebackPreviewCard({
+    token: 'confirm-token',
+    skillId: 'weekly-review',
+    mode: 'weekly',
+    docLabel: 'Weekly 2026',
+    weekLabel: '6.22-6.28',
+    taskHeader: '6.22-6.28 要务',
+    action: 'insert_columns',
+    items: [{ text: 'MIT 🔴: LEO-7 发送前最终检查', targetRowLabel: 'KR1 完成博士研究方向提案', isMit: true }],
+  });
+  const serialized = JSON.stringify(card);
+  assert.match(serialized, /确认写回 Feishu/);
+  assert.match(serialized, /6.22-6.28 要务/);
+  assert.match(serialized, /execute_writeback/);
+  assert.match(serialized, /confirm-token/);
+}
+
+function testWeeklyReviewWritebackParsing(): void {
+  const output = [
+    '## 📋 下周计划（6.22-6.28）',
+    '',
+    '**MIT 🔴**：LEO-7 Heng Li 意向邮件发送前最终检查',
+    '',
+    '1. P0 | 您：LEO-7 Heng Li 意向邮件',
+    '目标：下周唯一主线',
+    '2. P1 | Codex：Feishu 文档 / 方案 / 会议记录更新检查',
+    '目标：让 Weekly 的 MIT、Linear 状态、真实发出一致',
+    '',
+    '如果本周结论或下周带走项要改，直接回复：daily-os 修改周计划：……',
+  ].join('\n');
+  assert.deepEqual(extractWeeklyWritebackItems(output), [
+    'MIT 🔴: LEO-7 Heng Li 意向邮件发送前最终检查',
+    'P0 | 您：LEO-7 Heng Li 意向邮件；目标：下周唯一主线',
+    'P1 | Codex：Feishu 文档 / 方案 / 会议记录更新检查；目标：让 Weekly 的 MIT、Linear 状态、真实发出一致',
+  ]);
+  assert.equal(targetWeekLabelForDate('2026-06-22'), '6.22-6.28');
+  assert.equal(detectTableLayout(['🐶 重点OKR', 'retro', '6.15-6.21 要务'], 'retro', '要务'), 'retro_before_task');
+
+  const blockedThenPlan = [
+    '🐶 重点OKR 章节可读取，下周计划据此生成。',
+    '',
+    '---',
+    '',
+    '## 📋 下周计划（6.22-6.28）',
+    '',
+    '> 基于 🐶 重点OKR：P0 O1',
+    '',
+    '**MIT 🔴**：今天上班时间发出 BEI 学签/注册中断核实邮件（LEO-71）',
+    '- 完成标准：邮件发出并留底',
+    '',
+    '---',
+    '',
+    '**KR：身份合法性（BEI 核实线）**',
+    '1. MIT 🔴 发出 BEI 核实邮件，问清学签中断对注册的影响',
+    '2. 记录 BEI 预期回复时限，设置 follow-up 日期',
+    '',
+    '[如有余力]',
+    '- Apple Watch 线下退货',
+  ].join('\n');
+  assert.deepEqual(extractWeeklyWritebackItems(blockedThenPlan), [
+    'MIT 🔴: 今天上班时间发出 BEI 学签/注册中断核实邮件（LEO-71）',
+    'MIT 🔴 发出 BEI 核实邮件，问清学签中断对注册的影响',
+    '记录 BEI 预期回复时限，设置 follow-up 日期',
+  ]);
+}
+
+async function testLifeReviewOsBridgeUsesExternalCli(): Promise<void> {
+  const root = path.join(tmp, 'fake-life-review-os');
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  const cli = path.join(bin, 'life-review-os.mjs');
+  fs.writeFileSync(
+    cli,
+    [
+      '#!/usr/bin/env node',
+      'const args = process.argv.slice(2);',
+      'if (args[0] === "run") {',
+      '  console.log(JSON.stringify({ ok: true, run_id: "11111111-1111-4111-8111-111111111111", draft: "## 复盘\\n内容\\n\\n```json\\n{\\\"writeback_plan\\\":[{\\\"row_index\\\":3,\\\"text\\\":\\\"Portfolio review\\\"}]}\\n```", writeback: { ready: true } }));',
+      '} else if (args[0] === "preview") {',
+      '  console.log(JSON.stringify({ ok: true, run_id: "11111111-1111-4111-8111-111111111111", mode: "weekly", writeback: { ready: true, doc_label: "Weekly 2026", target_week: "6.22-6.28", task_header: "6.22-6.28 要务", action: "append_to_existing_empty_column", items: [{ text: "Portfolio review", target_row: 3, target_row_label: "KR2 协助 portfolio", is_mit: false }] } }));',
+      '} else if (args[0] === "writeback") {',
+      '  console.log(JSON.stringify({ ok: true, task_header: "6.22-6.28 要务", item_count: 1, inserted_columns: false }));',
+      '}',
+    ].join('\n'),
+    'utf8',
+  );
+  const entry = {
+    id: 'weekly-review',
+    provider: 'claude' as const,
+    path: path.join(root, 'SKILL.md'),
+    workdir: root,
+    default_mode: 'weekly',
+    effects: ['read' as const, 'draft' as const, 'feishu_write' as const],
+    require_confirmation_for: ['feishu_write' as const],
+  };
+  fs.writeFileSync(entry.path, '# fake skill\n', 'utf8');
+
+  const run = await runLifeReviewOsSkill({
+    entry,
+    mode: 'weekly',
+    provider: 'claude',
+    userText: '',
+    inputPackPath: path.join(tmp, 'input.md'),
+  });
+  assert.equal(run.runId, '11111111-1111-4111-8111-111111111111');
+  assert.match(run.draft, /## 复盘/);
+  assert.doesNotMatch(run.draft, /writeback_plan/);
+
+  const config = testConfig();
+  config.skills.enabled = true;
+  config.skills.inputs_dir = path.join(tmp, 'skill-inputs');
+  config.skills.registry = [entry];
+  fs.mkdirSync(config.skills.inputs_dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(config.skills.inputs_dir, '_skill-runs.json'),
+    JSON.stringify([{ runId: run.runId, skillId: 'weekly-review', mode: 'weekly', output: run.draft, createdAt: new Date().toISOString() }]),
+    'utf8',
+  );
+
+  const preview = await prepareLifeReviewOsWriteback({ config, skillId: 'weekly-review', mode: 'weekly' });
+  assert.equal(preview.token, run.runId);
+  assert.equal(preview.items[0]?.targetRowLabel, 'KR2 协助 portfolio');
+
+  const written = await executeLifeReviewOsWriteback(config, 'weekly-review', preview.token);
+  assert.equal(written.taskHeader, '6.22-6.28 要务');
+  assert.equal(written.itemCount, 1);
 }
 
 function testConfig(): ReturnType<typeof loadConfig> {

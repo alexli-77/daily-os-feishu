@@ -131,8 +131,7 @@ async function handleFallbackReply(config: AppConfig, message: FeishuMessage, se
 }
 
 async function handleWorkflowRevision(config: AppConfig, message: FeishuMessage, send: boolean): Promise<{ handled: boolean }> {
-  if (isGeneratedDailyOsText(message.text)) return { handled: false };
-  if (!isLikelyWorkflowRevisionText(message.text)) return { handled: false };
+  if (!shouldTreatAsFeedbackWorkflowRevision(config, message.text)) return { handled: false };
   if (isMessageAlreadyLogged(config, message.id)) return { handled: true };
   const workflow = revisionWorkflowForText(message.text);
   appendDailyMemory(config, workflow, todayInTimezone(config), `用户提出修改意见：${message.text}`);
@@ -155,6 +154,25 @@ function isMessageAlreadyLogged(config: AppConfig, messageId: string): boolean {
   const logPath = path.resolve(config.feedback.feishu.log_path);
   if (!fs.existsSync(logPath)) return false;
   return fs.readFileSync(logPath, 'utf8').includes(`message_id: ${messageId}`);
+}
+
+export function shouldTreatAsFeedbackWorkflowRevision(config: AppConfig, text: string): boolean {
+  if (isGeneratedDailyOsText(text)) return false;
+  if (isDailyOsCommandText(text, config.feedback.feishu.command_prefix)) return false;
+  return isLikelyWorkflowRevisionText(text);
+}
+
+function isDailyOsCommandText(text: string, prefix: string): boolean {
+  const normalized = text.replace(/\s+/g, ' ').trim().toLowerCase();
+  const commandPrefix = prefix.replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!normalized || !commandPrefix) return false;
+  return [commandPrefix, `/${commandPrefix}`].some(
+    (candidate) =>
+      normalized === candidate ||
+      normalized.startsWith(`${candidate} `) ||
+      normalized.startsWith(`${candidate}:`) ||
+      normalized.startsWith(`${candidate}：`),
+  );
 }
 
 function isLikelyWorkflowRevisionText(text: string): boolean {

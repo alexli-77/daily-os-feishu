@@ -35,8 +35,10 @@ import { appendDailyMemory, appendFeedbackLog, readLatestWorkflowOutput, readWor
 import { formatLatestWorkflowDetails, formatWorkflowSummaryForFeishu } from '../workflows/summary.js';
 import { markWorkflowRunFailed, markWorkflowRunSucceeded } from '../workflows/run-ledger.js';
 import { handlePendingBackgroundSuggestionReply } from '../service/background-suggestions.js';
-import { renderFeishuWorkflowCard } from '../connectors/feishu-sdk.js';
+import { renderFeishuSkillCard, renderFeishuSkillWritebackPreviewCard, renderFeishuWorkflowCard } from '../connectors/feishu-sdk.js';
 import { sendFeishuCard } from '../connectors/lark-cli.js';
+import type { SkillRunResult } from '../skills/runner.js';
+import { executeLifeReviewOsWriteback, prepareLifeReviewOsWriteback } from '../skills/life-review-os.js';
 
 interface FeishuInteractionControls {
   stop: () => Promise<void>;
@@ -55,6 +57,14 @@ type ConfigProvider = AppConfig | (() => AppConfig);
 type WorkflowCardCommand = {
   command: 'details' | 'progress' | 'chat todo' | 'chat review' | 'confirm_todo' | 'confirm_review' | 'revise_todo';
   detailId?: string;
+};
+
+type SkillCardAction = {
+  action: 'confirm_writeback' | 'writeback_info' | 'prepare_writeback' | 'execute_writeback' | 'rerun' | 'dismiss';
+  skillId: string;
+  mode?: string;
+  runId?: string;
+  token?: string;
 };
 
 const CARD_ACTION_DEDUPE_MS = 30_000;
@@ -311,6 +321,9 @@ async function runBatch(input: {
       sendWorkflowCard: async ({ workflow, date, summary }) => {
         await sendWorkflowCardOutput(input.config, workflow, date, summary, `interaction:${input.scope}`);
       },
+      sendSkillCard: async ({ result: skillResult, text: skillText }) => {
+        await sendSkillCardOutput(input.config, skillText, skillResult, `interaction:${input.scope}`);
+      },
       reply: async (reply) => {
         await replyToMessage(input.channel, last, reply, input.config.interaction.feishu.reply_mode);
       },
@@ -346,6 +359,9 @@ async function runBatch(input: {
     sendWorkflowCard: async ({ workflow, date, summary }) => {
       await sendWorkflowCardOutput(input.config, workflow, date, summary, `interaction:${input.scope}`);
     },
+    sendSkillCard: async ({ result: skillResult, text: skillText }) => {
+      await sendSkillCardOutput(input.config, skillText, skillResult, `interaction:${input.scope}`);
+    },
     reply: async (reply) => {
       await replyToMessage(input.channel, last, reply, input.config.interaction.feishu.reply_mode);
     },
@@ -366,7 +382,7 @@ async function runBatch(input: {
     return;
   }
 
-  if (isWorkflowRevisionFollowUp(last, text)) {
+  if (isWorkflowRevisionFollowUp(input.config, last, text)) {
     const control = decideFeishuControl(input.config, accessDecision, { effect: 'memory_write' });
     if (!control.ok) {
       await replyToMessage(input.channel, last, `权限不足：${control.reason}`, input.config.interaction.feishu.reply_mode);
@@ -496,8 +512,26 @@ function isDetailReply(text: string): boolean {
   return ['详情', '查看详情', '全文', '完整内容', 'details', 'detail'].includes(normalized);
 }
 
-function isWorkflowRevisionFollowUp(message: NormalizedMessage, text: string): boolean {
-  return Boolean((message.replyToMessageId || message.threadId) && !isGeneratedDailyOsText(text) && isLikelyWorkflowRevisionText(text));
+function isWorkflowRevisionFollowUp(config: AppConfig, message: NormalizedMessage, text: string): boolean {
+  return Boolean(
+    (message.replyToMessageId || message.threadId) &&
+      !isGeneratedDailyOsText(text) &&
+      !isDailyOsCommandText(text, config.interaction.feishu.command_prefix) &&
+      isLikelyWorkflowRevisionText(text),
+  );
+}
+
+function isDailyOsCommandText(text: string, prefix: string): boolean {
+  const normalized = text.replace(/\s+/g, ' ').trim().toLowerCase();
+  const commandPrefix = prefix.replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!normalized || !commandPrefix) return false;
+  return [commandPrefix, `/${commandPrefix}`].some(
+    (candidate) =>
+      normalized === candidate ||
+      normalized.startsWith(`${candidate} `) ||
+      normalized.startsWith(`${candidate}:`) ||
+      normalized.startsWith(`${candidate}：`),
+  );
 }
 
 function isLikelyWorkflowRevisionText(text: string): boolean {
@@ -592,6 +626,11 @@ async function handleCardAction(input: {
   const agentAction = parseAgentRunCardAction(input.event.action.value, input.config);
   if (agentAction) {
     await handleAgentRunCardAction({ ...input, action: agentAction });
+    return;
+  }
+  const skillAction = parseSkillCardAction(input.event.action.value);
+  if (skillAction) {
+    await handleSkillCardAction({ ...input, action: skillAction });
     return;
   }
   const commandAction = parseWorkflowCardCommand(input.event.action.value);
@@ -726,6 +765,9 @@ async function handleWorkflowCardCommand(input: {
     sendWorkflowCard: async ({ workflow, date, summary }) => {
       await sendWorkflowCardOutput(input.config, workflow, date, summary, `card-command:${input.event.chatId}`);
     },
+    sendSkillCard: async ({ result: skillResult, text: skillText }) => {
+      await sendSkillCardOutput(input.config, skillText, skillResult, `card-command:${input.event.chatId}`);
+    },
     reply: async (reply) => {
       await input.channel.send(input.event.chatId, toSendInput(reply, input.config.interaction.feishu.reply_mode), {
         replyTo: input.event.messageId,
@@ -828,6 +870,136 @@ async function handleAgentRunCardAction(input: {
   await input.channel.send(input.event.chatId, { text: `已加入后续消息队列（${queued}）。` }, { replyTo: input.event.messageId });
 }
 
+async function handleSkillCardAction(input: {
+  config: AppConfig;
+  channel: LarkChannel;
+  event: CardActionEvent;
+  activeAgentRuns: Map<string, ActiveAgentRun>;
+  action: SkillCardAction;
+}): Promise<void> {
+  const access = decideFeishuAccess(input.config, {
+    senderOpenId: input.event.operator.openId,
+    chatId: input.event.chatId,
+    chatType: 'group',
+  });
+  if (!access.ok) {
+    console.warn(`[interaction] denied skill card action ${input.event.chatId}; operator=${input.event.operator.openId.slice(-6)}; reason=${access.reason}`);
+    return;
+  }
+  if (input.action.action === 'dismiss') {
+    await input.channel.send(input.event.chatId, { text: '好的，这次不写回 Feishu 文档。' }, { replyTo: input.event.messageId });
+    return;
+  }
+  if (input.action.action === 'prepare_writeback' || input.action.action === 'confirm_writeback') {
+    const control = decideFeishuControl(input.config, access, { effect: 'memory_write' });
+    if (!control.ok) {
+      await input.channel.send(input.event.chatId, { text: `权限不足：${control.reason}` }, { replyTo: input.event.messageId });
+      return;
+    }
+    try {
+      const plan = await prepareLifeReviewOsWriteback({
+        config: input.config,
+        skillId: input.action.skillId,
+        ...(input.action.mode ? { mode: input.action.mode } : {}),
+        ...(input.action.runId ? { runId: input.action.runId } : {}),
+      });
+      await input.channel.send(
+        input.event.chatId,
+        {
+          card: renderFeishuSkillWritebackPreviewCard({
+            token: plan.token,
+            skillId: plan.skillId,
+            mode: plan.mode,
+            docLabel: plan.target.docLabel,
+            weekLabel: plan.target.weekLabel,
+            taskHeader: plan.target.taskHeader,
+            action: plan.target.action,
+            items: plan.items,
+          }),
+        },
+        { replyTo: input.event.messageId },
+      );
+    } catch (error) {
+      await input.channel.send(input.event.chatId, { text: `写回预检失败：${error instanceof Error ? error.message : String(error)}` }, { replyTo: input.event.messageId });
+    }
+    return;
+  }
+  if (input.action.action === 'execute_writeback') {
+    const control = decideFeishuControl(input.config, access, { effect: 'memory_write' });
+    if (!control.ok) {
+      await input.channel.send(input.event.chatId, { text: `权限不足：${control.reason}` }, { replyTo: input.event.messageId });
+      return;
+    }
+    if (!input.action.token) {
+      await input.channel.send(input.event.chatId, { text: '缺少写回确认 token，请重新点「准备写回」。' }, { replyTo: input.event.messageId });
+      return;
+    }
+    try {
+      await input.channel.send(input.event.chatId, { text: '正在写回 Feishu Weekly；我会先校验目标列，不会覆盖已有不同内容。' }, { replyTo: input.event.messageId });
+      const result = await executeLifeReviewOsWriteback(input.config, input.action.skillId, input.action.token);
+      await input.channel.send(
+        input.event.chatId,
+        {
+          text: [
+            result.alreadyWritten ? 'Feishu Weekly 已经有这次写回内容；我没有重复写入。' : '已写回 Feishu Weekly。',
+            '',
+            `周列：${result.taskHeader}`,
+            `本次新写入：${result.itemCount} 条要务`,
+            result.skippedCount ? `已存在并跳过：${result.skippedCount} 条要务` : '',
+            result.insertedColumns ? '操作：已插入新周列' : '操作：写入已有空周列',
+          ]
+            .filter(Boolean)
+            .join('\n'),
+        },
+        { replyTo: input.event.messageId },
+      );
+    } catch (error) {
+      await input.channel.send(input.event.chatId, { text: `写回失败：${error instanceof Error ? error.message : String(error)}` }, { replyTo: input.event.messageId });
+    }
+    return;
+  }
+  if (input.action.action === 'writeback_info') {
+    await input.channel.send(
+      input.event.chatId,
+      {
+        text: [
+          '这张卡片是 skill 草稿预览。',
+          '',
+          '点「准备写回」会先生成二次确认卡，列出目标 Weekly、周列和要写入的要务。',
+          '只有在二次确认卡里点「确认写回」后，才会修改 Feishu Doc。',
+        ].join('\n'),
+      },
+      { replyTo: input.event.messageId },
+    );
+    return;
+  }
+
+  const commandText = `${input.config.interaction.feishu.command_prefix} skill run ${input.action.skillId}${input.action.mode ? ` ${input.action.mode}` : ''}`;
+  const result = await handleDailyOsCommand({
+    config: input.config,
+    messageId: input.event.messageId,
+    text: commandText,
+    source: `skill-card:${input.event.chatId}`,
+    prefix: input.config.interaction.feishu.command_prefix,
+    sendWorkflowOutput: false,
+    accessDecision: access,
+    sessionScopeId: input.event.chatId,
+    stopAgentRun: async () => stopAgentRun(input.activeAgentRuns, input.event.chatId),
+    sendWorkflowCard: async ({ workflow, date, summary }) => {
+      await sendWorkflowCardOutput(input.config, workflow, date, summary, `skill-card:${input.event.chatId}`);
+    },
+    sendSkillCard: async ({ result: skillResult, text: skillText }) => {
+      await sendSkillCardOutput(input.config, skillText, skillResult, `skill-card:${input.event.chatId}`);
+    },
+    reply: async (reply) => {
+      await input.channel.send(input.event.chatId, toSendInput(reply, input.config.interaction.feishu.reply_mode), {
+        replyTo: input.event.messageId,
+      });
+    },
+  });
+  if (result.handled) console.log(`[interaction] handled ${input.event.chatId}; skill-card=${input.action.action}`);
+}
+
 async function lookupMessageThreadId(channel: LarkChannel, messageId: string): Promise<string | undefined> {
   try {
     const response = (await channel.rawClient.im.v1.message.get({
@@ -912,6 +1084,32 @@ function parseWorkflowCardCommand(value: unknown): WorkflowCardCommand | null {
   return null;
 }
 
+function parseSkillCardAction(value: unknown): SkillCardAction | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as { daily_os_skill_action?: unknown; skill_id?: unknown; mode?: unknown; run_id?: unknown; token?: unknown };
+  const action = raw.daily_os_skill_action;
+  const skillId = raw.skill_id;
+  if (
+    (action !== 'confirm_writeback' &&
+      action !== 'writeback_info' &&
+      action !== 'prepare_writeback' &&
+      action !== 'execute_writeback' &&
+      action !== 'rerun' &&
+      action !== 'dismiss') ||
+    typeof skillId !== 'string' ||
+    !skillId
+  ) {
+    return null;
+  }
+  return {
+    action,
+    skillId,
+    ...(typeof raw.mode === 'string' && raw.mode ? { mode: raw.mode } : {}),
+    ...(typeof raw.run_id === 'string' && raw.run_id ? { runId: raw.run_id } : {}),
+    ...(typeof raw.token === 'string' && raw.token ? { token: raw.token } : {}),
+  };
+}
+
 function claimCardAction(recent: Map<string, number>, event: CardActionEvent): boolean {
   const now = Date.now();
   for (const [key, expiresAt] of recent) {
@@ -945,6 +1143,23 @@ async function sendWorkflowCardOutput(config: AppConfig, workflow: WorkflowName,
   console.log(`[interaction] sending workflow-card source=${source}; workflow=${workflow}; bytes=${Buffer.byteLength(summary, 'utf8')}`);
   await sendFeishuCard(config, renderFeishuWorkflowCard(summary, { workflow, date }), summary);
   console.log(`[interaction] sent workflow-card source=${source}; workflow=${workflow}`);
+}
+
+async function sendSkillCardOutput(config: AppConfig, text: string, result: SkillRunResult, source: string): Promise<void> {
+  console.log(`[interaction] sending skill-card source=${source}; skill=${result.skillId}; bytes=${Buffer.byteLength(text, 'utf8')}`);
+  await sendFeishuCard(
+    config,
+    renderFeishuSkillCard(result.output, {
+      skillId: result.skillId,
+      mode: result.mode,
+      provider: result.provider,
+      inputPackPath: result.inputPackPath,
+      draftOnly: result.draftOnly,
+      ...(result.runId ? { runId: result.runId } : {}),
+    }),
+    text,
+  );
+  console.log(`[interaction] sent skill-card source=${source}; skill=${result.skillId}`);
 }
 
 function toSendInput(text: string, mode: 'markdown' | 'text'): { markdown: string } | { text: string } {

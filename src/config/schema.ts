@@ -2,6 +2,9 @@ import { z } from 'zod';
 
 const enabled = z.object({ enabled: z.boolean().default(false) });
 
+const skillProvider = z.enum(['auto', 'codex', 'claude']);
+const skillEffect = z.enum(['read', 'draft', 'feishu_write', 'workspace_write']);
+
 const strategyAlignment = z
   .object({
     enabled: z.boolean().default(true),
@@ -410,6 +413,29 @@ export const AppConfigSchema = z.object({
     daily_dir: z.string().default('./data/memory/daily'),
     workflow_runs_dir: z.string().default('./data/memory/workflow-runs'),
   }),
+  skills: z
+    .object({
+      enabled: z.boolean().default(false),
+      inputs_dir: z.string().default('./data/memory/skill-inputs'),
+      registry: z
+        .array(
+          z.object({
+            id: z.string().min(1),
+            provider: skillProvider.default('auto'),
+            path: z.string().min(1),
+            workdir: z.string().optional().default(''),
+            default_mode: z.string().optional().default(''),
+            effects: z.array(skillEffect).default(['read', 'draft']),
+            require_confirmation_for: z.array(skillEffect).default(['feishu_write', 'workspace_write']),
+          }),
+        )
+        .default([]),
+    })
+    .default({
+      enabled: false,
+      inputs_dir: './data/memory/skill-inputs',
+      registry: [],
+    }),
 });
 
 export type AppConfig = z.infer<typeof AppConfigSchema>;
