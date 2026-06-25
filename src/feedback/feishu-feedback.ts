@@ -8,6 +8,8 @@ import { runWorkflow } from '../workflows/run-workflow.js';
 import { handlePendingBackgroundSuggestionReply } from '../service/background-suggestions.js';
 import { appendDailyMemory, appendFeedbackLog } from '../storage/memory.js';
 import { todayInTimezone } from '../utils/date.js';
+import { formatWorkflowRevisionMemoryNote } from '../interaction/workflow-revision.js';
+import { handleTodoInboxCommand, parseTodoInboxCommand } from '../todo/inbox.js';
 
 interface FeedbackState {
   processed_ids: string[];
@@ -110,6 +112,13 @@ export async function handleFeishuFeedbackCommand(
     return { handled: true };
   }
 
+  const todoInboxCommand = parseTodoInboxCommand(message.text);
+  if (todoInboxCommand) {
+    const result = handleTodoInboxCommand(config, todoInboxCommand, { messageId: message.id, source: 'feishu-poll' });
+    if (send && result.reply) await sendFeishuFeedbackReply(config, result.reply);
+    return { handled: true };
+  }
+
   const revision = await handleWorkflowRevision(config, message, send);
   if (revision.handled) return revision;
 
@@ -127,6 +136,13 @@ async function handleFallbackReply(config: AppConfig, message: FeishuMessage, se
     return { handled: true };
   }
 
+  const todoInboxCommand = parseTodoInboxCommand(message.text);
+  if (todoInboxCommand) {
+    const result = handleTodoInboxCommand(config, todoInboxCommand, { messageId: message.id, source: 'feishu-poll' });
+    if (send && result.reply) await sendFeishuFeedbackReply(config, result.reply);
+    return { handled: true };
+  }
+
   return handleWorkflowRevision(config, message, send);
 }
 
@@ -134,7 +150,7 @@ async function handleWorkflowRevision(config: AppConfig, message: FeishuMessage,
   if (!shouldTreatAsFeedbackWorkflowRevision(config, message.text)) return { handled: false };
   if (isMessageAlreadyLogged(config, message.id)) return { handled: true };
   const workflow = revisionWorkflowForText(message.text);
-  appendDailyMemory(config, workflow, todayInTimezone(config), `用户提出修改意见：${message.text}`);
+  appendDailyMemory(config, workflow, todayInTimezone(config), formatWorkflowRevisionMemoryNote(message.text));
   appendFeedbackLog(config, message.text, {
     message_id: message.id,
     source: 'feishu-poll',

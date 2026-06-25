@@ -19,6 +19,13 @@ import { startDecisionOnboarding } from '../decision/onboarding.js';
 import { collectProgressCandidates, formatProgressCandidates } from '../progress/capture.js';
 import { analyzeChatContext, formatChatContextAnalysis } from '../chat/context-analysis.js';
 import { readBackgroundSuggestionsState } from '../service/background-suggestions.js';
+import {
+  handleTodoInboxCommand,
+  listTodoInboxItems,
+  openTodoInboxItems,
+  parseTodoInboxCommand,
+  updateTodoInboxItemById,
+} from '../todo/inbox.js';
 
 const SECRET_ENV_KEYS = new Set(['OPENAI_API_KEY', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'VAULT_GATE_TOKEN', 'LARK_APP_SECRET']);
 const UI_RUNTIME_PATH = './data/runtime/ui.json';
@@ -139,6 +146,8 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
     if (request.method === 'GET' && url.pathname === '/api/state') return sendJson(response, await buildState(options));
     if (request.method === 'GET' && url.pathname === '/api/logs') return sendJson(response, { ok: true, logs: readUiLogs() });
     if (request.method === 'GET' && url.pathname === '/api/env-secret') return sendJson(response, readSecret(options, url.searchParams.get('key') || ''));
+    if (request.method === 'POST' && url.pathname === '/api/capture') return sendJson(response, await captureTodo(options, await readJson(request)));
+    if (request.method === 'POST' && url.pathname === '/api/todo-inbox') return sendJson(response, await updateTodoInbox(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/config') return sendJson(response, await saveConfig(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/env') return sendJson(response, await saveEnv(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/action') return sendJson(response, await runAction(options, await readJson(request)));
@@ -195,7 +204,49 @@ async function buildState(options: UiServerOptions): Promise<Record<string, unkn
     doctorText: formatDoctor(checks),
     service: await getLaunchAgentStatus(),
     backgroundSuggestions: readBackgroundSuggestionsState(config),
+    todoInbox: {
+      enabled: config.todo_inbox.enabled,
+      open: openTodoInboxItems(config),
+      recent: listTodoInboxItems(config).filter((item) => item.status !== 'deleted').slice(-40).reverse(),
+    },
   };
+}
+
+async function captureTodo(options: UiServerOptions, body: unknown): Promise<Record<string, unknown>> {
+  const request = readRecord(body);
+  const text = String(request.text || '').trim();
+  if (!text) throw new Error('Capture text is empty.');
+  const env = readEnvFile(options.envPath);
+  applyEnv(env);
+  const config = loadConfig(options.configPath);
+  const command = parseTodoInboxCommand(text) || { type: 'capture' as const, text };
+  if (command.type === 'capture' && typeof request.type === 'string' && isTodoInboxType(request.type)) command.itemType = request.type;
+  const result = handleTodoInboxCommand(config, command, { source: 'local-ui' });
+  return { ok: true, text: result.reply || 'Todo inbox updated.', items: result.items || [], state: await buildState(options) };
+}
+
+async function updateTodoInbox(options: UiServerOptions, body: unknown): Promise<Record<string, unknown>> {
+  const request = readRecord(body);
+  const id = String(request.id || '').trim();
+  if (!id) throw new Error('Todo id is required.');
+  const env = readEnvFile(options.envPath);
+  applyEnv(env);
+  const config = loadConfig(options.configPath);
+  const result = updateTodoInboxItemById(config, id, {
+    text: typeof request.text === 'string' ? request.text : undefined,
+    type: typeof request.type === 'string' && isTodoInboxType(request.type) ? request.type : undefined,
+    status: typeof request.status === 'string' && isTodoInboxStatus(request.status) ? request.status : undefined,
+    note: typeof request.note === 'string' ? request.note : undefined,
+  });
+  return { ok: true, text: result.reply || 'Todo inbox updated.', items: result.items || [], state: await buildState(options) };
+}
+
+function isTodoInboxType(value: string): value is 'todo' | 'reminder' | 'time_boundary' | 'note' {
+  return value === 'todo' || value === 'reminder' || value === 'time_boundary' || value === 'note';
+}
+
+function isTodoInboxStatus(value: string): value is 'open' | 'done' | 'deferred' | 'deleted' {
+  return value === 'open' || value === 'done' || value === 'deferred' || value === 'deleted';
 }
 
 async function saveConfig(options: UiServerOptions, body: unknown): Promise<Record<string, unknown>> {
@@ -306,6 +357,14 @@ async function runActionInner(options: UiServerOptions, request: Record<string, 
 
   if (action === 'progress') {
     return { ok: true, text: formatProgressCandidates(await collectProgressCandidates(config, todayInTimezone(config))) };
+  }
+
+  if (action === 'todo_capture') {
+    const text = String(request.text || '').trim();
+    if (!text) throw new Error('Todo capture text is empty.');
+    const command = parseTodoInboxCommand(text) || { type: 'capture' as const, text };
+    const result = handleTodoInboxCommand(config, command, { source: 'local-ui' });
+    return { ok: true, text: result.reply || 'Todo inbox updated.', state: await buildState(options) };
   }
 
   if (action === 'chat_analysis' || action === 'chat_analysis_todo' || action === 'chat_analysis_review') {
@@ -841,6 +900,7 @@ const HTML = String.raw`<!doctype html>
     <main class="layout">
       <nav class="nav" aria-label="Sections">
         <button class="nav-button active" data-section="overview">Overview</button>
+        <button class="nav-button" data-section="todo">Todo Inbox</button>
         <button class="nav-button" data-section="setup">Setup</button>
         <button class="nav-button" data-section="sources">Sources</button>
         <button class="nav-button" data-section="workflows">Workflows</button>
@@ -869,6 +929,51 @@ const HTML = String.raw`<!doctype html>
               </label>
             </div>
             <pre id="output" aria-live="polite"></pre>
+          </section>
+
+          <section class="panel" id="section-todo">
+            <div class="panel-head">
+              <div>
+                <h2>Todo Inbox</h2>
+                <p class="hint">Only user-captured daily tasks live here. Daily plan and review will read these items as local context.</p>
+              </div>
+              <button type="button" class="secondary compact" data-action="todo_refresh">Refresh</button>
+            </div>
+            <div class="todo-page">
+              <section class="todo-editor" aria-labelledby="todo-editor-title">
+                <h3 id="todo-editor-title">Quick Capture</h3>
+                <label for="todo-page-text">Task</label>
+                <textarea id="todo-page-text" placeholder="帮我记一下：今晚 7:30 省庆活动&#10;或者：线上报销诊所医疗费用"></textarea>
+                <div class="todo-form-grid">
+                  <label>Type
+                    <select id="todo-page-type">
+                      <option value="todo">Todo</option>
+                      <option value="reminder">Reminder</option>
+                      <option value="time_boundary">Time boundary</option>
+                      <option value="note">Note</option>
+                    </select>
+                  </label>
+                  <label>Note
+                    <input id="todo-page-note" placeholder="Optional context" />
+                  </label>
+                </div>
+                <input id="todo-page-edit-id" type="hidden" />
+                <div class="todo-editor-actions">
+                  <button type="button" data-action="todo_page_save">Add Todo</button>
+                  <button type="button" class="secondary" data-action="todo_page_clear">Clear</button>
+                </div>
+                <p class="hint" id="todo-page-status"></p>
+              </section>
+              <section class="todo-list-panel" aria-labelledby="todo-list-title">
+                <div class="todo-list-head">
+                  <div>
+                    <h3 id="todo-list-title">Open Tasks</h3>
+                    <p class="hint" id="todo-list-summary"></p>
+                  </div>
+                </div>
+                <div class="todo-list" id="todo-list"></div>
+              </section>
+            </div>
           </section>
 
           <section class="panel" id="section-setup">
@@ -1202,9 +1307,10 @@ body {
   background: #fff0f0;
 }
 
-h1, h2, legend, p { margin: 0; }
+h1, h2, h3, legend, p { margin: 0; }
 h1 { font-size: 1.25rem; font-weight: 700; }
 h2 { font-size: 1rem; }
+h3 { font-size: .95rem; }
 p, .hint { color: var(--muted); font-size: .85rem; }
 code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -1518,6 +1624,85 @@ legend {
 .check.warning strong { color: var(--warn); }
 .check.missing strong { color: var(--danger); }
 
+.todo-page {
+  display: grid;
+  grid-template-columns: minmax(18rem, 24rem) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+.todo-editor,
+.todo-list-panel {
+  display: grid;
+  gap: .75rem;
+  border: 1px solid var(--border);
+  border-radius: .5rem;
+  background: #fbfcfb;
+  padding: .85rem;
+}
+.todo-editor textarea {
+  min-height: 7rem;
+  font-family: inherit;
+  font-size: .9rem;
+}
+.todo-form-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: .7rem;
+}
+.todo-editor-actions,
+.todo-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+}
+.todo-list-head {
+  display: flex;
+  justify-content: space-between;
+  gap: .75rem;
+}
+.todo-list {
+  display: grid;
+  gap: .55rem;
+}
+.todo-item {
+  display: grid;
+  gap: .45rem;
+  border: 1px solid var(--border);
+  border-radius: .45rem;
+  background: #fff;
+  padding: .65rem .7rem;
+}
+.todo-item-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: .75rem;
+}
+.todo-item-title {
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.todo-item-meta {
+  color: var(--muted);
+  font-size: .78rem;
+}
+.todo-chip {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  border: 1px solid #e7c991;
+  background: #fff7e8;
+  color: var(--warn);
+  padding: .12rem .45rem;
+  font-size: .75rem;
+  font-weight: 700;
+}
+.todo-empty {
+  border: 1px dashed var(--border);
+  border-radius: .45rem;
+  color: var(--muted);
+  padding: 1rem;
+}
+
 .log-list {
   display: grid;
   gap: .5rem;
@@ -1585,6 +1770,7 @@ pre {
     border-bottom: 1px solid var(--border);
   }
   .nav-button { flex: 0 0 auto; width: auto; }
+  .todo-page { grid-template-columns: 1fr; }
   .log-entry { grid-template-columns: 1fr; gap: .35rem; }
 }`;
 
@@ -1608,6 +1794,12 @@ document.querySelectorAll('.nav-button').forEach((button) => {
 
 document.querySelectorAll('[data-action]').forEach((button) => {
   button.addEventListener('click', () => runAction(button.dataset.action));
+});
+
+$('todo-list')?.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-todo-action]');
+  if (!button) return;
+  void handleTodoItemAction(button.dataset.todoAction, button.dataset.todoId);
 });
 
 document.querySelectorAll('[data-toggle-secret]').forEach((button) => {
@@ -1664,6 +1856,15 @@ function render() {
   set('assistant-language', config.assistant.language);
   set('llm-provider', config.llm.provider);
   set('llm-model', config.llm.model);
+  const todoInbox = state.todoInbox || {};
+  const openTodos = Array.isArray(todoInbox.open) ? todoInbox.open : [];
+  const todoInboxStatus = $('todo-inbox-status');
+  if (todoInboxStatus) {
+    todoInboxStatus.textContent = todoInbox.enabled
+      ? 'Open Todo Inbox items: ' + openTodos.length
+      : 'Todo Inbox disabled.';
+  }
+  renderTodoInbox(openTodos);
   set('env-CODEX_BIN', state.env.CODEX_BIN || 'codex');
   set('env-CODEX_HOME', state.env.CODEX_HOME || '');
   set('env-LARK_APP_ID', state.env.LARK_APP_ID);
@@ -1790,6 +1991,104 @@ function renderChecks(checks) {
     return '<div class="check ' + level + '"><div><strong>' +
       label + '</strong><br><span>' + escapeHtml(check.name) + '</span></div>' + detail + '</div>';
   }).join('');
+}
+
+function renderTodoInbox(openTodos) {
+  const list = $('todo-list');
+  const summary = $('todo-list-summary');
+  if (!list || !summary) return;
+
+  summary.textContent = openTodos.length
+    ? openTodos.length + ' open item' + (openTodos.length === 1 ? '' : 's')
+    : 'All reminders completed';
+
+  if (!openTodos.length) {
+    list.innerHTML = '<div class="todo-empty">All Reminders Completed</div>';
+    return;
+  }
+
+  list.innerHTML = openTodos.map((item) => {
+    const note = item.note ? '<div class="todo-item-meta">' + escapeHtml(item.note) + '</div>' : '';
+    const due = item.due_hint ? ' · ' + escapeHtml(item.due_hint) : '';
+    return '<article class="todo-item">' +
+      '<div class="todo-item-main">' +
+        '<div><div class="todo-item-title">' + escapeHtml(item.text || 'Untitled') + '</div>' +
+        '<div class="todo-item-meta">' + escapeHtml(typeLabel(item.type)) + due + ' · ' + escapeHtml(formatClientTime(item.created_at)) + '</div>' + note + '</div>' +
+        '<span class="todo-chip">' + escapeHtml(typeLabel(item.type)) + '</span>' +
+      '</div>' +
+      '<div class="todo-item-actions">' +
+        '<button type="button" class="secondary compact" data-todo-action="edit" data-todo-id="' + escapeHtml(item.id) + '">Edit</button>' +
+        '<button type="button" class="secondary compact" data-todo-action="done" data-todo-id="' + escapeHtml(item.id) + '">Done</button>' +
+        '<button type="button" class="secondary compact" data-todo-action="defer" data-todo-id="' + escapeHtml(item.id) + '">Defer</button>' +
+        '<button type="button" class="secondary compact" data-todo-action="delete" data-todo-id="' + escapeHtml(item.id) + '">Delete</button>' +
+      '</div>' +
+    '</article>';
+  }).join('');
+}
+
+function typeLabel(type) {
+  if (type === 'time_boundary') return 'Time';
+  if (type === 'reminder') return 'Reminder';
+  if (type === 'note') return 'Note';
+  return 'Todo';
+}
+
+function todoById(id) {
+  const open = state?.todoInbox?.open || [];
+  return open.find((item) => item.id === id);
+}
+
+function clearTodoEditor() {
+  set('todo-page-edit-id', '');
+  set('todo-page-text', '');
+  set('todo-page-note', '');
+  set('todo-page-type', 'todo');
+  const saveButton = document.querySelector('[data-action="todo_page_save"]');
+  if (saveButton) saveButton.textContent = 'Add Todo';
+  const status = $('todo-page-status');
+  if (status) status.textContent = '';
+}
+
+async function saveTodoFromPage() {
+  const text = value('todo-page-text').trim();
+  const id = value('todo-page-edit-id').trim();
+  if (!text) {
+    $('todo-page-status').textContent = 'Task is empty.';
+    return;
+  }
+
+  const payload = id
+    ? { id, text, type: value('todo-page-type'), note: value('todo-page-note') }
+    : { text, type: value('todo-page-type') };
+  const result = await post(id ? '/api/todo-inbox' : '/api/capture', payload);
+  if (result.state) state = result.state;
+  await loadState();
+  clearTodoEditor();
+  $('todo-page-status').textContent = id ? 'Todo updated.' : 'Todo added.';
+  showToast(id ? 'Todo updated' : 'Todo added', 'success');
+}
+
+async function handleTodoItemAction(action, id) {
+  if (!action || !id) return;
+  const item = todoById(id);
+  if (!item) return;
+
+  if (action === 'edit') {
+    set('todo-page-edit-id', item.id);
+    set('todo-page-text', item.text || '');
+    set('todo-page-note', item.note || '');
+    set('todo-page-type', item.type || 'todo');
+    const saveButton = document.querySelector('[data-action="todo_page_save"]');
+    if (saveButton) saveButton.textContent = 'Save Changes';
+    $('todo-page-status').textContent = 'Editing: ' + item.text;
+    return;
+  }
+
+  const status = action === 'done' ? 'done' : action === 'delete' ? 'deleted' : 'deferred';
+  const result = await post('/api/todo-inbox', { id, status });
+  if (result.state) state = result.state;
+  await loadState();
+  showToast(result.text || 'Todo updated', 'success');
 }
 
 async function saveAll() {
@@ -1941,11 +2240,31 @@ function secretValue(key) {
 }
 
 async function runAction(action) {
+  if (action === 'todo_refresh') {
+    await loadState();
+    showToast('Todo Inbox refreshed', 'success');
+    return;
+  }
+  if (action === 'todo_page_clear') {
+    clearTodoEditor();
+    return;
+  }
+  if (action === 'todo_page_save') {
+    try {
+      await saveTodoFromPage();
+    } catch (error) {
+      $('todo-page-status').textContent = error.message;
+      showToast(error.message, 'error', false);
+    }
+    return;
+  }
+
   const buttons = [...document.querySelectorAll('button')];
   buttons.forEach((button) => button.disabled = true);
   $('output').textContent = 'Running ' + action + '...';
   try {
-    const result = await post('/api/action', { action, send: isChecked('send-output') });
+    const payload = { action, send: isChecked('send-output') };
+    const result = await post('/api/action', payload);
     if (action === 'choose_vault_folder' && result.path) {
       set('vault-local-path', result.path);
       $('output').textContent = result.text || 'Vault folder selected.';

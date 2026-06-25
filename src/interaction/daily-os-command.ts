@@ -19,6 +19,8 @@ import { formatRecentWorkflowRuns, listRecentWorkflowRuns } from '../workflows/r
 import { markWorkflowRunFailed, markWorkflowRunSucceeded } from '../workflows/run-ledger.js';
 import { formatSkillList, runConfiguredSkill } from '../skills/runner.js';
 import type { SkillRunResult } from '../skills/runner.js';
+import { formatWorkflowRevisionMemoryNote } from './workflow-revision.js';
+import { handleTodoInboxCommand, parseTodoInboxCommand, type TodoInboxCommand } from '../todo/inbox.js';
 
 export type ParsedDailyOsCommand =
   | { type: 'ignore' }
@@ -35,6 +37,7 @@ export type ParsedDailyOsCommand =
   | { type: 'calibrate' }
   | { type: 'skill_list' }
   | { type: 'skill_run'; skillId: string; mode?: string; text?: string }
+  | { type: 'todo_inbox'; command: TodoInboxCommand }
   | { type: 'remember'; text: string }
   | { type: 'feedback'; text: string }
   | { type: 'revision_request'; workflow: WorkflowName; text: string }
@@ -100,6 +103,8 @@ export function parseDailyOsCommand(text: string, prefix: string): ParsedDailyOs
 
   const revision = parseRevisionRequest(normalized);
   if (revision) return revision;
+  const todoInboxCommand = parseTodoInboxCommand(normalized);
+  if (todoInboxCommand) return { type: 'todo_inbox', command: todoInboxCommand };
 
   if (['help', 'status', '状态', '帮助'].includes(lower)) return { type: 'status' };
   if (['new', 'new session', '新会话', '重开会话'].includes(lower)) return { type: 'new_session' };
@@ -151,6 +156,9 @@ export function dailyOsStatusText(prefix: string, config?: AppConfig): string {
     `- ${prefix} chat [todo|review]`,
     `- ${prefix} skill list`,
     `- ${prefix} skill run <id>: <text>`,
+    `- ${prefix} 记到 todo：<text>`,
+    `- ${prefix} 修改 todo：把“旧事项”改成“新事项”`,
+    `- ${prefix} 完成 todo：<text>`,
     `- ${prefix} progress`,
     `- ${prefix} remember <text>`,
     `- ${prefix} feedback <text>`,
@@ -225,6 +233,14 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
       }
       return;
     }
+    case 'todo_inbox': {
+      const result = handleTodoInboxCommand(context.config, command.command, {
+        source: context.source,
+        messageId: context.messageId,
+      });
+      await context.reply(result.reply || 'Todo inbox updated.');
+      return;
+    }
     case 'progress': {
       const date = todayInTimezone(context.config);
       await context.reply(formatProgressCandidates(await collectProgressCandidates(context.config, date)));
@@ -273,7 +289,7 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
       await context.reply('Feedback saved.');
       return;
     case 'revision_request': {
-      appendDailyMemory(context.config, command.workflow, todayInTimezone(context.config), `用户提出修改意见：${command.text}`);
+      appendDailyMemory(context.config, command.workflow, todayInTimezone(context.config), formatWorkflowRevisionMemoryNote(command.text));
       appendFeedbackLog(context.config, command.text, { message_id: context.messageId, source: context.source, workflow: command.workflow });
       const nextCommand = command.workflow === 'daily_plan' ? 'plan' : command.workflow === 'daily_review' ? 'review' : 'weekly';
       await context.reply(`收到，我已记录这条修改意见。请点卡片里的「重新生成」，或发送 ${context.prefix} ${nextCommand}，我会按这条意见重新整理。`);
@@ -423,6 +439,8 @@ function commandEffect(command: ParsedDailyOsCommand): FeishuControlEffect {
       return 'read';
     case 'skill_run':
       return 'workflow_trigger';
+    case 'todo_inbox':
+      return 'memory_write';
     case 'workflow':
       return 'workflow_trigger';
     case 'remember':

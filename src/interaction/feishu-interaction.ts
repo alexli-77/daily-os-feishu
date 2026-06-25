@@ -39,6 +39,8 @@ import { renderFeishuSkillCard, renderFeishuSkillWritebackPreviewCard, renderFei
 import { sendFeishuCard } from '../connectors/lark-cli.js';
 import type { SkillRunResult } from '../skills/runner.js';
 import { executeLifeReviewOsWriteback, prepareLifeReviewOsWriteback } from '../skills/life-review-os.js';
+import { formatWorkflowRevisionMemoryNote } from './workflow-revision.js';
+import { handleTodoInboxCommand, parseTodoInboxCommand } from '../todo/inbox.js';
 
 interface FeishuInteractionControls {
   stop: () => Promise<void>;
@@ -382,6 +384,23 @@ async function runBatch(input: {
     return;
   }
 
+  const todoInboxCommand = parseTodoInboxCommand(text);
+  if (todoInboxCommand) {
+    const control = decideFeishuControl(input.config, accessDecision, { effect: 'memory_write' });
+    if (!control.ok) {
+      await replyToMessage(input.channel, last, `权限不足：${control.reason}`, input.config.interaction.feishu.reply_mode);
+      console.log(`[interaction] denied ${input.scope}; command=todo-inbox; reason=${control.reason}`);
+      return;
+    }
+    const result = handleTodoInboxCommand(input.config, todoInboxCommand, {
+      messageId: last.messageId,
+      source: `feishu-interaction:${input.scope}`,
+    });
+    if (result.reply) await replyToMessage(input.channel, last, result.reply, input.config.interaction.feishu.reply_mode);
+    console.log(`[interaction] handled ${input.scope}; command=todo-inbox`);
+    return;
+  }
+
   if (isWorkflowRevisionFollowUp(input.config, last, text)) {
     const control = decideFeishuControl(input.config, accessDecision, { effect: 'memory_write' });
     if (!control.ok) {
@@ -391,7 +410,7 @@ async function runBatch(input: {
     }
     const workflow = revisionWorkflowForText(text);
     const date = todayInTimezone(input.config);
-    appendDailyMemory(input.config, workflow, date, `用户提出修改意见：${text}`);
+    appendDailyMemory(input.config, workflow, date, formatWorkflowRevisionMemoryNote(text));
     appendFeedbackLog(input.config, text, {
       message_id: last.messageId,
       source: `feishu-interaction:${input.scope}`,
