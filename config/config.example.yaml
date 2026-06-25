@@ -129,6 +129,22 @@ todo_inbox:
   # User-readable Markdown note inside the user's Vault knowledge base.
   vault_relative_path: "99_Meta/daily-os-todo.md"
 
+ai_actions:
+  enabled: true
+  # Local audit ledger for AI action drafts and confirmations. It should stay private.
+  ledger_path: "./data/memory/ai-actions.jsonl"
+  # Provider is only a handoff hint in the current safe version.
+  default_provider: "codex" # codex | claude | hermes | manual
+  # Keep true unless an explicit executor integration is reviewed and enabled.
+  dry_run: true
+  executor:
+    enabled: false
+    # Use webhook for a local adapter that can translate Daily OS actions to Hermes, Codex, Claude, etc.
+    type: "none" # none | webhook
+    endpoint_url: ""
+    api_key_env: ""
+    timeout_ms: 15000
+
 chat_analysis:
   enabled: true
   # manual: latest configured messages
