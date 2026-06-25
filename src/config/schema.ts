@@ -302,6 +302,19 @@ export const AppConfigSchema = z.object({
       vault_path: '',
       vault_relative_path: '99_Meta/daily-os-todo.md',
     }),
+  ai_actions: z
+    .object({
+      enabled: z.boolean().default(true),
+      ledger_path: z.string().default('./data/memory/ai-actions.jsonl'),
+      default_provider: z.enum(['codex', 'claude', 'hermes', 'manual']).default('codex'),
+      dry_run: z.boolean().default(true),
+    })
+    .default({
+      enabled: true,
+      ledger_path: './data/memory/ai-actions.jsonl',
+      default_provider: 'codex',
+      dry_run: true,
+    }),
   chat_analysis: z
     .object({
       enabled: z.boolean().default(true),
