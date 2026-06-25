@@ -308,12 +308,34 @@ export const AppConfigSchema = z.object({
       ledger_path: z.string().default('./data/memory/ai-actions.jsonl'),
       default_provider: z.enum(['codex', 'claude', 'hermes', 'manual']).default('codex'),
       dry_run: z.boolean().default(true),
+      executor: z
+        .object({
+          enabled: z.boolean().default(false),
+          type: z.enum(['none', 'webhook']).default('none'),
+          endpoint_url: z.string().default(''),
+          api_key_env: z.string().default(''),
+          timeout_ms: z.number().int().positive().default(15_000),
+        })
+        .default({
+          enabled: false,
+          type: 'none',
+          endpoint_url: '',
+          api_key_env: '',
+          timeout_ms: 15_000,
+        }),
     })
     .default({
       enabled: true,
       ledger_path: './data/memory/ai-actions.jsonl',
       default_provider: 'codex',
       dry_run: true,
+      executor: {
+        enabled: false,
+        type: 'none',
+        endpoint_url: '',
+        api_key_env: '',
+        timeout_ms: 15_000,
+      },
     }),
   chat_analysis: z
     .object({

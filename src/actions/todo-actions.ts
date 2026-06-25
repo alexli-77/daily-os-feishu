@@ -3,16 +3,18 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import type { AppConfig } from '../config/schema.js';
 import { openTodoInboxItems, type TodoInboxItem } from '../todo/inbox.js';
+import { executeTodoAiAction, type TodoAiActionExecutionResult } from './executor.js';
 
 export type TodoAiActionProvider = 'codex' | 'claude' | 'hermes' | 'manual';
 export type TodoAiActionKind = 'email_draft' | 'doc_draft' | 'research_brief' | 'code_change' | 'checklist' | 'workflow_handoff';
-export type TodoAiActionStatus = 'drafted' | 'confirmed';
+export type TodoAiActionStatus = 'drafted' | 'confirmed' | 'dispatched' | 'failed';
 export type TodoAiActionSafety = 'draft_only' | 'external_write_blocked';
 
 export type TodoAiActionCommand =
   | { type: 'list' }
   | { type: 'draft'; target: string }
-  | { type: 'confirm'; target: string };
+  | { type: 'confirm'; target: string }
+  | { type: 'dispatch'; target: string };
 
 export interface TodoAiActionCandidate {
   index: number;
@@ -38,6 +40,7 @@ export interface TodoAiActionRecord {
   draft: string;
   source: string;
   message_id?: string;
+  execution_result?: TodoAiActionExecutionResult;
 }
 
 export function parseTodoAiActionCommand(text: string): TodoAiActionCommand | null {
@@ -56,6 +59,11 @@ export function parseTodoAiActionCommand(text: string): TodoAiActionCommand | nu
     normalized.match(/^(?:action\s+confirm|confirm\s+action)[:：]?\s*(.+)$/i) ||
     normalized.match(/^(?:确认执行|确认这个执行草稿)[:：]?\s*(.+)$/i);
   if (confirm?.[1]?.trim()) return { type: 'confirm', target: confirm[1].trim() };
+
+  const dispatch =
+    normalized.match(/^(?:action\s+dispatch|dispatch\s+action|action\s+execute|execute\s+action)[:：]?\s*(.+)$/i) ||
+    normalized.match(/^(?:提交执行|发送到执行器|交给执行器)[:：]?\s*(.+)$/i);
+  if (dispatch?.[1]?.trim()) return { type: 'dispatch', target: dispatch[1].trim() };
 
   return null;
 }
@@ -158,8 +166,36 @@ export function confirmTodoAiActionDraft(config: AppConfig, target: string): { h
       '',
       '下一步：把这段草稿交给对应执行器处理。',
       `建议执行器：${providerLabel(confirmed.provider)}`,
-      '当前 Daily OS 仍不会自动外发邮件、修改文档或执行代码。',
+      `提交给 adapter：daily-os action dispatch ${confirmed.id}`,
+      '如果 executor 没有显式启用，dispatch 只会返回 skipped，不会自动外发邮件、修改文档或执行代码。',
     ].join('\n'),
+  };
+}
+
+export async function dispatchTodoAiActionDraft(
+  config: AppConfig,
+  target: string,
+): Promise<{ handled: boolean; reply: string; action?: TodoAiActionRecord }> {
+  if (!config.ai_actions.enabled) return { handled: true, reply: 'ai_actions.enabled=false；AI 可执行任务已禁用。' };
+  const action = findActionRecord(config, target);
+  if (!action) return { handled: true, reply: `没有找到 AI 执行草稿：${target}` };
+  if (action.status !== 'confirmed') {
+    return { handled: true, reply: `请先确认这个草稿，再提交执行器：daily-os action confirm ${action.id}` };
+  }
+
+  const execution = await executeTodoAiAction(config, action);
+  const now = new Date().toISOString();
+  const next: TodoAiActionRecord = {
+    ...action,
+    updated_at: now,
+    status: execution.status === 'accepted' ? 'dispatched' : execution.status === 'failed' ? 'failed' : 'confirmed',
+    execution_result: execution,
+  };
+  appendActionRecord(config, next);
+  return {
+    handled: true,
+    action: next,
+    reply: formatDispatchReply(next, execution),
   };
 }
 
@@ -207,6 +243,29 @@ function appendActionRecord(config: AppConfig, record: TodoAiActionRecord): void
   const ledgerPath = path.resolve(config.ai_actions.ledger_path);
   fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
   fs.appendFileSync(ledgerPath, `${JSON.stringify(record)}\n`, 'utf8');
+}
+
+function formatDispatchReply(action: TodoAiActionRecord, execution: TodoAiActionExecutionResult): string {
+  if (execution.status === 'accepted') {
+    return [
+      `已提交 AI 执行草稿：${action.id}`,
+      '',
+      `执行器：${execution.executor}`,
+      execution.response_status ? `返回状态：HTTP ${execution.response_status}` : '',
+      execution.response_body ? `返回摘要：${execution.response_body}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+  if (execution.status === 'skipped') {
+    return [
+      `未提交执行器：${action.id}`,
+      '',
+      `原因：${execution.reason || 'executor skipped'}`,
+      '当前只是保留了标准 action payload，未触发外部执行。',
+    ].join('\n');
+  }
+  return [`提交执行器失败：${action.id}`, '', `原因：${execution.error || execution.reason || 'unknown error'}`].join('\n');
 }
 
 function classifyTodoAction(todo: TodoInboxItem): TodoAiActionKind {

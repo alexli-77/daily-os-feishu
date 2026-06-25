@@ -137,6 +137,13 @@ ai_actions:
   default_provider: "codex" # codex | claude | hermes | manual
   # Keep true unless an explicit executor integration is reviewed and enabled.
   dry_run: true
+  executor:
+    enabled: false
+    # Use webhook for a local adapter that can translate Daily OS actions to Hermes, Codex, Claude, etc.
+    type: "none" # none | webhook
+    endpoint_url: ""
+    api_key_env: ""
+    timeout_ms: 15000
 
 chat_analysis:
   enabled: true
