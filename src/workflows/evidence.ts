@@ -7,6 +7,7 @@ import { collectVault } from '../connectors/vault-gate.js';
 import { readProgressLedger } from '../progress/capture.js';
 import type { Evidence, EvidenceSource } from './types.js';
 import { extractWeeklyPrioritiesFromFeishuDocs } from './weekly-priorities.js';
+import { todoInboxEvidence } from '../todo/inbox.js';
 
 export async function collectEvidence(config: AppConfig, date: string): Promise<Evidence> {
   const [vault, snapshots, feishu, github, linear] = await Promise.all([
@@ -22,6 +23,12 @@ export async function collectEvidence(config: AppConfig, date: string): Promise<
     ...feishu,
     github,
     linear,
+    todo_inbox: config.todo_inbox.enabled
+      ? {
+          state: todoInboxEvidence(config).open.length ? 'available' : 'empty',
+          data: todoInboxEvidence(config),
+        }
+      : { state: 'disabled' },
     progress_ledger: config.progress.enabled
       ? {
           state: readProgressLedger(config, date).trim() ? 'available' : 'empty',

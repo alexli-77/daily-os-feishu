@@ -120,6 +120,15 @@ progress:
   no_progress_reminder_time: "16:30"
   max_candidates: 12
 
+todo_inbox:
+  enabled: true
+  # Machine-readable status ledger. Keep this local and private.
+  ledger_path: "./data/memory/todo-inbox.jsonl"
+  # Empty means: use sources.vault.local_path + vault_relative_path when local Vault is enabled.
+  vault_path: ""
+  # User-readable Markdown note inside the user's Vault knowledge base.
+  vault_relative_path: "99_Meta/daily-os-todo.md"
+
 chat_analysis:
   enabled: true
   # manual: latest configured messages

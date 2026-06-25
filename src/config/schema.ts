@@ -289,6 +289,19 @@ export const AppConfigSchema = z.object({
       no_progress_reminder_time: '16:30',
       max_candidates: 12,
     }),
+  todo_inbox: z
+    .object({
+      enabled: z.boolean().default(true),
+      ledger_path: z.string().default('./data/memory/todo-inbox.jsonl'),
+      vault_path: z.string().default(''),
+      vault_relative_path: z.string().default('99_Meta/daily-os-todo.md'),
+    })
+    .default({
+      enabled: true,
+      ledger_path: './data/memory/todo-inbox.jsonl',
+      vault_path: '',
+      vault_relative_path: '99_Meta/daily-os-todo.md',
+    }),
   chat_analysis: z
     .object({
       enabled: z.boolean().default(true),

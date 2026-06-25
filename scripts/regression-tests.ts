@@ -21,6 +21,8 @@ import { collectFeishuUserMessageRecords, isFeishuAppMessageRecord } from '../sr
 import { buildCliPrompt, normalizeAgentOutput } from '../src/agent/openai-agent.js';
 import { detectTableLayout, extractWeeklyWritebackItems, targetWeekLabelForDate } from '../src/skills/weekly-review-writeback.js';
 import { executeLifeReviewOsWriteback, prepareLifeReviewOsWriteback, runLifeReviewOsSkill } from '../src/skills/life-review-os.js';
+import { formatWorkflowRevisionMemoryNote, parseWorkflowRevisionItems } from '../src/interaction/workflow-revision.js';
+import { handleTodoInboxCommand, openTodoInboxItems, parseTodoInboxCommand, updateTodoInboxItemById } from '../src/todo/inbox.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-os-regression-'));
 
@@ -38,6 +40,8 @@ try {
   await testWeeklyWorkflowCommandPassesEvidenceToCardSummary();
   await testFeedbackPollWorkflowCommandUsesCardSender();
   testFeedbackRevisionIgnoresDailyOsCommands();
+  await testWorkflowRevisionStoresStructuredSupplementItems();
+  testTodoInboxCommandsAndVaultNote();
   testDailyPlanSummaryShowsOpenLoopEvidence();
   testDailyPlanSummaryKeepsReadableRowsAndUrgentQuestion();
   testDailyPlanSummaryStyle2RemovesGroupsAndMarksAi();
@@ -205,6 +209,8 @@ function testDailyOsCommandParsing(): void {
     text: '本周卡在 portfolio review',
   });
   assert.deepEqual(parseDailyOsCommand('daily-os weekly deep', 'daily-os'), { type: 'skill_run', skillId: 'weekly-review', mode: 'weekly' });
+  const todoCommand = parseDailyOsCommand('daily-os 记到 todo：线上报销诊所医疗费用', 'daily-os');
+  assert.equal(todoCommand.type, 'todo_inbox');
   assert.deepEqual(parseDailyOsCommand('daily-os 保存规则', 'daily-os'), { type: 'confirm_policy_candidate' });
   assert.deepEqual(parseDailyOsCommand('daily-os 确认保存', 'daily-os'), { type: 'confirm_policy_candidate' });
   assert.deepEqual(parseDailyOsCommand('daily-os 确认保存：daily-os 保存规则 pol-20260605202553-801f4cf6', 'daily-os'), {
@@ -421,6 +427,83 @@ function testFeedbackRevisionIgnoresDailyOsCommands(): void {
   assert.equal(shouldTreatAsFeedbackWorkflowRevision(config, 'daily-os skill run weekly-review: 本周重点'), false);
   assert.equal(shouldTreatAsFeedbackWorkflowRevision(config, '/daily-os weekly deep'), false);
   assert.equal(shouldTreatAsFeedbackWorkflowRevision(config, '把 LEO-12 降级，明天再跟进'), true);
+}
+
+async function testWorkflowRevisionStoresStructuredSupplementItems(): Promise<void> {
+  const text = '帮我补充，1. 今天晚上7:30，有魁北克省省庆活动。室外音乐会。2. 线上报销诊所医疗费用';
+  const items = parseWorkflowRevisionItems(text);
+  assert.deepEqual(items, [
+    { type: 'time_boundary', text: '今天晚上7:30，有魁北克省省庆活动。室外音乐会' },
+    { type: 'todo', text: '线上报销诊所医疗费用' },
+  ]);
+
+  const note = formatWorkflowRevisionMemoryNote(text);
+  assert.match(note, /结构化补充事项/);
+  assert.match(note, /\[time_boundary\] 今天晚上7:30，有魁北克省省庆活动。室外音乐会/);
+  assert.match(note, /\[todo\] 线上报销诊所医疗费用/);
+
+  const config = testConfig();
+  config.memory.daily_dir = path.join(tmp, 'structured-daily');
+  const replies: string[] = [];
+  await runParsedDailyOsCommand(
+    {
+      config,
+      messageId: 'message-structured-supplement',
+      text: `daily-os 修改今日安排：${text}`,
+      source: 'regression-test',
+      prefix: 'daily-os',
+      reply: async (reply) => {
+        replies.push(reply);
+      },
+    },
+    { type: 'revision_request', workflow: 'daily_plan', text },
+  );
+
+  const dailyFiles = fs.readdirSync(config.memory.daily_dir).filter((name) => name.endsWith('.md'));
+  assert.equal(dailyFiles.length, 1);
+  const daily = fs.readFileSync(path.join(config.memory.daily_dir, dailyFiles[0] || ''), 'utf8');
+  assert.match(daily, /结构化补充事项/);
+  assert.match(daily, /\[time_boundary\] 今天晚上7:30，有魁北克省省庆活动。室外音乐会/);
+  assert.match(daily, /\[todo\] 线上报销诊所医疗费用/);
+  assert.match(replies.join('\n'), /已记录这条修改意见/);
+}
+
+function testTodoInboxCommandsAndVaultNote(): void {
+  const config = testConfig();
+  config.todo_inbox.ledger_path = path.join(tmp, 'todo-inbox.jsonl');
+  config.todo_inbox.vault_path = path.join(tmp, 'vault', '99_Meta', 'daily-os-todo.md');
+
+  const parsed = parseTodoInboxCommand('帮我记一下：1. 今晚 7:30 省庆活动。2. 线上报销诊所医疗费用');
+  assert.deepEqual(parsed, { type: 'capture', text: '1. 今晚 7:30 省庆活动。2. 线上报销诊所医疗费用' });
+  const capture = handleTodoInboxCommand(config, parsed!, { source: 'regression-test', messageId: 'todo-1' });
+  assert.equal(capture.items?.length, 2);
+  assert.match(capture.reply || '', /已写入 Todo Inbox：2 条/);
+
+  const open = openTodoInboxItems(config);
+  assert.equal(open.length, 2);
+  assert.equal(open[0]?.type, 'time_boundary');
+  assert.equal(open[1]?.type, 'todo');
+
+  const renameById = updateTodoInboxItemById(config, open[1]!.id, { text: '线上报销诊所医疗费用，补充保险入口', type: 'reminder' });
+  assert.match(renameById.reply || '', /Todo 已更新/);
+  const renamed = openTodoInboxItems(config);
+  assert.equal(renamed[1]?.text, '线上报销诊所医疗费用，补充保险入口');
+  assert.equal(renamed[1]?.type, 'reminder');
+
+  const vault = fs.readFileSync(config.todo_inbox.vault_path, 'utf8');
+  assert.match(vault, /Daily OS Todo Inbox/);
+  assert.match(vault, /时间边界：今晚 7:30 省庆活动/);
+  assert.match(vault, /提醒：线上报销诊所医疗费用，补充保险入口/);
+
+  const done = parseTodoInboxCommand('完成 todo：线上报销诊所医疗费用，补充保险入口');
+  assert.deepEqual(done, { type: 'update', action: 'done', target: '线上报销诊所医疗费用', note: '补充保险入口' });
+  const update = handleTodoInboxCommand(config, done!, { source: 'regression-test' });
+  assert.match(update.reply || '', /已完成 todo/);
+  assert.equal(openTodoInboxItems(config).length, 1);
+  assert.match(fs.readFileSync(config.todo_inbox.vault_path, 'utf8'), /- \[x\].*提醒：线上报销诊所医疗费用，补充保险入口/);
+
+  const reminder = parseTodoInboxCommand('提醒我：明天下午 3 点联系导师');
+  assert.deepEqual(reminder, { type: 'capture', text: '明天下午 3 点联系导师', itemType: 'reminder' });
 }
 
 async function testConfirmLatestPolicyCandidateWithoutId(): Promise<void> {
