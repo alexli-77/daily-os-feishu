@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { loadConfig } from '../src/config/load-config.js';
@@ -24,6 +25,7 @@ import { executeLifeReviewOsWriteback, prepareLifeReviewOsWriteback, runLifeRevi
 import { formatWorkflowRevisionMemoryNote, parseWorkflowRevisionItems } from '../src/interaction/workflow-revision.js';
 import { handleTodoInboxCommand, openTodoInboxItems, parseTodoInboxCommand, updateTodoInboxItemById } from '../src/todo/inbox.js';
 import { listTodoAiActionCandidates, listTodoAiActionRecords } from '../src/actions/todo-actions.js';
+import { buildTodoAiActionExecutionRequest } from '../src/actions/executor.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-os-regression-'));
 
@@ -44,6 +46,7 @@ try {
   await testWorkflowRevisionStoresStructuredSupplementItems();
   testTodoInboxCommandsAndVaultNote();
   await testTodoAiActionDraftsStayDraftOnly();
+  await testTodoAiActionWebhookAdapterContract();
   testDailyPlanSummaryShowsOpenLoopEvidence();
   testDailyPlanSummaryKeepsReadableRowsAndUrgentQuestion();
   testDailyPlanSummaryStyle2RemovesGroupsAndMarksAi();
@@ -215,6 +218,7 @@ function testDailyOsCommandParsing(): void {
   assert.equal(todoCommand.type, 'todo_inbox');
   assert.deepEqual(parseDailyOsCommand('daily-os actions', 'daily-os'), { type: 'todo_action', command: { type: 'list' } });
   assert.deepEqual(parseDailyOsCommand('daily-os action draft 1', 'daily-os'), { type: 'todo_action', command: { type: 'draft', target: '1' } });
+  assert.deepEqual(parseDailyOsCommand('daily-os action dispatch act-1', 'daily-os'), { type: 'todo_action', command: { type: 'dispatch', target: 'act-1' } });
   assert.deepEqual(parseDailyOsCommand('daily-os 保存规则', 'daily-os'), { type: 'confirm_policy_candidate' });
   assert.deepEqual(parseDailyOsCommand('daily-os 确认保存', 'daily-os'), { type: 'confirm_policy_candidate' });
   assert.deepEqual(parseDailyOsCommand('daily-os 确认保存：daily-os 保存规则 pol-20260605202553-801f4cf6', 'daily-os'), {
@@ -568,7 +572,95 @@ async function testTodoAiActionDraftsStayDraftOnly(): Promise<void> {
   );
 
   assert.match(confirmReplies.join('\n'), /已确认 AI 执行草稿/);
-  assert.equal(listTodoAiActionRecords(config).at(-1)?.status, 'confirmed');
+  const confirmed = listTodoAiActionRecords(config).at(-1);
+  assert.equal(confirmed?.status, 'confirmed');
+  assert.equal(buildTodoAiActionExecutionRequest(config, confirmed!).schema_version, 'daily-os.ai_action.v1');
+
+  const dispatchReplies: string[] = [];
+  await runParsedDailyOsCommand(
+    {
+      config,
+      messageId: 'message-action-3',
+      text: `daily-os action dispatch ${confirmed!.id}`,
+      source: 'regression-test',
+      prefix: 'daily-os',
+      reply: async (text) => {
+        dispatchReplies.push(text);
+      },
+    },
+    { type: 'todo_action', command: { type: 'dispatch', target: confirmed!.id } },
+  );
+
+  assert.match(dispatchReplies.join('\n'), /未提交执行器/);
+  assert.match(dispatchReplies.join('\n'), /dry_run=true/);
+}
+
+async function testTodoAiActionWebhookAdapterContract(): Promise<void> {
+  const config = testConfig();
+  config.todo_inbox.ledger_path = path.join(tmp, 'todo-action-webhook-inbox.jsonl');
+  config.todo_inbox.vault_path = path.join(tmp, 'vault', '99_Meta', 'todo-action-webhook.md');
+  config.ai_actions.ledger_path = path.join(tmp, 'ai-actions-webhook.jsonl');
+  config.ai_actions.default_provider = 'hermes';
+  config.ai_actions.dry_run = false;
+  config.ai_actions.executor.enabled = true;
+  config.ai_actions.executor.type = 'webhook';
+
+  handleTodoInboxCommand(config, { type: 'capture', text: '写 portfolio review 页面修改清单' }, { source: 'regression-test' });
+  const draft = await runTodoActionCommandForTest(config, { type: 'todo_action', command: { type: 'draft', target: '1' } });
+  assert.match(draft.join('\n'), /已生成 AI 执行草稿/);
+  const drafted = listTodoAiActionRecords(config).at(-1)!;
+  const confirm = await runTodoActionCommandForTest(config, { type: 'todo_action', command: { type: 'confirm', target: drafted.id } });
+  assert.match(confirm.join('\n'), /已确认 AI 执行草稿/);
+  const confirmed = listTodoAiActionRecords(config).at(-1)!;
+
+  const received: string[] = [];
+  const server = http.createServer((request, response) => {
+    let body = '';
+    request.on('data', (chunk) => {
+      body += String(chunk);
+    });
+    request.on('end', () => {
+      received.push(body);
+      response.writeHead(202, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ status: 'accepted', run_id: 'hermes-adapter-test' }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    config.ai_actions.executor.endpoint_url = `http://127.0.0.1:${address.port}/daily-os/actions`;
+
+    const dispatch = await runTodoActionCommandForTest(config, { type: 'todo_action', command: { type: 'dispatch', target: confirmed.id } });
+    assert.match(dispatch.join('\n'), /已提交 AI 执行草稿/);
+    assert.equal(received.length, 1);
+    const payload = JSON.parse(received[0] || '{}');
+    assert.equal(payload.schema_version, 'daily-os.ai_action.v1');
+    assert.equal(payload.action.provider, 'hermes');
+    assert.equal(payload.execution.mode, 'draft_handoff');
+    assert.equal(payload.constraints.no_external_writes_without_confirmation, true);
+    assert.equal(listTodoAiActionRecords(config).at(-1)?.status, 'dispatched');
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+
+async function runTodoActionCommandForTest(config: ReturnType<typeof testConfig>, command: ReturnType<typeof parseDailyOsCommand>): Promise<string[]> {
+  const replies: string[] = [];
+  await runParsedDailyOsCommand(
+    {
+      config,
+      messageId: 'message-action-helper',
+      text: 'daily-os action',
+      source: 'regression-test',
+      prefix: 'daily-os',
+      reply: async (text) => {
+        replies.push(text);
+      },
+    },
+    command,
+  );
+  return replies;
 }
 
 async function testConfirmLatestPolicyCandidateWithoutId(): Promise<void> {

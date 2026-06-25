@@ -23,6 +23,7 @@ import { formatWorkflowRevisionMemoryNote } from './workflow-revision.js';
 import { handleTodoInboxCommand, parseTodoInboxCommand, type TodoInboxCommand } from '../todo/inbox.js';
 import {
   confirmTodoAiActionDraft,
+  dispatchTodoAiActionDraft,
   formatTodoAiActionCandidates,
   parseTodoAiActionCommand,
   prepareTodoAiActionDraft,
@@ -171,6 +172,7 @@ export function dailyOsStatusText(prefix: string, config?: AppConfig): string {
     `- ${prefix} 完成 todo：<text>`,
     `- ${prefix} actions`,
     `- ${prefix} action draft <序号或todo内容>`,
+    `- ${prefix} action dispatch <action-id>`,
     `- ${prefix} progress`,
     `- ${prefix} remember <text>`,
     `- ${prefix} feedback <text>`,
@@ -263,6 +265,11 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
           source: context.source,
           messageId: context.messageId,
         });
+        await context.reply(result.reply);
+        return;
+      }
+      if (command.command.type === 'dispatch') {
+        const result = await dispatchTodoAiActionDraft(context.config, command.command.target);
         await context.reply(result.reply);
         return;
       }
