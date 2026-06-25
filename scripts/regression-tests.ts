@@ -23,6 +23,7 @@ import { detectTableLayout, extractWeeklyWritebackItems, targetWeekLabelForDate 
 import { executeLifeReviewOsWriteback, prepareLifeReviewOsWriteback, runLifeReviewOsSkill } from '../src/skills/life-review-os.js';
 import { formatWorkflowRevisionMemoryNote, parseWorkflowRevisionItems } from '../src/interaction/workflow-revision.js';
 import { handleTodoInboxCommand, openTodoInboxItems, parseTodoInboxCommand, updateTodoInboxItemById } from '../src/todo/inbox.js';
+import { listTodoAiActionCandidates, listTodoAiActionRecords } from '../src/actions/todo-actions.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-os-regression-'));
 
@@ -42,6 +43,7 @@ try {
   testFeedbackRevisionIgnoresDailyOsCommands();
   await testWorkflowRevisionStoresStructuredSupplementItems();
   testTodoInboxCommandsAndVaultNote();
+  await testTodoAiActionDraftsStayDraftOnly();
   testDailyPlanSummaryShowsOpenLoopEvidence();
   testDailyPlanSummaryKeepsReadableRowsAndUrgentQuestion();
   testDailyPlanSummaryStyle2RemovesGroupsAndMarksAi();
@@ -211,6 +213,8 @@ function testDailyOsCommandParsing(): void {
   assert.deepEqual(parseDailyOsCommand('daily-os weekly deep', 'daily-os'), { type: 'skill_run', skillId: 'weekly-review', mode: 'weekly' });
   const todoCommand = parseDailyOsCommand('daily-os 记到 todo：线上报销诊所医疗费用', 'daily-os');
   assert.equal(todoCommand.type, 'todo_inbox');
+  assert.deepEqual(parseDailyOsCommand('daily-os actions', 'daily-os'), { type: 'todo_action', command: { type: 'list' } });
+  assert.deepEqual(parseDailyOsCommand('daily-os action draft 1', 'daily-os'), { type: 'todo_action', command: { type: 'draft', target: '1' } });
   assert.deepEqual(parseDailyOsCommand('daily-os 保存规则', 'daily-os'), { type: 'confirm_policy_candidate' });
   assert.deepEqual(parseDailyOsCommand('daily-os 确认保存', 'daily-os'), { type: 'confirm_policy_candidate' });
   assert.deepEqual(parseDailyOsCommand('daily-os 确认保存：daily-os 保存规则 pol-20260605202553-801f4cf6', 'daily-os'), {
@@ -504,6 +508,67 @@ function testTodoInboxCommandsAndVaultNote(): void {
 
   const reminder = parseTodoInboxCommand('提醒我：明天下午 3 点联系导师');
   assert.deepEqual(reminder, { type: 'capture', text: '明天下午 3 点联系导师', itemType: 'reminder' });
+}
+
+async function testTodoAiActionDraftsStayDraftOnly(): Promise<void> {
+  const config = testConfig();
+  config.todo_inbox.ledger_path = path.join(tmp, 'todo-action-inbox.jsonl');
+  config.todo_inbox.vault_path = path.join(tmp, 'vault', '99_Meta', 'todo-action.md');
+  config.ai_actions.ledger_path = path.join(tmp, 'ai-actions.jsonl');
+  config.ai_actions.default_provider = 'codex';
+  config.ai_actions.dry_run = true;
+
+  const capture = handleTodoInboxCommand(
+    config,
+    { type: 'capture', text: '1. 写 Heng Li 导师联系邮件。2. 线上报销诊所医疗费用' },
+    { source: 'regression-test', messageId: 'todo-action-1' },
+  );
+  assert.equal(capture.items?.length, 2);
+
+  const candidates = listTodoAiActionCandidates(config);
+  assert.equal(candidates.length, 2);
+  assert.equal(candidates[0]?.kind, 'email_draft');
+  assert.equal(candidates[1]?.kind, 'checklist');
+
+  const replies: string[] = [];
+  await runParsedDailyOsCommand(
+    {
+      config,
+      messageId: 'message-action-1',
+      text: 'daily-os action draft 1',
+      source: 'regression-test',
+      prefix: 'daily-os',
+      reply: async (text) => {
+        replies.push(text);
+      },
+    },
+    { type: 'todo_action', command: { type: 'draft', target: '1' } },
+  );
+
+  assert.match(replies.join('\n'), /只生成草稿/);
+  assert.match(replies.join('\n'), /不会自动外发/);
+  const records = listTodoAiActionRecords(config);
+  assert.equal(records.length, 1);
+  assert.equal(records[0]?.status, 'drafted');
+  assert.equal(records[0]?.safety, 'draft_only');
+
+  const confirmReplies: string[] = [];
+  await runParsedDailyOsCommand(
+    {
+      config,
+      messageId: 'message-action-2',
+      text: `daily-os action confirm ${records[0]!.id}`,
+      source: 'regression-test',
+      prefix: 'daily-os',
+      reply: async (text) => {
+        confirmReplies.push(text);
+      },
+    },
+    { type: 'todo_action', command: { type: 'confirm', target: records[0]!.id } },
+  );
+
+  assert.match(confirmReplies.join('\n'), /已确认 AI 执行草稿/);
+  assert.equal(listTodoAiActionRecords(config).at(-1)?.status, 'confirmed');
 }
 
 async function testConfirmLatestPolicyCandidateWithoutId(): Promise<void> {

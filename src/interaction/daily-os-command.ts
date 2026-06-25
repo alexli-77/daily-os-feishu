@@ -21,6 +21,13 @@ import { formatSkillList, runConfiguredSkill } from '../skills/runner.js';
 import type { SkillRunResult } from '../skills/runner.js';
 import { formatWorkflowRevisionMemoryNote } from './workflow-revision.js';
 import { handleTodoInboxCommand, parseTodoInboxCommand, type TodoInboxCommand } from '../todo/inbox.js';
+import {
+  confirmTodoAiActionDraft,
+  formatTodoAiActionCandidates,
+  parseTodoAiActionCommand,
+  prepareTodoAiActionDraft,
+  type TodoAiActionCommand,
+} from '../actions/todo-actions.js';
 
 export type ParsedDailyOsCommand =
   | { type: 'ignore' }
@@ -38,6 +45,7 @@ export type ParsedDailyOsCommand =
   | { type: 'skill_list' }
   | { type: 'skill_run'; skillId: string; mode?: string; text?: string }
   | { type: 'todo_inbox'; command: TodoInboxCommand }
+  | { type: 'todo_action'; command: TodoAiActionCommand }
   | { type: 'remember'; text: string }
   | { type: 'feedback'; text: string }
   | { type: 'revision_request'; workflow: WorkflowName; text: string }
@@ -103,6 +111,8 @@ export function parseDailyOsCommand(text: string, prefix: string): ParsedDailyOs
 
   const revision = parseRevisionRequest(normalized);
   if (revision) return revision;
+  const todoActionCommand = parseTodoAiActionCommand(normalized);
+  if (todoActionCommand) return { type: 'todo_action', command: todoActionCommand };
   const todoInboxCommand = parseTodoInboxCommand(normalized);
   if (todoInboxCommand) return { type: 'todo_inbox', command: todoInboxCommand };
 
@@ -159,6 +169,8 @@ export function dailyOsStatusText(prefix: string, config?: AppConfig): string {
     `- ${prefix} 记到 todo：<text>`,
     `- ${prefix} 修改 todo：把“旧事项”改成“新事项”`,
     `- ${prefix} 完成 todo：<text>`,
+    `- ${prefix} actions`,
+    `- ${prefix} action draft <序号或todo内容>`,
     `- ${prefix} progress`,
     `- ${prefix} remember <text>`,
     `- ${prefix} feedback <text>`,
@@ -239,6 +251,23 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
         messageId: context.messageId,
       });
       await context.reply(result.reply || 'Todo inbox updated.');
+      return;
+    }
+    case 'todo_action': {
+      if (command.command.type === 'list') {
+        await context.reply(formatTodoAiActionCandidates(context.config));
+        return;
+      }
+      if (command.command.type === 'draft') {
+        const result = prepareTodoAiActionDraft(context.config, command.command.target, {
+          source: context.source,
+          messageId: context.messageId,
+        });
+        await context.reply(result.reply);
+        return;
+      }
+      const result = confirmTodoAiActionDraft(context.config, command.command.target);
+      await context.reply(result.reply);
       return;
     }
     case 'progress': {
@@ -437,6 +466,8 @@ function commandEffect(command: ParsedDailyOsCommand): FeishuControlEffect {
     case 'chat_analysis':
     case 'skill_list':
       return 'read';
+    case 'todo_action':
+      return command.command.type === 'list' ? 'read' : 'memory_write';
     case 'skill_run':
       return 'workflow_trigger';
     case 'todo_inbox':

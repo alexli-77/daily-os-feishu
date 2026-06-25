@@ -129,6 +129,15 @@ todo_inbox:
   # User-readable Markdown note inside the user's Vault knowledge base.
   vault_relative_path: "99_Meta/daily-os-todo.md"
 
+ai_actions:
+  enabled: true
+  # Local audit ledger for AI action drafts and confirmations. It should stay private.
+  ledger_path: "./data/memory/ai-actions.jsonl"
+  # Provider is only a handoff hint in the current safe version.
+  default_provider: "codex" # codex | claude | hermes | manual
+  # Keep true unless an explicit executor integration is reviewed and enabled.
+  dry_run: true
+
 chat_analysis:
   enabled: true
   # manual: latest configured messages
