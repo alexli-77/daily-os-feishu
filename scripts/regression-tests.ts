@@ -44,6 +44,7 @@ try {
   testTodoInboxCommandsAndVaultNote();
   testDailyPlanSummaryShowsOpenLoopEvidence();
   testDailyPlanSummaryKeepsReadableRowsAndUrgentQuestion();
+  testDailyPlanSummaryKeepsGithubTaskTitles();
   testDailyPlanSummaryStyle2RemovesGroupsAndMarksAi();
   testWorkflowSummaryQuotesLinearMetadata();
   testWorkflowDetailsShowEvidenceTrace();
@@ -582,6 +583,23 @@ function testDailyPlanSummaryKeepsReadableRowsAndUrgentQuestion(): void {
   assert.doesNotMatch(summary, /\*\*P1｜Codex\*\*：\s*PR\s*\n/);
   assert.doesNotMatch(summary, /Ver\s*\n/);
   assert.match(summary, /额外紧急事项/);
+}
+
+function testDailyPlanSummaryKeepsGithubTaskTitles(): void {
+  const content = [
+    '老板您好，我帮您整理了今天的安排。',
+    '',
+    '**今日重点**',
+    '- `Heng Li 面试结果复盘` 今天仍然要放第一位，因为 Feishu Weekly 🐶 6.22-6.28 明确标为 MIT。',
+    '',
+    '**Codex 可以做**',
+    '- `GitHub guide 网页修改`：产物是需求确认清单、改动方案和可验收页面版本。',
+  ].join('\n');
+  const config = testConfig();
+  config.output.feishu.summary_style = 'style1';
+  const summary = formatWorkflowSummaryForFeishu('daily_plan', '2026-06-26', content, undefined, config);
+  assert.match(summary, /GitHub guide 网页修改/);
+  assert.doesNotMatch(summary, /需要确认这一项/);
 }
 
 function testDailyPlanSummaryStyle2RemovesGroupsAndMarksAi(): void {
