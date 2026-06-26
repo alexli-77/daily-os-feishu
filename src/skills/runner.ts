@@ -180,6 +180,7 @@ async function buildSkillInputPack(
     detail: source.detail || '',
     sample: summarizeSourceData(source.data),
   }));
+  const structuredEvidence = compactEvidenceForWeeklyPlanning(evidence);
 
   return redactSensitive(
     [
@@ -220,6 +221,10 @@ async function buildSkillInputPack(
       '',
       '## Evidence Summary',
       JSON.stringify(evidenceSummary, null, 2),
+      '',
+      '## Structured Evidence For Weekly Planning',
+      'Use this as supplemental context only. The weekly-review engine must still map every selected item to the Feishu 🐶 OKR table row before write-back.',
+      JSON.stringify(structuredEvidence, null, 2),
     ].join('\n'),
   );
 }
@@ -406,6 +411,44 @@ function summarizeSourceData(data: unknown): string {
     return truncate(JSON.stringify(data), 1000);
   } catch {
     return truncate(String(data), 1000);
+  }
+}
+
+function compactEvidenceForWeeklyPlanning(evidence: Awaited<ReturnType<typeof collectEvidence>>): Record<string, unknown> {
+  const useful = Object.entries(evidence.sources)
+    .filter(([name, source]) => {
+      if (source.state !== 'available') return ['todo_inbox', 'linear', 'weekly_priorities'].includes(name);
+      return (
+        name === 'linear' ||
+        name === 'todo_inbox' ||
+        name === 'weekly_priorities' ||
+        name === 'progress_ledger' ||
+        name.includes('vault') ||
+        name.includes('feishu')
+      );
+    })
+    .map(([name, source]) => [
+      name,
+      {
+        state: source.state,
+        ...(source.detail ? { detail: source.detail } : {}),
+        data_preview: previewSourceData(source.data),
+      },
+    ]);
+  return {
+    generated_at: evidence.generated_at,
+    date: evidence.date,
+    sources: Object.fromEntries(useful),
+  };
+}
+
+function previewSourceData(data: unknown): string {
+  if (data == null) return '';
+  if (typeof data === 'string') return truncate(data, 8000);
+  try {
+    return truncate(JSON.stringify(data, null, 2), 8000);
+  } catch {
+    return truncate(String(data), 8000);
   }
 }
 
