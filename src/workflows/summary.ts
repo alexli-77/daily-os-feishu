@@ -493,7 +493,8 @@ function splitOpenLoopItems(value: string): string[] {
 function removeEvidenceTail(value: string): string {
   return value
     .split(/(?:因为|完成标准|今天完成标准|；今天|，今天)/)[0]
-    .split(/(?:证据来自|证据为|依据[:：]?|来源[:：]?|Feishu IM|Linear |local files|Chrome snapshot|GitHub |Vault )/i)[0]
+    .split(/(?:证据来自|证据为|依据[:：]?|来源[:：]?)/i)[0]
+    .split(/[。；;，,]\s*(?:Feishu IM|Linear\s|local files|Chrome snapshot|GitHub\s|Vault\s)/i)[0]
     .split(/(?:。|；|;)\s*(?:证据|依据|来源|Linear|Feishu|Vault|GitHub|Chrome)/i)[0]
     .split(/(?:，|,)\s*(?:证据|依据|来源|Linear|Feishu|Vault|GitHub|Chrome|但|不过)/i)[0]
     .trim();
