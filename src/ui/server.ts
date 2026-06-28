@@ -16,6 +16,7 @@ import { getLaunchAgentStatus, installLaunchAgent, uninstallLaunchAgent } from '
 import { runCommand } from '../utils/command.js';
 import { appendUiLog, clearUiLogs, readUiLogs } from '../storage/ui-log.js';
 import { startDecisionOnboarding } from '../decision/onboarding.js';
+import { ensureDecisionPolicyFiles } from '../decision/policy.js';
 import { collectProgressCandidates, formatProgressCandidates } from '../progress/capture.js';
 import { analyzeChatContext, formatChatContextAnalysis } from '../chat/context-analysis.js';
 import { readBackgroundSuggestionsState } from '../service/background-suggestions.js';
@@ -148,6 +149,7 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
     if (request.method === 'GET' && url.pathname === '/api/env-secret') return sendJson(response, readSecret(options, url.searchParams.get('key') || ''));
     if (request.method === 'POST' && url.pathname === '/api/capture') return sendJson(response, await captureTodo(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/todo-inbox') return sendJson(response, await updateTodoInbox(options, await readJson(request)));
+    if (request.method === 'POST' && url.pathname === '/api/decision-policy') return sendJson(response, await saveDecisionPolicy(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/config') return sendJson(response, await saveConfig(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/env') return sendJson(response, await saveEnv(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/action') return sendJson(response, await runAction(options, await readJson(request)));
@@ -204,11 +206,21 @@ async function buildState(options: UiServerOptions): Promise<Record<string, unkn
     doctorText: formatDoctor(checks),
     service: await getLaunchAgentStatus(),
     backgroundSuggestions: readBackgroundSuggestionsState(config),
+    decisionPolicy: readDecisionPolicyState(config),
     todoInbox: {
       enabled: config.todo_inbox.enabled,
       open: openTodoInboxItems(config),
       recent: listTodoInboxItems(config).filter((item) => item.status !== 'deleted').slice(-40).reverse(),
     },
+  };
+}
+
+function readDecisionPolicyState(config: AppConfig): Record<string, unknown> {
+  const files = ensureDecisionPolicyFiles(config);
+  return {
+    repositoryPath: files.repositoryPath,
+    notesPath: files.notesPath,
+    policyMd: readTextIfExists(files.notesPath),
   };
 }
 
@@ -239,6 +251,18 @@ async function updateTodoInbox(options: UiServerOptions, body: unknown): Promise
     note: typeof request.note === 'string' ? request.note : undefined,
   });
   return { ok: true, text: result.reply || 'Todo inbox updated.', items: result.items || [], state: await buildState(options) };
+}
+
+async function saveDecisionPolicy(options: UiServerOptions, body: unknown): Promise<Record<string, unknown>> {
+  const request = readRecord(body);
+  const env = readEnvFile(options.envPath);
+  applyEnv(env);
+  const config = loadConfig(options.configPath);
+  const files = ensureDecisionPolicyFiles(config);
+  const markdown = String(request.policyMd ?? '').replace(/\r\n/g, '\n');
+  fs.mkdirSync(path.dirname(files.notesPath), { recursive: true });
+  fs.writeFileSync(files.notesPath, markdown, 'utf8');
+  return { ok: true, text: `Saved decision policy notes: ${files.notesPath}`, state: await buildState(options) };
 }
 
 function isTodoInboxType(value: string): value is 'todo' | 'reminder' | 'time_boundary' | 'note' {
@@ -841,6 +865,10 @@ function redactedEnv(values: Record<string, string>): Record<string, unknown> {
   return env;
 }
 
+function readTextIfExists(filePath: string): string {
+  return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
+}
+
 function quoteEnv(value: string): string {
   if (!value) return '';
   if (/^[A-Za-z0-9_./:@-]+$/.test(value)) return value;
@@ -901,6 +929,7 @@ const HTML = String.raw`<!doctype html>
       <nav class="nav" aria-label="Sections">
         <button class="nav-button active" data-section="overview">Overview</button>
         <button class="nav-button" data-section="todo">Todo Inbox</button>
+        <button class="nav-button" data-section="decision">Decision Policy</button>
         <button class="nav-button" data-section="setup">Setup</button>
         <button class="nav-button" data-section="sources">Sources</button>
         <button class="nav-button" data-section="workflows">Workflows</button>
@@ -972,6 +1001,30 @@ const HTML = String.raw`<!doctype html>
                   </div>
                 </div>
                 <div class="todo-list" id="todo-list"></div>
+              </section>
+            </div>
+          </section>
+
+          <section class="panel" id="section-decision">
+            <div class="panel-head">
+              <div>
+                <h2>Decision Policy</h2>
+                <p class="hint">This page shows the markdown decision notes Daily OS loads from the memory repository.</p>
+              </div>
+              <div class="panel-actions">
+                <button type="button" class="secondary compact" data-action="decision_policy_reload">Refresh</button>
+                <button type="button" data-action="decision_policy_save">Save Markdown</button>
+              </div>
+            </div>
+            <div class="decision-page">
+              <section class="decision-editor" aria-labelledby="decision-editor-title">
+                <div>
+                  <h3 id="decision-editor-title">decision-policy.md</h3>
+                  <p class="hint" id="decision-policy-md-path"></p>
+                  <p class="hint" id="decision-policy-repository"></p>
+                </div>
+                <textarea id="decision-policy-md" spellcheck="false" placeholder="# 决策规则"></textarea>
+                <p class="hint" id="decision-policy-status"></p>
               </section>
             </div>
           </section>
@@ -1703,6 +1756,25 @@ legend {
   padding: 1rem;
 }
 
+.decision-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+.decision-editor {
+  display: grid;
+  gap: .75rem;
+  border: 1px solid var(--border);
+  border-radius: .5rem;
+  background: #fbfcfb;
+  padding: .85rem;
+}
+.decision-editor textarea {
+  min-height: 34rem;
+  line-height: 1.5;
+}
+
 .log-list {
   display: grid;
   gap: .5rem;
@@ -1865,6 +1937,7 @@ function render() {
       : 'Todo Inbox disabled.';
   }
   renderTodoInbox(openTodos);
+  renderDecisionPolicy(state.decisionPolicy);
   set('env-CODEX_BIN', state.env.CODEX_BIN || 'codex');
   set('env-CODEX_HOME', state.env.CODEX_HOME || '');
   set('env-LARK_APP_ID', state.env.LARK_APP_ID);
@@ -2026,6 +2099,15 @@ function renderTodoInbox(openTodos) {
   }).join('');
 }
 
+function renderDecisionPolicy(policy) {
+  if (!policy) return;
+  set('decision-policy-md', policy.policyMd || '');
+  const mdPath = $('decision-policy-md-path');
+  if (mdPath) mdPath.textContent = policy.notesPath || '';
+  const repository = $('decision-policy-repository');
+  if (repository) repository.textContent = policy.repositoryPath ? 'Memory repository: ' + policy.repositoryPath : '';
+}
+
 function typeLabel(type) {
   if (type === 'time_boundary') return 'Time';
   if (type === 'reminder') return 'Reminder';
@@ -2066,6 +2148,17 @@ async function saveTodoFromPage() {
   clearTodoEditor();
   $('todo-page-status').textContent = id ? 'Todo updated.' : 'Todo added.';
   showToast(id ? 'Todo updated' : 'Todo added', 'success');
+}
+
+async function saveDecisionPolicyFromPage() {
+  const markdown = value('decision-policy-md');
+  const status = $('decision-policy-status');
+  if (status) status.textContent = 'Saving...';
+  const result = await post('/api/decision-policy', { policyMd: markdown });
+  if (result.state) state = result.state;
+  render();
+  if (status) status.textContent = result.text || 'Saved decision-policy.md';
+  showToast('Decision policy markdown saved', 'success');
 }
 
 async function handleTodoItemAction(action, id) {
@@ -2240,6 +2333,22 @@ function secretValue(key) {
 }
 
 async function runAction(action) {
+  if (action === 'decision_policy_reload') {
+    await loadState();
+    showToast('Decision policy reloaded', 'success');
+    return;
+  }
+  if (action === 'decision_policy_save') {
+    try {
+      await saveDecisionPolicyFromPage();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const status = $('decision-policy-status');
+      if (status) status.textContent = message;
+      showToast('Decision policy save failed: ' + message, 'error', false);
+    }
+    return;
+  }
   if (action === 'todo_refresh') {
     await loadState();
     showToast('Todo Inbox refreshed', 'success');
