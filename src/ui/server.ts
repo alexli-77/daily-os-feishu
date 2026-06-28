@@ -1026,6 +1026,48 @@ const HTML = String.raw`<!doctype html>
                 <textarea id="decision-policy-md" spellcheck="false" placeholder="# 决策规则"></textarea>
                 <p class="hint" id="decision-policy-status"></p>
               </section>
+              <section class="decision-example-panel" aria-labelledby="decision-example-title">
+                <div>
+                  <h3 id="decision-example-title">Example</h3>
+                  <p class="hint">A simple sample showing what users can write in each section.</p>
+                </div>
+                <pre class="decision-example"><code># 决策规则
+
+## 信息源优先级
+
+- 每周要务优先于 Linear。
+- 用户今天手动记录的 todo 优先级最高。
+- Linear 只用来看任务状态和链接。
+
+## 每日计划规则
+
+- 每天最多给我 3 个重点任务。
+- 先放今天必须完成的事。
+- 不确定的任务放到“暂缓”。
+
+## 复盘规则
+
+- 先检查今天有没有完成重点任务。
+- 没完成时，告诉我原因可能是什么。
+- 不要只总结，要给下一步建议。
+
+## AI 分工规则
+
+- Codex 可以先写草稿和检查清单。
+- 对外发送邮件前必须让我确认。
+- 涉及隐私或付款的事只提醒，不自动执行。
+
+## 不要做
+
+- 不要把过期 Linear 日期当成今天任务。
+- 不要一次给太多任务。
+- 不要在我没确认前改长期规则。
+
+## 校准记录
+
+- 如果今天计划太多，下次减少到 3 项以内。
+- 如果任务说不清楚，下次写成可执行动作。</code></pre>
+              </section>
             </div>
           </section>
 
@@ -1758,11 +1800,12 @@ legend {
 
 .decision-page {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(22rem, .72fr);
   gap: 1rem;
   align-items: start;
 }
-.decision-editor {
+.decision-editor,
+.decision-example-panel {
   display: grid;
   gap: .75rem;
   border: 1px solid var(--border);
@@ -1773,6 +1816,29 @@ legend {
 .decision-editor textarea {
   min-height: 34rem;
   line-height: 1.5;
+}
+.decision-example-panel {
+  background: #fffdfa;
+}
+.decision-example {
+  min-height: 34rem;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: .4rem;
+  padding: .75rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: .86rem;
+  line-height: 1.5;
+}
+@media (max-width: 1080px) {
+  .decision-page {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .log-list {
