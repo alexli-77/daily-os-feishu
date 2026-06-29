@@ -1,6 +1,6 @@
 {
   "name": "daily-os-feishu",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.2",
   "description": "Feishu-first local Daily OS agent for Mac.",
   "type": "module",
   "bin": {
