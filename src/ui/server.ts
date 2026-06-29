@@ -928,6 +928,7 @@ const HTML = String.raw`<!doctype html>
     <main class="layout">
       <nav class="nav" aria-label="Sections">
         <button class="nav-button active" data-section="overview">Overview</button>
+        <button class="nav-button" data-section="guide">Guide</button>
         <button class="nav-button" data-section="todo">Todo Inbox</button>
         <button class="nav-button" data-section="decision">Decision Policy</button>
         <button class="nav-button" data-section="setup">Setup</button>
@@ -958,6 +959,78 @@ const HTML = String.raw`<!doctype html>
               </label>
             </div>
             <pre id="output" aria-live="polite"></pre>
+          </section>
+
+          <section class="panel" id="section-guide">
+            <div class="panel-head">
+              <div>
+                <h2>Guide</h2>
+                <p class="hint">Daily OS is a Mac local service controlled from Feishu, this dashboard, and the desktop companion.</p>
+              </div>
+            </div>
+            <div class="guide-page">
+              <section class="guide-card" aria-labelledby="guide-start-title">
+                <h3 id="guide-start-title">How to use it</h3>
+                <ol class="guide-list">
+                  <li>Use <strong>Setup</strong> and <strong>Sources</strong> to configure Codex, Feishu, vault, Linear, and weekly-review.</li>
+                  <li>Use <strong>Todo Inbox</strong> for small personal todos that should affect daily plan and review.</li>
+                  <li>Use <strong>Decision Policy</strong> to tell Daily OS how to choose priorities.</li>
+                  <li>Use Feishu commands for daily work. Cards are the safest place to confirm write-back actions.</li>
+                </ol>
+              </section>
+
+              <section class="guide-card" aria-labelledby="guide-feishu-title">
+                <h3 id="guide-feishu-title">Feishu commands</h3>
+                <div class="command-list">
+                  <div><code>daily-os status</code><span>Show the action card with common workflow buttons.</span></div>
+                  <div><code>daily-os plan</code><span>Generate today's plan and send it as a Feishu card.</span></div>
+                  <div><code>daily-os review</code><span>Generate today's review.</span></div>
+                  <div><code>daily-os weekly</code><span>Generate the normal weekly review.</span></div>
+                  <div><code>daily-os weekly deep</code><span>Run the weekly-review skill. Use this before Feishu Weekly write-back.</span></div>
+                  <div><code>daily-os details</code><span>Show the full latest plan, review, or weekly output.</span></div>
+                  <div><code>daily-os progress</code><span>Ask Daily OS to find confirmable progress candidates.</span></div>
+                  <div><code>daily-os chat</code><span>Analyze recent Feishu chat context for possible updates.</span></div>
+                  <div><code>daily-os chat todo</code><span>Look for todo-like signals in recent Feishu messages.</span></div>
+                  <div><code>daily-os chat review</code><span>Look for review/progress signals in recent Feishu messages.</span></div>
+                  <div><code>daily-os remember 今天进展：...</code><span>Record progress or memory text for future review.</span></div>
+                  <div><code>daily-os 修改今日安排：...</code><span>Tell Daily OS how to adjust the latest daily plan.</span></div>
+                </div>
+              </section>
+
+              <section class="guide-card" aria-labelledby="guide-weekly-title">
+                <h3 id="guide-weekly-title">Feishu Weekly write-back</h3>
+                <p>Use <code>daily-os weekly deep</code> first. Daily OS should return a skill card with a draft and a write-back confirmation step.</p>
+                <p>Do not write directly from the desktop companion. Feishu Weekly write-back changes an external document, so confirmation should happen in the Feishu card after you can see the target document, week column, and rows.</p>
+              </section>
+
+              <section class="guide-card" aria-labelledby="guide-dashboard-title">
+                <h3 id="guide-dashboard-title">Dashboard</h3>
+                <div class="command-list">
+                  <div><code>Overview</code><span>Run checks, test Feishu, collect evidence, and trigger quick actions.</span></div>
+                  <div><code>Todo Inbox</code><span>Add, edit, complete, defer, or delete user-captured daily todos.</span></div>
+                  <div><code>Decision Policy</code><span>Edit the markdown rules Daily OS reads before planning and reviewing.</span></div>
+                  <div><code>Sources</code><span>Configure vault, Feishu documents, chat history, Linear, GitHub, and local snapshots.</span></div>
+                  <div><code>Workflows</code><span>Schedule daily plan, daily review, weekly review, and background suggestions.</span></div>
+                  <div><code>Logs</code><span>Check recent local service events without exposing message bodies by default.</span></div>
+                </div>
+              </section>
+
+              <section class="guide-card" aria-labelledby="guide-companion-title">
+                <h3 id="guide-companion-title">Desktop companion</h3>
+                <p>The desktop companion is a small control surface. It can open the dashboard, run plan/review/weekly, show service status, and restart the service.</p>
+                <p>Hovering the character shows user-captured daily todos. Those are separate from Feishu plan cards, but daily plan and review can read them as context.</p>
+              </section>
+
+              <section class="guide-card" aria-labelledby="guide-install-title">
+                <h3 id="guide-install-title">Install boundary</h3>
+                <p>The current alpha supports one-click installation of the background launchd service after the repo is configured. It is not yet a signed Mac app or DMG installer.</p>
+                <pre class="guide-code"><code>npm ci
+npm run setup
+npm run ui
+npm run build
+npm run service:install</code></pre>
+              </section>
+            </div>
           </section>
 
           <section class="panel" id="section-todo">
@@ -1478,6 +1551,62 @@ code {
   margin-bottom: 1rem;
 }
 
+.guide-page {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+.guide-card {
+  display: grid;
+  gap: .65rem;
+  border: 1px solid var(--border);
+  border-radius: .5rem;
+  background: #fbfcfb;
+  padding: .85rem;
+}
+.guide-card h3 {
+  margin-bottom: .1rem;
+}
+.guide-card p {
+  margin: 0;
+  color: var(--muted);
+}
+.guide-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  display: grid;
+  gap: .45rem;
+}
+.command-list {
+  display: grid;
+  gap: .45rem;
+}
+.command-list div {
+  display: grid;
+  grid-template-columns: minmax(12rem, .55fr) minmax(0, 1fr);
+  gap: .75rem;
+  align-items: start;
+  border-top: 1px solid #edf0ed;
+  padding-top: .45rem;
+}
+.command-list div:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+.command-list span {
+  color: var(--muted);
+}
+.guide-code {
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: .4rem;
+  padding: .7rem;
+}
+
 .grid, .workflow-grid, .source-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
@@ -1836,8 +1965,13 @@ legend {
   line-height: 1.5;
 }
 @media (max-width: 1080px) {
+  .guide-page,
   .decision-page {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .command-list div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: .25rem;
   }
 }
 
