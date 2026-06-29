@@ -928,6 +928,7 @@ const HTML = String.raw`<!doctype html>
     <main class="layout">
       <nav class="nav" aria-label="Sections">
         <button class="nav-button active" data-section="overview">Overview</button>
+        <button class="nav-button" data-section="guide">Guide</button>
         <button class="nav-button" data-section="todo">Todo Inbox</button>
         <button class="nav-button" data-section="decision">Decision Policy</button>
         <button class="nav-button" data-section="setup">Setup</button>
@@ -958,6 +959,100 @@ const HTML = String.raw`<!doctype html>
               </label>
             </div>
             <pre id="output" aria-live="polite"></pre>
+          </section>
+
+          <section class="panel" id="section-guide">
+            <div class="panel-head">
+              <div>
+                <h2>Guide</h2>
+                <p class="hint">日常使用说明。先看这里，再去 Setup / Sources 填配置。</p>
+              </div>
+            </div>
+            <div class="guide-document">
+              <section aria-labelledby="guide-start-title">
+                <h3 id="guide-start-title">先做什么</h3>
+                <table class="guide-table">
+                  <thead><tr><th>步骤</th><th>去哪里</th><th>做什么</th></tr></thead>
+                  <tbody>
+                    <tr><td>1</td><td>Setup</td><td>配置 Codex、Feishu 输出、后台服务。</td></tr>
+                    <tr><td>2</td><td>Sources</td><td>配置 vault、Feishu 文档、Linear、GitHub。</td></tr>
+                    <tr><td>3</td><td>Decision Policy</td><td>写你的偏好：优先看什么、哪些事不要做。</td></tr>
+                    <tr><td>4</td><td>Todo Inbox</td><td>记录临时小事。Daily plan 和 review 会参考它。</td></tr>
+                  </tbody>
+                </table>
+              </section>
+
+              <section aria-labelledby="guide-feishu-title">
+                <h3 id="guide-feishu-title">Feishu 指令</h3>
+                <table class="guide-table">
+                  <thead><tr><th>指令</th><th>用途</th><th>什么时候用</th></tr></thead>
+                  <tbody>
+                    <tr><td><code>daily-os status</code></td><td>发一张操作卡片。</td><td>想点按钮时。</td></tr>
+                    <tr><td><code>daily-os plan</code></td><td>生成今日安排。</td><td>每天开始工作前。</td></tr>
+                    <tr><td><code>daily-os review</code></td><td>生成今日复盘。</td><td>晚上收尾时。</td></tr>
+                    <tr><td><code>daily-os weekly</code></td><td>生成普通周复盘。</td><td>只想快速看本周总结时。</td></tr>
+                    <tr><td><code>daily-os weekly deep</code></td><td>运行 weekly-review skill。</td><td>要生成可写回 Feishu Weekly 的草稿时。</td></tr>
+                    <tr><td><code>daily-os details</code></td><td>展开最近一次完整输出。</td><td>卡片内容太短时。</td></tr>
+                    <tr><td><code>daily-os progress</code></td><td>找今日进展候选。</td><td>复盘前想补进展时。</td></tr>
+                    <tr><td><code>daily-os chat</code></td><td>分析最近聊天里的线索。</td><td>想从聊天里找任务、日程、文档更新时。</td></tr>
+                    <tr><td><code>daily-os chat todo</code></td><td>只找 todo 线索。</td><td>聊天里有人安排事情后。</td></tr>
+                    <tr><td><code>daily-os chat review</code></td><td>只找进展和复盘线索。</td><td>晚上复盘前。</td></tr>
+                    <tr><td><code>daily-os remember 今天进展：...</code></td><td>手动记录进展。</td><td>系统没识别到你做了什么时。</td></tr>
+                    <tr><td><code>daily-os 修改今日安排：...</code></td><td>调整今日安排。</td><td>计划不对时。</td></tr>
+                  </tbody>
+                </table>
+              </section>
+
+              <section aria-labelledby="guide-weekly-title">
+                <h3 id="guide-weekly-title">写回 Feishu Weekly</h3>
+                <table class="guide-table">
+                  <thead><tr><th>动作</th><th>说明</th></tr></thead>
+                  <tbody>
+                    <tr><td>先发 <code>daily-os weekly deep</code></td><td>先生成草稿。不要直接写文档。</td></tr>
+                    <tr><td>看 Feishu 卡片</td><td>确认目标文档、周列、要务/retro 列和要写入的行。</td></tr>
+                    <tr><td>点确认写回</td><td>确认后才改 Feishu 文档。</td></tr>
+                    <tr><td>不要从企鹅直接写回</td><td>写回会改外部文档，必须先看到内容和目标位置。</td></tr>
+                  </tbody>
+                </table>
+              </section>
+
+              <section aria-labelledby="guide-dashboard-title">
+                <h3 id="guide-dashboard-title">Dashboard 页面</h3>
+                <table class="guide-table">
+                  <thead><tr><th>页面</th><th>用途</th></tr></thead>
+                  <tbody>
+                    <tr><td>Overview</td><td>跑检查、测试 Feishu、采集证据、手动触发常用动作。</td></tr>
+                    <tr><td>Todo Inbox</td><td>管理你手动记录的日常 todo。</td></tr>
+                    <tr><td>Decision Policy</td><td>编辑 Daily OS 做决策时读取的 markdown 规则。</td></tr>
+                    <tr><td>Sources</td><td>配置 Feishu 文档、聊天、vault、Linear、GitHub。</td></tr>
+                    <tr><td>Workflows</td><td>配置 daily plan、daily review、weekly review 的时间。</td></tr>
+                    <tr><td>Logs</td><td>看服务状态和最近错误。</td></tr>
+                  </tbody>
+                </table>
+              </section>
+
+              <section aria-labelledby="guide-companion-title">
+                <h3 id="guide-companion-title">桌面伴侣</h3>
+                <table class="guide-table">
+                  <thead><tr><th>操作</th><th>作用</th></tr></thead>
+                  <tbody>
+                    <tr><td>点击企鹅</td><td>打开快捷菜单：Dashboard、Plan、Review、Weekly、服务状态。</td></tr>
+                    <tr><td>悬停企鹅</td><td>查看你手动记录的 Todo Inbox 提醒。</td></tr>
+                    <tr><td>拖动企鹅</td><td>移动到屏幕任意位置。</td></tr>
+                  </tbody>
+                </table>
+              </section>
+
+              <section aria-labelledby="guide-install-title">
+                <h3 id="guide-install-title">安装边界</h3>
+                <p>现在支持一键安装后台服务。还不是签名 Mac App，也不是 DMG 安装包。</p>
+                <pre class="guide-code"><code>npm ci
+npm run setup
+npm run ui
+npm run build
+npm run service:install</code></pre>
+              </section>
+            </div>
           </section>
 
           <section class="panel" id="section-todo">
@@ -1478,6 +1573,62 @@ code {
   margin-bottom: 1rem;
 }
 
+.guide-document {
+  display: grid;
+  gap: 1.15rem;
+  max-width: 58rem;
+  border: 1px solid var(--border);
+  border-radius: .5rem;
+  background: #fbfcfb;
+  padding: 1rem;
+}
+.guide-document section {
+  display: grid;
+  gap: .55rem;
+}
+.guide-document h3 {
+  margin: 0;
+}
+.guide-document p {
+  margin: 0;
+  color: var(--muted);
+}
+.guide-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: .4rem;
+  overflow: hidden;
+}
+.guide-table th,
+.guide-table td {
+  border-bottom: 1px solid #edf0ed;
+  padding: .55rem .65rem;
+  text-align: left;
+  vertical-align: top;
+}
+.guide-table tr:last-child td {
+  border-bottom: 0;
+}
+.guide-table th {
+  color: var(--muted);
+  background: #f7f8f6;
+  font-weight: 650;
+}
+.guide-table td:first-child {
+  white-space: nowrap;
+}
+.guide-code {
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: .4rem;
+  padding: .7rem;
+}
+
 .grid, .workflow-grid, .source-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
@@ -1838,6 +1989,13 @@ legend {
 @media (max-width: 1080px) {
   .decision-page {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .guide-document {
+    max-width: none;
+  }
+  .guide-table {
+    display: block;
+    overflow-x: auto;
   }
 }
 
