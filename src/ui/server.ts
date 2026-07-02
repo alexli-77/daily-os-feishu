@@ -27,6 +27,7 @@ import {
   parseTodoInboxCommand,
   updateTodoInboxItemById,
 } from '../todo/inbox.js';
+import { formatCalendarDraftForFeishu, runCalendarDraft } from '../calendar/bridge.js';
 
 const SECRET_ENV_KEYS = new Set(['OPENAI_API_KEY', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'VAULT_GATE_TOKEN', 'LARK_APP_SECRET']);
 const UI_RUNTIME_PATH = './data/runtime/ui.json';
@@ -383,6 +384,11 @@ async function runActionInner(options: UiServerOptions, request: Record<string, 
     return { ok: true, text: formatProgressCandidates(await collectProgressCandidates(config, todayInTimezone(config))) };
   }
 
+  if (action === 'calendar_week' || action === 'calendar_today') {
+    const result = await runCalendarDraft(config, action === 'calendar_week' ? 'week' : 'today');
+    return { ok: true, text: formatCalendarDraftForFeishu(result) };
+  }
+
   if (action === 'todo_capture') {
     const text = String(request.text || '').trim();
     if (!text) throw new Error('Todo capture text is empty.');
@@ -447,6 +453,7 @@ async function runActionInner(options: UiServerOptions, request: Record<string, 
 function actionResultDetail(action: string): string {
   if (action === 'collect') return 'Evidence collection completed. Response body is not written to logs.';
   if (['plan', 'review', 'weekly'].includes(action)) return 'Workflow completed. Generated content is not written to logs.';
+  if (action.startsWith('calendar_')) return 'Calendar draft generated. Draft content is not written to logs.';
   if (action === 'progress') return 'Progress candidates collected. Candidate text is not written to logs.';
   if (action.startsWith('chat_analysis')) return 'Chat context suggestions generated. Message bodies are not written to logs.';
   if (action === 'feedback_poll') return 'Feishu feedback poll completed. Message bodies are not written to logs.';
@@ -953,6 +960,8 @@ const HTML = String.raw`<!doctype html>
               <button type="button" data-action="chat_analysis_todo">Todo Signals</button>
               <button type="button" data-action="chat_analysis_review">Review Signals</button>
               <button type="button" data-action="progress">Progress</button>
+              <button type="button" data-action="calendar_week">Calendar Week</button>
+              <button type="button" data-action="calendar_today">Calendar Today</button>
               <label class="inline">
                 <input id="send-output" type="checkbox" checked />
                 Send output
@@ -992,6 +1001,8 @@ const HTML = String.raw`<!doctype html>
                     <tr><td><code>daily-os review</code></td><td>生成今日复盘。</td><td>晚上收尾时。</td></tr>
                     <tr><td><code>daily-os weekly</code></td><td>生成普通周复盘。</td><td>只想快速看本周总结时。</td></tr>
                     <tr><td><code>daily-os weekly deep</code></td><td>运行 weekly-review skill。</td><td>要生成可写回 Feishu Weekly 的草稿时。</td></tr>
+                    <tr><td><code>daily-os calendar week</code></td><td>生成本周日历草稿。</td><td>周计划之后，想把任务落到时间块时。</td></tr>
+                    <tr><td><code>daily-os calendar today</code></td><td>生成今日日历草稿。</td><td>今天临时事项变化后。</td></tr>
                     <tr><td><code>daily-os details</code></td><td>展开最近一次完整输出。</td><td>卡片内容太短时。</td></tr>
                     <tr><td><code>daily-os progress</code></td><td>找今日进展候选。</td><td>复盘前想补进展时。</td></tr>
                     <tr><td><code>daily-os chat</code></td><td>分析最近聊天里的线索。</td><td>想从聊天里找任务、日程、文档更新时。</td></tr>

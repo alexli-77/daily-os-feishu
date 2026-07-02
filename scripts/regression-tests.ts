@@ -7,7 +7,7 @@ import { coalesceChatSuggestions } from '../src/chat/context-analysis.js';
 import type { ChatContextSuggestion } from '../src/chat/context-analysis.js';
 import { parseDailyOsCommand, runParsedDailyOsCommand } from '../src/interaction/daily-os-command.js';
 import { handlePendingBackgroundSuggestionReply } from '../src/service/background-suggestions.js';
-import { renderFeishuSkillCard, renderFeishuSkillWritebackPreviewCard, renderFeishuWorkflowCard } from '../src/connectors/feishu-sdk.js';
+import { renderFeishuCalendarDraftCard, renderFeishuSkillCard, renderFeishuSkillWritebackPreviewCard, renderFeishuWorkflowCard } from '../src/connectors/feishu-sdk.js';
 import { handleFeishuFeedbackCommand, shouldTreatAsFeedbackWorkflowRevision } from '../src/feedback/feishu-feedback.js';
 import { shouldRunScheduledWorkflow } from '../src/service/launchd.js';
 import { formatRecentWorkflowRuns, listRecentWorkflowRuns } from '../src/workflows/run-ledger.js';
@@ -23,6 +23,7 @@ import { detectTableLayout, extractWeeklyWritebackItems, targetWeekLabelForDate 
 import { executeLifeReviewOsWriteback, prepareLifeReviewOsWriteback, runLifeReviewOsSkill } from '../src/skills/life-review-os.js';
 import { formatWorkflowRevisionMemoryNote, parseWorkflowRevisionItems } from '../src/interaction/workflow-revision.js';
 import { handleTodoInboxCommand, openTodoInboxItems, parseTodoInboxCommand, updateTodoInboxItemById } from '../src/todo/inbox.js';
+import { buildCalendarDraftInput } from '../src/calendar/bridge.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-os-regression-'));
 
@@ -32,6 +33,7 @@ try {
   testUnifiedProviderPromptContract();
   testAgentOutputNormalization();
   testDailyOsCommandParsing();
+  testCalendarDraftInputUsesWeeklyAndTodoSources();
   await testSkillRunCommandUsesConfiguredRunner();
   testEveryFeishuInteractionWorkflowCommandHasCardSender();
   testEveryFeishuInteractionCommandHasSkillCardSender();
@@ -57,6 +59,7 @@ try {
   await testConfirmLatestPolicyCandidateWithoutId();
   testBackgroundSuggestionDismissAllFromAmbiguousDismiss();
   testWorkflowCardRendering();
+  testCalendarDraftCardRendering();
   testSkillCardRendering();
   testSkillWritebackPreviewCardRendering();
   testWeeklyReviewWritebackParsing();
@@ -210,6 +213,8 @@ function testDailyOsCommandParsing(): void {
     text: '本周卡在 portfolio review',
   });
   assert.deepEqual(parseDailyOsCommand('daily-os weekly deep', 'daily-os'), { type: 'skill_run', skillId: 'weekly-review', mode: 'weekly' });
+  assert.deepEqual(parseDailyOsCommand('daily-os calendar week', 'daily-os'), { type: 'calendar_draft', period: 'week' });
+  assert.deepEqual(parseDailyOsCommand('daily-os calendar today', 'daily-os'), { type: 'calendar_draft', period: 'today' });
   const todoCommand = parseDailyOsCommand('daily-os 记到 todo：线上报销诊所医疗费用', 'daily-os');
   assert.equal(todoCommand.type, 'todo_inbox');
   assert.deepEqual(parseDailyOsCommand('daily-os 保存规则', 'daily-os'), { type: 'confirm_policy_candidate' });
@@ -225,6 +230,43 @@ function testDailyOsCommandParsing(): void {
     assert.equal(revision.workflow, 'daily_plan');
     assert.match(revision.text, /LEO-12/);
   }
+}
+
+function testCalendarDraftInputUsesWeeklyAndTodoSources(): void {
+  const config = testConfig();
+  config.todo_inbox.ledger_path = path.join(tmp, 'calendar-todo-inbox.jsonl');
+  config.todo_inbox.vault_path = path.join(tmp, 'calendar-vault', 'todo.md');
+  handleTodoInboxCommand(config, { type: 'capture', text: '今晚 7:30 省庆活动；线上报销诊所医疗费用' }, { source: 'regression-test' });
+
+  const input = buildCalendarDraftInput(
+    config,
+    {
+      generated_at: '2026-07-02T12:00:00.000Z',
+      date: '2026-07-02',
+      sources: {
+        weekly_priorities: {
+          state: 'available',
+          data: {
+            week: '6.29-7.5',
+            items: [{ okr: '工作-技术专家', item: '完成 calendar bridge 草稿卡片' }],
+          },
+        },
+        feishu_calendar: {
+          state: 'available',
+          data: [{ title: 'Existing meeting', start: '2026-07-02T13:00:00-04:00', end: '2026-07-02T14:00:00-04:00' }],
+        },
+      },
+    },
+    'today',
+    '2026-07-02',
+  );
+
+  assert.equal(input.period, 'day');
+  assert.equal(input.constraints.startDate, '2026-07-02');
+  assert.ok(input.tasks.some((task) => task.source === 'feishu-weekly' && /calendar bridge/.test(task.title)));
+  assert.ok(input.tasks.some((task) => task.source === 'todo-inbox' && /省庆活动/.test(task.title)));
+  assert.ok(input.tasks.some((task) => task.source === 'todo-inbox' && /医疗费用/.test(task.title)));
+  assert.equal(input.existingEvents[0]?.title, 'Existing meeting');
 }
 
 async function testSkillRunCommandUsesConfiguredRunner(): Promise<void> {
@@ -1006,6 +1048,23 @@ function testWorkflowCardRendering(): void {
   assert.match(serialized, /今日安排/);
   assert.match(serialized, /重排一次/);
   assert.match(serialized, /daily_plan/);
+}
+
+function testCalendarDraftCardRendering(): void {
+  const card = renderFeishuCalendarDraftCard('# 本周日历草稿\n\n- 07-02 09:30 Deep Work', {
+    period: 'week',
+    date: '2026-07-02',
+    eventCount: 3,
+    taskCount: 2,
+    writebackSupported: false,
+  });
+  const serialized = JSON.stringify(card);
+  assert.match(serialized, /本周日历草稿/);
+  assert.match(serialized, /确认草稿/);
+  assert.match(serialized, /我要调整/);
+  assert.match(serialized, /先不排/);
+  assert.match(serialized, /daily_os_calendar_action/);
+  assert.match(serialized, /不会修改任何日历/);
 }
 
 function testSkillCardRendering(): void {

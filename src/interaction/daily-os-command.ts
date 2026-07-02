@@ -21,6 +21,7 @@ import { formatSkillList, runConfiguredSkill } from '../skills/runner.js';
 import type { SkillRunResult } from '../skills/runner.js';
 import { formatWorkflowRevisionMemoryNote } from './workflow-revision.js';
 import { handleTodoInboxCommand, parseTodoInboxCommand, type TodoInboxCommand } from '../todo/inbox.js';
+import { formatCalendarDraftForFeishu, runCalendarDraft, type CalendarDraftPeriod, type CalendarDraftResult } from '../calendar/bridge.js';
 
 export type ParsedDailyOsCommand =
   | { type: 'ignore' }
@@ -37,6 +38,7 @@ export type ParsedDailyOsCommand =
   | { type: 'calibrate' }
   | { type: 'skill_list' }
   | { type: 'skill_run'; skillId: string; mode?: string; text?: string }
+  | { type: 'calendar_draft'; period: CalendarDraftPeriod }
   | { type: 'todo_inbox'; command: TodoInboxCommand }
   | { type: 'remember'; text: string }
   | { type: 'feedback'; text: string }
@@ -52,6 +54,7 @@ export interface DailyOsCommandContext {
   reply: (text: string) => Promise<void>;
   sendWorkflowCard?: (input: { workflow: WorkflowName; date: string; text: string; summary: string }) => Promise<void>;
   sendSkillCard?: (input: { result: SkillRunResult; text: string }) => Promise<void>;
+  sendCalendarCard?: (input: { result: CalendarDraftResult; text: string }) => Promise<void>;
   sendWorkflowOutput?: boolean;
   runWorkflowForCommand?: typeof runWorkflow;
   collectEvidenceForSummary?: typeof collectEvidence;
@@ -116,6 +119,8 @@ export function parseDailyOsCommand(text: string, prefix: string): ParsedDailyOs
   }
   const skillCommand = parseSkillCommand(normalized);
   if (skillCommand) return skillCommand;
+  const calendarCommand = parseCalendarCommand(normalized);
+  if (calendarCommand) return calendarCommand;
   if (['progress', '进展', '今日进展', '进展确认'].includes(lower)) return { type: 'progress' };
   if (['policy', 'decision policy', '规则', '决策规则'].includes(lower)) return { type: 'policy' };
   if (['candidates', 'policy candidates', '候选规则', '待确认规则'].includes(lower)) return { type: 'policy_candidates' };
@@ -170,6 +175,8 @@ export function dailyOsStatusText(prefix: string, config?: AppConfig): string {
     `- ${prefix} plan`,
     `- ${prefix} review`,
     `- ${prefix} weekly`,
+    `- ${prefix} calendar week`,
+    `- ${prefix} calendar today`,
   ];
   return lines.join('\n');
 }
@@ -228,6 +235,21 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
       const text = formatSkillRunResult(result);
       if (context.sendSkillCard) {
         await context.sendSkillCard({ result, text });
+      } else {
+        await context.reply(text);
+      }
+      return;
+    }
+    case 'calendar_draft': {
+      if (!context.config.calendar.enabled) {
+        await context.reply('calendar.enabled=false；还没有启用日历草稿引擎。请先在 config/config.yaml 里配置 calendar-planning-os。');
+        return;
+      }
+      await context.reply(`Running calendar ${command.period === 'week' ? 'week' : 'today'} draft...`);
+      const result = await runCalendarDraft(context.config, command.period);
+      const text = formatCalendarDraftForFeishu(result);
+      if (context.sendCalendarCard) {
+        await context.sendCalendarCard({ result, text });
       } else {
         await context.reply(text);
       }
@@ -396,6 +418,18 @@ function parseSkillCommand(text: string): ParsedDailyOsCommand | null {
   };
 }
 
+function parseCalendarCommand(text: string): ParsedDailyOsCommand | null {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  const lower = normalized.toLowerCase();
+  if (/^calendar\s+(week|weekly|本周|周计划)$/.test(lower) || /^(?:日历|日程)\s*(?:本周|周计划)$/.test(normalized)) {
+    return { type: 'calendar_draft', period: 'week' };
+  }
+  if (/^calendar\s+(today|day|daily|今天|今日)$/.test(lower) || /^(?:日历|日程)\s*(?:今天|今日)$/.test(normalized)) {
+    return { type: 'calendar_draft', period: 'today' };
+  }
+  return null;
+}
+
 function normalizeChatAnalysisMode(value: string): ChatAnalysisMode {
   const normalized = value.toLowerCase();
   if (normalized === 'todo' || normalized === '待办' || normalized === '计划') return 'todo';
@@ -438,6 +472,7 @@ function commandEffect(command: ParsedDailyOsCommand): FeishuControlEffect {
     case 'skill_list':
       return 'read';
     case 'skill_run':
+    case 'calendar_draft':
       return 'workflow_trigger';
     case 'todo_inbox':
       return 'memory_write';
