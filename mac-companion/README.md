@@ -2,7 +2,7 @@
 
 This is a local macOS companion prototype for LEO-46. It is intentionally small and optional: it opens the existing Daily OS dashboard, shows service state, triggers existing workflow actions through the local UI API, and reads recent workflow run records.
 
-The app shows a short `DO` menu bar marker. On crowded menu bars where macOS may hide status items, it also shows a small floating desktop character near the upper-right corner of each screen. Click the character to open the Daily OS menu; drag it to move it anywhere on screen.
+The app shows a short `DO` menu bar marker. On crowded menu bars where macOS may hide status items, it also shows a small floating desktop character on the right edge of each screen. The character stays half hidden by default, reveals itself on hover, and collapses again when the pointer leaves. Click the character to open the Daily OS menu.
 
 The prototype loads `mac-companion/assets/penguin-idle.png` and `mac-companion/assets/penguin-blink.png` when present. Keep both frames on the same transparent canvas size so the character does not jump while blinking. If the frame assets are missing, it falls back to `penguin-avatar.png`, then to the blue `DO` badge.
 

@@ -5,8 +5,10 @@ import Foundation
 
 private enum Constants {
   static let launchAgentLabel = "com.daily-os-feishu.agent"
-  static let floatingBadgeSize = NSSize(width: 124, height: 124)
-  static let penguinImageSize = NSSize(width: 96, height: 96)
+  static let floatingBadgeSize = NSSize(width: 84, height: 84)
+  static let penguinImageSize = NSSize(width: 68, height: 68)
+  static let floatingPeekVisibleWidth: CGFloat = 34
+  static let floatingEdgeMargin: CGFloat = 10
   static let todoPreviewCardSize = NSSize(width: 260, height: 236)
   static let quickCaptureCardSize = NSSize(width: 286, height: 214)
   static let todoCardCornerRadius: CGFloat = 38
@@ -449,9 +451,6 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
       let button = FloatingBadgeButton(frame: NSRect(origin: .zero, size: Constants.floatingBadgeSize))
       button.target = self
       button.action = #selector(showFloatingMenu(_:))
-      button.onHoverStart = { [weak self] anchorFrame in self?.showHoverTodoPreview(anchorFrame: anchorFrame) }
-      button.onHoverEnd = { [weak self] in self?.closeHoverTodoPreview() }
-      button.onMoved = { [weak self] anchorFrame in self?.updateHoverTodoCardPosition(anchorFrame: anchorFrame) }
       configureFloatingButton(button, isBusy: false)
 
       let panel = NSPanel(
@@ -468,13 +467,54 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
       panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
       panel.isMovableByWindowBackground = true
 
+      button.onHoverStart = { [weak self, weak panel] _ in
+        guard let self, let panel else {
+          return
+        }
+        let expandedFrame = self.setFloatingBadge(panel, collapsed: false)
+        self.showHoverTodoPreview(anchorFrame: expandedFrame)
+      }
+      button.onHoverEnd = { [weak self, weak panel] in
+        self?.closeHoverTodoPreview()
+        if let panel {
+          _ = self?.setFloatingBadge(panel, collapsed: true)
+        }
+      }
+      button.onMoved = { [weak self] anchorFrame in self?.updateHoverTodoCardPosition(anchorFrame: anchorFrame) }
+
       let frame = screen.visibleFrame
-      panel.setFrameOrigin(NSPoint(x: frame.maxX - Constants.floatingBadgeSize.width - 24, y: frame.maxY - Constants.floatingBadgeSize.height - 24))
+      panel.setFrameOrigin(
+        NSPoint(
+          x: frame.maxX - Constants.floatingPeekVisibleWidth,
+          y: frame.maxY - Constants.floatingBadgeSize.height - 24
+        )
+      )
 
       floatingButtons.append(button)
       floatingWindows.append(panel)
       panel.orderFrontRegardless()
     }
+  }
+
+  @discardableResult
+  private func setFloatingBadge(_ panel: NSPanel, collapsed: Bool) -> NSRect {
+    let currentFrame = panel.frame
+    let screenFrame = visibleFrame(for: currentFrame)
+    let nextFrame = floatingBadgeFrame(from: currentFrame, screenFrame: screenFrame, collapsed: collapsed)
+    panel.setFrame(nextFrame, display: true)
+    return nextFrame
+  }
+
+  private func floatingBadgeFrame(from currentFrame: NSRect, screenFrame: NSRect, collapsed: Bool) -> NSRect {
+    let y = min(
+      max(currentFrame.origin.y, screenFrame.minY + Constants.floatingEdgeMargin),
+      screenFrame.maxY - Constants.floatingBadgeSize.height - Constants.floatingEdgeMargin
+    )
+    let x = collapsed
+      ? screenFrame.maxX - Constants.floatingPeekVisibleWidth
+      : screenFrame.maxX - Constants.floatingBadgeSize.width
+
+    return NSRect(origin: NSPoint(x: x, y: y), size: Constants.floatingBadgeSize)
   }
 
   private func configureFloatingButton(_ button: FloatingBadgeButton, isBusy: Bool) {
