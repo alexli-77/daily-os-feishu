@@ -41,6 +41,9 @@ npm run setup
 npm run ui
 ```
 
+For project management and PR/release conventions, see
+[`docs/task-workflow.md`](docs/task-workflow.md).
+
 Edit:
 
 - `.env`
