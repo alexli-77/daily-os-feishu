@@ -40,6 +40,22 @@ planning:
     # These sources refine execution, but should not override the primary strategy source.
     reference_sources: ["linear", "vault", "feishu", "calendar", "github"]
 
+calendar:
+  enabled: false
+  engine:
+    # Optional local calendar-planning-os bridge. Keep disabled until the engine repo is installed.
+    command: "node"
+    cli_path: "bin/calendar-planning-os.mjs"
+    workdir: "../calendar-planning-os"
+    # Local-only files; leave empty unless you have created them on this machine.
+    policy_file: ""
+    routines_file: ""
+    timeout_ms: 120000
+    input_path: "./data/runtime/calendar-draft-input.json"
+  draft:
+    week_days: 5
+    max_tasks: 8
+
 service:
   prevent_sleep:
     # Uses macOS `caffeinate -i` while `npm run start` or the launchd service is running.

@@ -35,12 +35,13 @@ import { appendDailyMemory, appendFeedbackLog, readLatestWorkflowOutput, readWor
 import { formatLatestWorkflowDetails, formatWorkflowSummaryForFeishu } from '../workflows/summary.js';
 import { markWorkflowRunFailed, markWorkflowRunSucceeded } from '../workflows/run-ledger.js';
 import { handlePendingBackgroundSuggestionReply } from '../service/background-suggestions.js';
-import { renderFeishuSkillCard, renderFeishuSkillWritebackPreviewCard, renderFeishuWorkflowCard } from '../connectors/feishu-sdk.js';
+import { renderFeishuCalendarDraftCard, renderFeishuSkillCard, renderFeishuSkillWritebackPreviewCard, renderFeishuWorkflowCard } from '../connectors/feishu-sdk.js';
 import { sendFeishuCard } from '../connectors/lark-cli.js';
 import type { SkillRunResult } from '../skills/runner.js';
 import { executeLifeReviewOsWriteback, prepareLifeReviewOsWriteback } from '../skills/life-review-os.js';
 import { formatWorkflowRevisionMemoryNote } from './workflow-revision.js';
 import { handleTodoInboxCommand, parseTodoInboxCommand } from '../todo/inbox.js';
+import type { CalendarDraftPeriod, CalendarDraftResult } from '../calendar/bridge.js';
 
 interface FeishuInteractionControls {
   stop: () => Promise<void>;
@@ -57,7 +58,16 @@ interface ActiveAgentRun {
 type ConfigProvider = AppConfig | (() => AppConfig);
 
 type WorkflowCardCommand = {
-  command: 'details' | 'progress' | 'chat todo' | 'chat review' | 'confirm_todo' | 'confirm_review' | 'revise_todo';
+  command:
+    | 'details'
+    | 'progress'
+    | 'chat todo'
+    | 'chat review'
+    | 'confirm_todo'
+    | 'confirm_review'
+    | 'revise_todo'
+    | 'calendar week'
+    | 'calendar today';
   detailId?: string;
 };
 
@@ -67,6 +77,11 @@ type SkillCardAction = {
   mode?: string;
   runId?: string;
   token?: string;
+};
+
+type CalendarCardAction = {
+  action: 'confirm' | 'adjust' | 'skip';
+  period: CalendarDraftPeriod;
 };
 
 const CARD_ACTION_DEDUPE_MS = 30_000;
@@ -326,6 +341,9 @@ async function runBatch(input: {
       sendSkillCard: async ({ result: skillResult, text: skillText }) => {
         await sendSkillCardOutput(input.config, skillText, skillResult, `interaction:${input.scope}`);
       },
+      sendCalendarCard: async ({ result: calendarResult, text: calendarText }) => {
+        await sendCalendarCardOutput(input.config, calendarText, calendarResult, `interaction:${input.scope}`);
+      },
       reply: async (reply) => {
         await replyToMessage(input.channel, last, reply, input.config.interaction.feishu.reply_mode);
       },
@@ -363,6 +381,9 @@ async function runBatch(input: {
     },
     sendSkillCard: async ({ result: skillResult, text: skillText }) => {
       await sendSkillCardOutput(input.config, skillText, skillResult, `interaction:${input.scope}`);
+    },
+    sendCalendarCard: async ({ result: calendarResult, text: calendarText }) => {
+      await sendCalendarCardOutput(input.config, calendarText, calendarResult, `interaction:${input.scope}`);
     },
     reply: async (reply) => {
       await replyToMessage(input.channel, last, reply, input.config.interaction.feishu.reply_mode);
@@ -652,6 +673,11 @@ async function handleCardAction(input: {
     await handleSkillCardAction({ ...input, action: skillAction });
     return;
   }
+  const calendarAction = parseCalendarCardAction(input.event.action.value);
+  if (calendarAction) {
+    await handleCalendarCardAction({ ...input, action: calendarAction });
+    return;
+  }
   const commandAction = parseWorkflowCardCommand(input.event.action.value);
   if (commandAction) {
     await handleWorkflowCardCommand({ ...input, command: commandAction });
@@ -787,6 +813,9 @@ async function handleWorkflowCardCommand(input: {
     sendSkillCard: async ({ result: skillResult, text: skillText }) => {
       await sendSkillCardOutput(input.config, skillText, skillResult, `card-command:${input.event.chatId}`);
     },
+    sendCalendarCard: async ({ result: calendarResult, text: calendarText }) => {
+      await sendCalendarCardOutput(input.config, calendarText, calendarResult, `card-command:${input.event.chatId}`);
+    },
     reply: async (reply) => {
       await input.channel.send(input.event.chatId, toSendInput(reply, input.config.interaction.feishu.reply_mode), {
         replyTo: input.event.messageId,
@@ -840,6 +869,56 @@ async function handleProgressCardAction(input: {
     return;
   }
   await input.channel.send(input.event.chatId, { text: '好的，这次不写入今日进展账本。' }, { replyTo: input.event.messageId });
+}
+
+async function handleCalendarCardAction(input: {
+  config: AppConfig;
+  channel: LarkChannel;
+  event: CardActionEvent;
+  action: CalendarCardAction;
+}): Promise<void> {
+  const access = decideFeishuAccess(input.config, {
+    senderOpenId: input.event.operator.openId,
+    chatId: input.event.chatId,
+    chatType: 'group',
+  });
+  if (!access.ok) {
+    console.warn(`[interaction] denied calendar card action ${input.event.chatId}; operator=${input.event.operator.openId.slice(-6)}; reason=${access.reason}`);
+    return;
+  }
+  const control = decideFeishuControl(input.config, access, {
+    effect: input.action.action === 'confirm' ? 'memory_write' : 'read',
+  });
+  if (!control.ok) {
+    await input.channel.send(input.event.chatId, { text: `权限不足：${control.reason}` }, { replyTo: input.event.messageId });
+    return;
+  }
+
+  const label = input.action.period === 'week' ? '本周日历草稿' : '今日日历草稿';
+  if (input.action.action === 'confirm') {
+    appendDailyMemory(input.config, 'daily_plan', todayInTimezone(input.config), `用户确认${label}可作为排程参考；尚未写入任何外部日历。`);
+    await input.channel.send(input.event.chatId, { text: `收到，${label}已确认。我只记录为排程参考，没有修改 Feishu / Apple / Google Calendar。` }, { replyTo: input.event.messageId });
+    return;
+  }
+  if (input.action.action === 'adjust') {
+    await input.channel.send(
+      input.event.chatId,
+      {
+        text: [
+          '可以，直接告诉我你想怎么改日程草稿。',
+          '',
+          '例如：',
+          '把上午留给深度工作，邮件统一放下午。',
+          '或者：周三下午不要排任务，留给 meeting buffer。',
+          '',
+          '我收到后会先记录修改意见。之后发送 daily-os calendar week 或 daily-os calendar today，我会重新生成草稿。',
+        ].join('\n'),
+      },
+      { replyTo: input.event.messageId },
+    );
+    return;
+  }
+  await input.channel.send(input.event.chatId, { text: `收到，本次先不采用${label}。` }, { replyTo: input.event.messageId });
 }
 
 async function handleAgentRunCardAction(input: {
@@ -1010,6 +1089,9 @@ async function handleSkillCardAction(input: {
     sendSkillCard: async ({ result: skillResult, text: skillText }) => {
       await sendSkillCardOutput(input.config, skillText, skillResult, `skill-card:${input.event.chatId}`);
     },
+    sendCalendarCard: async ({ result: calendarResult, text: calendarText }) => {
+      await sendCalendarCardOutput(input.config, calendarText, calendarResult, `skill-card:${input.event.chatId}`);
+    },
     reply: async (reply) => {
       await input.channel.send(input.event.chatId, toSendInput(reply, input.config.interaction.feishu.reply_mode), {
         replyTo: input.event.messageId,
@@ -1057,6 +1139,8 @@ async function sendStatusCard(channel: LarkChannel, message: NormalizedMessage, 
               cardButton('Plan', 'daily_plan', 'primary'),
               cardButton('Review', 'daily_review', 'default'),
               cardButton('Weekly', 'weekly_review', 'default'),
+              commandButton('Calendar Week', 'calendar week', 'default'),
+              commandButton('Calendar Today', 'calendar today', 'default'),
             ],
           },
         ],
@@ -1078,6 +1162,15 @@ function cardButton(label: string, action: WorkflowName, type: 'primary' | 'defa
   };
 }
 
+function commandButton(label: string, command: WorkflowCardCommand['command'], type: 'primary' | 'default'): object {
+  return {
+    tag: 'button',
+    text: { tag: 'plain_text', content: label },
+    type,
+    value: { daily_os_command: command },
+  };
+}
+
 function parseCardAction(value: unknown): WorkflowName | null {
   if (!value || typeof value !== 'object') return null;
   const raw = (value as { daily_os_action?: unknown }).daily_os_action;
@@ -1095,12 +1188,23 @@ function parseWorkflowCardCommand(value: unknown): WorkflowCardCommand | null {
     raw === 'chat review' ||
     raw === 'confirm_todo' ||
     raw === 'confirm_review' ||
-    raw === 'revise_todo'
+    raw === 'revise_todo' ||
+    raw === 'calendar week' ||
+    raw === 'calendar today'
   ) {
     const detailId = (value as { detail_id?: unknown }).detail_id;
     return { command: raw, ...(typeof detailId === 'string' && detailId ? { detailId } : {}) };
   }
   return null;
+}
+
+function parseCalendarCardAction(value: unknown): CalendarCardAction | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as { daily_os_calendar_action?: unknown; period?: unknown };
+  const action = raw.daily_os_calendar_action;
+  const period = raw.period;
+  if ((action !== 'confirm' && action !== 'adjust' && action !== 'skip') || (period !== 'week' && period !== 'today')) return null;
+  return { action, period };
 }
 
 function parseSkillCardAction(value: unknown): SkillCardAction | null {
@@ -1179,6 +1283,24 @@ async function sendSkillCardOutput(config: AppConfig, text: string, result: Skil
     text,
   );
   console.log(`[interaction] sent skill-card source=${source}; skill=${result.skillId}`);
+}
+
+async function sendCalendarCardOutput(config: AppConfig, text: string, result: CalendarDraftResult, source: string): Promise<void> {
+  const eventCount = result.draft?.events?.length || 0;
+  const writebackSupported = Boolean(result.draft?.writeback?.supported);
+  console.log(`[interaction] sending calendar-card source=${source}; period=${result.period}; events=${eventCount}; bytes=${Buffer.byteLength(text, 'utf8')}`);
+  await sendFeishuCard(
+    config,
+    renderFeishuCalendarDraftCard(text, {
+      period: result.period,
+      date: result.date,
+      eventCount,
+      taskCount: result.taskCount,
+      writebackSupported,
+    }),
+    text,
+  );
+  console.log(`[interaction] sent calendar-card source=${source}; period=${result.period}`);
 }
 
 function toSendInput(text: string, mode: 'markdown' | 'text'): { markdown: string } | { text: string } {

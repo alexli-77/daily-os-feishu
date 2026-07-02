@@ -88,6 +88,54 @@ export const AppConfigSchema = z.object({
         reference_sources: ['linear', 'vault', 'feishu', 'calendar', 'github'],
       },
     }),
+  calendar: z
+    .object({
+      enabled: z.boolean().default(false),
+      engine: z
+        .object({
+          command: z.string().default('node'),
+          cli_path: z.string().default('bin/calendar-planning-os.mjs'),
+          workdir: z.string().default('../calendar-planning-os'),
+          policy_file: z.string().default(''),
+          routines_file: z.string().default(''),
+          timeout_ms: z.number().int().positive().default(120000),
+          input_path: z.string().default('./data/runtime/calendar-draft-input.json'),
+        })
+        .default({
+          command: 'node',
+          cli_path: 'bin/calendar-planning-os.mjs',
+          workdir: '../calendar-planning-os',
+          policy_file: '',
+          routines_file: '',
+          timeout_ms: 120000,
+          input_path: './data/runtime/calendar-draft-input.json',
+        }),
+      draft: z
+        .object({
+          week_days: z.number().int().positive().max(14).default(5),
+          max_tasks: z.number().int().positive().max(20).default(8),
+        })
+        .default({
+          week_days: 5,
+          max_tasks: 8,
+        }),
+    })
+    .default({
+      enabled: false,
+      engine: {
+        command: 'node',
+        cli_path: 'bin/calendar-planning-os.mjs',
+        workdir: '../calendar-planning-os',
+        policy_file: '',
+        routines_file: '',
+        timeout_ms: 120000,
+        input_path: './data/runtime/calendar-draft-input.json',
+      },
+      draft: {
+        week_days: 5,
+        max_tasks: 8,
+      },
+    }),
   service: z
     .object({
       prevent_sleep: enabled.default({ enabled: false }),

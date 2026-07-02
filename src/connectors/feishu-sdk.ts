@@ -1,5 +1,6 @@
 import { AppType, Client, Domain, LoggerLevel } from '@larksuiteoapi/node-sdk';
 import type { WorkflowName } from '../config/schema.js';
+import type { CalendarDraftPeriod } from '../calendar/bridge.js';
 
 export type FeishuSdkSendMode = 'markdown' | 'text';
 
@@ -27,6 +28,14 @@ export interface FeishuSkillWritebackPreviewCardOptions {
   taskHeader: string;
   action: 'append_to_existing_empty_column' | 'insert_columns';
   items: Array<{ text: string; targetRowLabel: string; isMit: boolean }>;
+}
+
+export interface FeishuCalendarDraftCardOptions {
+  period: CalendarDraftPeriod;
+  date: string;
+  eventCount: number;
+  taskCount: number;
+  writebackSupported: boolean;
 }
 
 export interface FeishuSdkStatus {
@@ -245,6 +254,40 @@ export function renderFeishuSkillWritebackPreviewCard(options: FeishuSkillWriteb
       {
         tag: 'note',
         elements: [{ tag: 'plain_text', content: '如果目标列已有内容，执行会自动停止，不会覆盖。确认 token 30 分钟内有效。' }],
+      },
+    ],
+  };
+}
+
+export function renderFeishuCalendarDraftCard(text: string, options: FeishuCalendarDraftCardOptions): object {
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      template: 'turquoise',
+      title: { tag: 'plain_text', content: options.period === 'week' ? '本周日历草稿' : '今日日历草稿' },
+    },
+    elements: [
+      {
+        tag: 'markdown',
+        content: [
+          stripTextOnlyInstructions(text),
+          '',
+          `> ${options.date} · ${options.taskCount} 个任务 · ${options.eventCount} 个时间块`,
+          options.writebackSupported ? '> Calendar writeback: engine reports supported.' : '> Calendar writeback: 当前关闭；这张卡不会修改任何日历。',
+        ].join('\n'),
+      },
+      { tag: 'hr' },
+      {
+        tag: 'action',
+        actions: [
+          cardButton('确认草稿', { daily_os_calendar_action: 'confirm', period: options.period }, 'primary'),
+          cardButton('我要调整', { daily_os_calendar_action: 'adjust', period: options.period }, 'default'),
+          cardButton('先不排', { daily_os_calendar_action: 'skip', period: options.period }, 'default'),
+        ],
+      },
+      {
+        tag: 'note',
+        elements: [{ tag: 'plain_text', content: '确认只记录你认可这版草稿；真实写入 Feishu / Apple / Google Calendar 会单独确认。' }],
       },
     ],
   };
