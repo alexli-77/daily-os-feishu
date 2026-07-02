@@ -23,7 +23,7 @@ import { detectTableLayout, extractWeeklyWritebackItems, targetWeekLabelForDate 
 import { executeLifeReviewOsWriteback, prepareLifeReviewOsWriteback, runLifeReviewOsSkill } from '../src/skills/life-review-os.js';
 import { formatWorkflowRevisionMemoryNote, parseWorkflowRevisionItems } from '../src/interaction/workflow-revision.js';
 import { handleTodoInboxCommand, openTodoInboxItems, parseTodoInboxCommand, updateTodoInboxItemById } from '../src/todo/inbox.js';
-import { buildCalendarDraftInput } from '../src/calendar/bridge.js';
+import { buildCalendarDraftInput, testCalendarBridge } from '../src/calendar/bridge.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-os-regression-'));
 
@@ -34,6 +34,7 @@ try {
   testAgentOutputNormalization();
   testDailyOsCommandParsing();
   testCalendarDraftInputUsesWeeklyAndTodoSources();
+  await testCalendarBridgeReportsMissingEngine();
   await testSkillRunCommandUsesConfiguredRunner();
   testEveryFeishuInteractionWorkflowCommandHasCardSender();
   testEveryFeishuInteractionCommandHasSkillCardSender();
@@ -267,6 +268,16 @@ function testCalendarDraftInputUsesWeeklyAndTodoSources(): void {
   assert.ok(input.tasks.some((task) => task.source === 'todo-inbox' && /省庆活动/.test(task.title)));
   assert.ok(input.tasks.some((task) => task.source === 'todo-inbox' && /医疗费用/.test(task.title)));
   assert.equal(input.existingEvents[0]?.title, 'Existing meeting');
+}
+
+async function testCalendarBridgeReportsMissingEngine(): Promise<void> {
+  const config = testConfig();
+  config.calendar.engine.workdir = path.join(tmp, 'missing-calendar-planning-os');
+  config.calendar.engine.cli_path = 'bin/calendar-planning-os.mjs';
+  config.calendar.engine.input_path = path.join(tmp, 'calendar-smoke-input.json');
+  const result = await testCalendarBridge(config);
+  assert.equal(result.ok, false);
+  assert.match(result.message, /workdir not found/);
 }
 
 async function testSkillRunCommandUsesConfiguredRunner(): Promise<void> {

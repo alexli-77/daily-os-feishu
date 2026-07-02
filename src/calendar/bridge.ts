@@ -20,6 +20,15 @@ export interface CalendarDraftResult {
   existingEventCount: number;
 }
 
+export interface CalendarBridgeTestResult {
+  ok: boolean;
+  workdir: string;
+  cliPath: string;
+  inputPath: string;
+  message: string;
+  stdoutPreview?: string;
+}
+
 export interface CalendarDraft {
   draftId: string;
   mode: string;
@@ -101,6 +110,57 @@ export async function runCalendarDraft(config: AppConfig, period: CalendarDraftP
   };
 }
 
+export async function testCalendarBridge(config: AppConfig): Promise<CalendarBridgeTestResult> {
+  const workdir = resolveCalendarWorkdir(config);
+  const cliPath = resolveCalendarCliPath(config);
+  const inputPath = writeCalendarInput(config, sampleCalendarInput(config));
+
+  if (!fs.existsSync(workdir)) {
+    return { ok: false, workdir, cliPath, inputPath, message: `calendar.engine.workdir not found: ${workdir}` };
+  }
+  if (!fs.existsSync(cliPath)) {
+    return { ok: false, workdir, cliPath, inputPath, message: `calendar.engine.cli_path not found: ${cliPath}` };
+  }
+
+  const result = await runCommand(config.calendar.engine.command, [cliPath, 'draft-day', '--input', inputPath, '--format', 'json'], {
+    cwd: workdir,
+    timeoutMs: config.calendar.engine.timeout_ms,
+    env: process.env,
+  });
+  if (!result.ok) {
+    return {
+      ok: false,
+      workdir,
+      cliPath,
+      inputPath,
+      message: `calendar-planning-os smoke test failed: ${(result.stderr || result.stdout).slice(0, 1200)}`,
+      stdoutPreview: result.stdout.slice(0, 1200),
+    };
+  }
+
+  try {
+    const draft = JSON.parse(result.stdout) as CalendarDraft;
+    const eventCount = Array.isArray(draft.events) ? draft.events.length : 0;
+    return {
+      ok: true,
+      workdir,
+      cliPath,
+      inputPath,
+      message: `Calendar engine OK. Generated ${eventCount} sample block(s). Save config, then run daily-os calendar week or daily-os calendar today.`,
+      stdoutPreview: result.stdout.slice(0, 1200),
+    };
+  } catch {
+    return {
+      ok: false,
+      workdir,
+      cliPath,
+      inputPath,
+      message: 'calendar-planning-os ran, but did not return valid JSON for the smoke draft.',
+      stdoutPreview: result.stdout.slice(0, 1200),
+    };
+  }
+}
+
 export function buildCalendarDraftInput(config: AppConfig, evidence: Evidence, period: CalendarDraftPeriod, date: string): CalendarDraftInput {
   const tasks = collectCalendarTasks(config, evidence, date).slice(0, config.calendar.draft.max_tasks);
   return {
@@ -117,6 +177,33 @@ export function buildCalendarDraftInput(config: AppConfig, evidence: Evidence, p
       generatedAt: evidence.generated_at,
       date: evidence.date,
       sources: Object.fromEntries(Object.entries(evidence.sources).map(([name, source]) => [name, source.state])),
+    },
+  };
+}
+
+function sampleCalendarInput(config: AppConfig): CalendarDraftInput {
+  return {
+    period: 'day',
+    timezone: config.user.timezone,
+    policy: defaultCalendarPolicy(),
+    tasks: [
+      {
+        id: 'calendar-smoke-deep-work',
+        title: 'Smoke test deep work block',
+        type: 'deep_work',
+        priority: 'P1',
+        estimatedMinutes: 45,
+        source: 'daily-os-smoke-test',
+      },
+    ],
+    existingEvents: [],
+    constraints: {
+      startDate: todayInTimezone(config),
+      days: 1,
+    },
+    evidence: {
+      generatedAt: new Date().toISOString(),
+      source: 'daily-os-calendar-bridge-smoke-test',
     },
   };
 }
