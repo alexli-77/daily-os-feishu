@@ -29,7 +29,7 @@ import {
   confirmedEntriesFromCandidates,
   formatProgressCandidates,
 } from '../progress/capture.js';
-import { parseProgressCardAction, renderProgressConfirmationCard } from '../progress/card.js';
+import { parseProgressCardAction, renderProgressBatchReviewCard, renderProgressConfirmationCard } from '../progress/card.js';
 import { todayInTimezone } from '../utils/date.js';
 import { appendDailyMemory, appendFeedbackLog, readLatestWorkflowOutput, readWorkflowDetailCache } from '../storage/memory.js';
 import { formatLatestWorkflowDetails, formatWorkflowSummaryForFeishu } from '../workflows/summary.js';
@@ -65,6 +65,7 @@ type WorkflowCardCommand = {
     | 'chat review'
     | 'confirm_todo'
     | 'confirm_review'
+    | 'carry_open_review'
     | 'revise_todo'
     | 'calendar week'
     | 'calendar today';
@@ -278,6 +279,46 @@ async function runBatch(input: {
       input.config.interaction.feishu.reply_mode,
     );
     console.log(`[interaction] handled ${input.scope}; command=progress-confirm-reply`);
+    return;
+  }
+  if (command.type === 'ignore' && isProgressBatchConfirmationReply(text)) {
+    const control = decideFeishuControl(input.config, accessDecision, { effect: 'memory_write' });
+    if (!control.ok) {
+      await replyToMessage(input.channel, last, `权限不足：${control.reason}`, input.config.interaction.feishu.reply_mode);
+      console.log(`[interaction] denied ${input.scope}; command=progress-batch-reply; reason=${control.reason}`);
+      return;
+    }
+    const date = todayInTimezone(input.config);
+    const progress = await collectProgressCandidates(input.config, date);
+    const decision = parseProgressBatchConfirmation(text, progress.candidates.length);
+    const completed = decision.completed.map((index) => progress.candidates[index]).filter(Boolean);
+    const carryOver = decision.carryOver.map((index) => progress.candidates[index]).filter(Boolean);
+    const ignored = decision.ignored.map((index) => progress.candidates[index]).filter(Boolean);
+    const ledgerPath = appendConfirmedProgress(input.config, date, confirmedEntriesFromCandidates(completed));
+    if (carryOver.length > 0) {
+      appendDailyMemory(
+        input.config,
+        'daily_review',
+        date,
+        [
+          '用户逐条确认：以下今日进展候选不是完成项，需要明天继续未闭环任务。',
+          ...carryOver.map((candidate, index) => `${index + 1}. ${candidate.title}`),
+        ].join('\n'),
+      );
+    }
+    await replyToMessage(
+      input.channel,
+      last,
+      [
+        `已处理逐条确认：完成 ${completed.length} 条，明天继续 ${carryOver.length} 条，忽略 ${ignored.length} 条。`,
+        completed.length > 0 ? `完成项已写入：${ledgerPath}` : '',
+        carryOver.length > 0 ? '明天继续的事项已写入今日复盘上下文，会带入下一次日计划。' : '',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+      input.config.interaction.feishu.reply_mode,
+    );
+    console.log(`[interaction] handled ${input.scope}; command=progress-batch-reply`);
     return;
   }
   if (command.type === 'status') {
@@ -539,12 +580,53 @@ function shouldAcceptUnmentionedGroupMessage(message: NormalizedMessage, prefix:
   if (normalized.toLowerCase().startsWith(`${prefix.toLowerCase()} `) || normalized.toLowerCase() === prefix.toLowerCase()) return true;
   if (!message.replyToMessageId && !message.threadId) return false;
   if (allowFreeformReplies) return true;
-  return isProgressConfirmationReply(normalized) || isDetailReply(normalized) || isLikelyWorkflowRevisionText(normalized);
+  return isProgressConfirmationReply(normalized) || isProgressBatchConfirmationReply(normalized) || isDetailReply(normalized) || isLikelyWorkflowRevisionText(normalized);
 }
 
 function isProgressConfirmationReply(text: string): boolean {
   const normalized = text.replace(/\s+/g, ' ').trim().toLowerCase();
   return ['确认', '确认全部', '通过', '可以', '写入', '记账', 'ok', 'okay', 'yes', 'y'].includes(normalized);
+}
+
+function isProgressBatchConfirmationReply(text: string): boolean {
+  const normalized = normalizeProgressBatchText(text);
+  if (!normalized) return false;
+  if (/^全部(完成|done|推进|明天继续|继续|忽略|不写入)$/.test(normalized)) return true;
+  return /\d+\s*(完成|done|推进|明天继续|继续|忽略|不写入|跳过)/i.test(normalized);
+}
+
+function parseProgressBatchConfirmation(text: string, count: number): { completed: number[]; carryOver: number[]; ignored: number[] } {
+  const normalized = normalizeProgressBatchText(text);
+  const all = Array.from({ length: count }, (_, index) => index);
+  if (/^全部(完成|done|推进)$/.test(normalized)) return { completed: all, carryOver: [], ignored: [] };
+  if (/^全部(明天继续|继续)$/.test(normalized)) return { completed: [], carryOver: all, ignored: [] };
+  if (/^全部(忽略|不写入)$/.test(normalized)) return { completed: [], carryOver: [], ignored: all };
+
+  const completed = new Set<number>();
+  const carryOver = new Set<number>();
+  const ignored = new Set<number>();
+  for (const match of normalized.matchAll(/(\d+)\s*(完成|done|推进|明天继续|继续|忽略|不写入|跳过)/gi)) {
+    const index = Number(match[1]) - 1;
+    if (index < 0 || index >= count) continue;
+    const action = match[2].toLowerCase();
+    if (action === '完成' || action === 'done' || action === '推进') completed.add(index);
+    else if (action === '明天继续' || action === '继续') carryOver.add(index);
+    else ignored.add(index);
+  }
+
+  return {
+    completed: [...completed].filter((index) => !carryOver.has(index) && !ignored.has(index)),
+    carryOver: [...carryOver].filter((index) => !ignored.has(index)),
+    ignored: [...ignored],
+  };
+}
+
+function normalizeProgressBatchText(text: string): string {
+  return text
+    .replace(/[，、；;。\n\r]+/g, ',')
+    .replace(/\s+/g, '')
+    .trim()
+    .toLowerCase();
 }
 
 function isDetailReply(text: string): boolean {
@@ -771,6 +853,13 @@ async function handleWorkflowCardCommand(input: {
     console.log(`[interaction] handled ${input.event.chatId}; card-command=confirm_review`);
     return;
   }
+  if (input.command.command === 'carry_open_review') {
+    const date = todayInTimezone(input.config);
+    appendDailyMemory(input.config, 'daily_review', date, '用户确认：明天继续未闭环任务。下一次今日安排需要优先带入今日复盘中的未闭环事项。');
+    await input.channel.send(input.event.chatId, { text: '收到，今日复盘里的未闭环任务会带入明天安排。' }, { replyTo: input.event.messageId });
+    console.log(`[interaction] handled ${input.event.chatId}; card-command=carry_open_review`);
+    return;
+  }
   if (input.command.command === 'revise_todo') {
     await input.channel.send(
       input.event.chatId,
@@ -862,7 +951,11 @@ async function handleProgressCardAction(input: {
     );
     return;
   }
-  if (input.action.action === 'details' || input.action.action === 'review') {
+  if (input.action.action === 'review') {
+    await input.channel.send(input.event.chatId, { card: renderProgressBatchReviewCard(input.config, result) }, { replyTo: input.event.messageId });
+    return;
+  }
+  if (input.action.action === 'details') {
     await input.channel.send(input.event.chatId, toSendInput(formatProgressCandidates(result), input.config.interaction.feishu.reply_mode), {
       replyTo: input.event.messageId,
     });
@@ -1188,6 +1281,7 @@ function parseWorkflowCardCommand(value: unknown): WorkflowCardCommand | null {
     raw === 'chat review' ||
     raw === 'confirm_todo' ||
     raw === 'confirm_review' ||
+    raw === 'carry_open_review' ||
     raw === 'revise_todo' ||
     raw === 'calendar week' ||
     raw === 'calendar today'

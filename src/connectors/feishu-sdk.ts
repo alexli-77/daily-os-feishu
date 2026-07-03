@@ -302,6 +302,7 @@ function workflowActions(workflow: WorkflowName, options?: FeishuSdkMessageOptio
   }
   if (workflow === 'daily_review') {
     actions.push(cardButton('无异议，确认复盘', { daily_os_command: 'confirm_review' }, 'default'));
+    actions.push(cardButton('明天继续未闭环任务', { daily_os_command: 'carry_open_review' }, 'default'));
   }
   actions.push(cardButton('重排一次', { daily_os_action: workflow }, 'default'));
   return actions;
