@@ -27,7 +27,7 @@ import {
   parseTodoInboxCommand,
   updateTodoInboxItemById,
 } from '../todo/inbox.js';
-import { formatCalendarDraftForFeishu, runCalendarDraft } from '../calendar/bridge.js';
+import { formatCalendarDraftForFeishu, runCalendarDraft, testCalendarBridge } from '../calendar/bridge.js';
 
 const SECRET_ENV_KEYS = new Set(['OPENAI_API_KEY', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'VAULT_GATE_TOKEN', 'LARK_APP_SECRET']);
 const UI_RUNTIME_PATH = './data/runtime/ui.json';
@@ -368,6 +368,10 @@ async function runActionInner(options: UiServerOptions, request: Record<string, 
     return chooseMemoryRepositoryFolder();
   }
 
+  if (action === 'choose_calendar_workdir') {
+    return chooseCalendarWorkdirFolder();
+  }
+
   applyEnv(env);
   const config = loadConfig(options.configPath);
 
@@ -387,6 +391,22 @@ async function runActionInner(options: UiServerOptions, request: Record<string, 
   if (action === 'calendar_week' || action === 'calendar_today') {
     const result = await runCalendarDraft(config, action === 'calendar_week' ? 'week' : 'today');
     return { ok: true, text: formatCalendarDraftForFeishu(result) };
+  }
+
+  if (action === 'calendar_test') {
+    const result = await testCalendarBridge(config);
+    const text = [
+      result.message,
+      '',
+      `workdir: ${result.workdir}`,
+      `cli: ${result.cliPath}`,
+      `input: ${result.inputPath}`,
+      result.stdoutPreview ? ['', 'Preview:', result.stdoutPreview].join('\n') : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+    if (!result.ok) throw new Error(text);
+    return { ok: true, text };
   }
 
   if (action === 'todo_capture') {
@@ -453,6 +473,7 @@ async function runActionInner(options: UiServerOptions, request: Record<string, 
 function actionResultDetail(action: string): string {
   if (action === 'collect') return 'Evidence collection completed. Response body is not written to logs.';
   if (['plan', 'review', 'weekly'].includes(action)) return 'Workflow completed. Generated content is not written to logs.';
+  if (action === 'calendar_test') return 'Calendar engine smoke test completed. Personal source data is not collected.';
   if (action.startsWith('calendar_')) return 'Calendar draft generated. Draft content is not written to logs.';
   if (action === 'progress') return 'Progress candidates collected. Candidate text is not written to logs.';
   if (action.startsWith('chat_analysis')) return 'Chat context suggestions generated. Message bodies are not written to logs.';
@@ -484,6 +505,18 @@ async function chooseMemoryRepositoryFolder(): Promise<Record<string, unknown>> 
     throw new Error('Folder selection was cancelled or unavailable.');
   }
   return { ok: true, path: result.stdout.trim(), text: 'Memory repository folder selected.' };
+}
+
+async function chooseCalendarWorkdirFolder(): Promise<Record<string, unknown>> {
+  const result = await runCommand(
+    'osascript',
+    ['-e', 'POSIX path of (choose folder with prompt "Select your calendar-planning-os folder")'],
+    { timeoutMs: 30000 },
+  );
+  if (!result.ok) {
+    throw new Error('Folder selection was cancelled or unavailable.');
+  }
+  return { ok: true, path: result.stdout.trim(), text: 'Calendar engine folder selected.' };
 }
 
 async function chooseCodexBinary(options: UiServerOptions, env: Record<string, string>): Promise<Record<string, unknown>> {
@@ -1036,7 +1069,7 @@ const HTML = String.raw`<!doctype html>
                     <tr><td>Todo Inbox</td><td>管理你手动记录的日常 todo。</td></tr>
                     <tr><td>Decision Policy</td><td>编辑 Daily OS 做决策时读取的 markdown 规则。</td></tr>
                     <tr><td>Sources</td><td>配置 Feishu 文档、聊天、vault、Linear、GitHub。</td></tr>
-                    <tr><td>Workflows</td><td>配置 daily plan、daily review、weekly review 的时间。</td></tr>
+                    <tr><td>Workflows</td><td>配置 daily plan、daily review、weekly review，以及 optional calendar-planning-os。</td></tr>
                     <tr><td>Logs</td><td>看服务状态和最近错误。</td></tr>
                   </tbody>
                 </table>
@@ -1062,6 +1095,19 @@ npm run setup
 npm run ui
 npm run build
 npm run service:install</code></pre>
+              </section>
+
+              <section aria-labelledby="guide-calendar-title">
+                <h3 id="guide-calendar-title">日历草稿</h3>
+                <table class="guide-table">
+                  <thead><tr><th>动作</th><th>说明</th></tr></thead>
+                  <tbody>
+                    <tr><td>Workflows -> Calendar planning</td><td>启用 calendar bridge，填写 calendar-planning-os folder 和 CLI path。</td></tr>
+                    <tr><td>Test Calendar Engine</td><td>只跑样例输入，检查本机路径和 CLI 是否可用。</td></tr>
+                    <tr><td><code>daily-os calendar week</code></td><td>读取真实上下文，生成本周日历草稿卡片。</td></tr>
+                    <tr><td>保存配置后</td><td>下一次 Feishu 命令会读新配置；通常不用重启服务。</td></tr>
+                  </tbody>
+                </table>
               </section>
             </div>
           </section>
@@ -1383,6 +1429,29 @@ npm run service:install</code></pre>
                 <label>Weekday<select id="workflow-weekly-weekday"><option>MON</option><option>TUE</option><option>WED</option><option>THU</option><option>FRI</option><option>SAT</option><option>SUN</option></select></label>
                 <label>Time<input id="workflow-weekly-time" type="time" /></label>
                 <button type="button" data-action="weekly">Run now</button>
+              </fieldset>
+              <fieldset>
+                <legend>Calendar planning</legend>
+                <p class="hint">Optional bridge to <code>calendar-planning-os</code>. Saving these fields does not require a service restart; the next Feishu command reads the latest config.</p>
+                <label><input id="calendar-enabled" type="checkbox" /> Enabled</label>
+                <label>Command<input id="calendar-command" placeholder="node" /></label>
+                <div class="form-field">
+                  <label for="calendar-workdir">calendar-planning-os folder</label>
+                  <div class="path-control"><input id="calendar-workdir" placeholder="../calendar-planning-os" /><button type="button" class="secondary compact" data-action="choose_calendar_workdir">Choose folder</button></div>
+                </div>
+                <label>CLI path<input id="calendar-cli-path" placeholder="bin/calendar-planning-os.mjs" /></label>
+                <label>Policy file<input id="calendar-policy-file" placeholder="Optional local markdown file" /></label>
+                <label>Routines file<input id="calendar-routines-file" placeholder="Optional local yaml file" /></label>
+                <div class="todo-form-grid">
+                  <label>Week days<input id="calendar-week-days" type="number" min="1" max="14" /></label>
+                  <label>Max tasks<input id="calendar-max-tasks" type="number" min="1" max="20" /></label>
+                </div>
+                <div class="source-row">
+                  <button type="button" class="secondary compact" data-action="calendar_test">Test Calendar Engine</button>
+                  <button type="button" class="secondary compact" data-action="calendar_week">Draft Week</button>
+                  <button type="button" class="secondary compact" data-action="calendar_today">Draft Today</button>
+                </div>
+                <p class="hint status-line" id="calendar-status"></p>
               </fieldset>
               <fieldset>
                 <legend>Service</legend>
@@ -2231,6 +2300,14 @@ function render() {
   checked('workflow-weekly-enabled', config.workflows.weekly_review.enabled);
   set('workflow-weekly-weekday', config.workflows.weekly_review.weekday);
   set('workflow-weekly-time', config.workflows.weekly_review.time);
+  checked('calendar-enabled', config.calendar.enabled);
+  set('calendar-command', config.calendar.engine.command);
+  set('calendar-workdir', config.calendar.engine.workdir);
+  set('calendar-cli-path', config.calendar.engine.cli_path);
+  set('calendar-policy-file', config.calendar.engine.policy_file);
+  set('calendar-routines-file', config.calendar.engine.routines_file);
+  set('calendar-week-days', config.calendar.draft.week_days);
+  set('calendar-max-tasks', config.calendar.draft.max_tasks);
   checked('service-prevent-sleep', config.service?.prevent_sleep?.enabled);
   checked('background-suggestions-enabled', config.background_suggestions?.enabled);
   set('background-suggestions-mode', config.background_suggestions?.mode || 'review');
@@ -2488,6 +2565,19 @@ async function saveAll() {
   next.workflows.weekly_review.enabled = isChecked('workflow-weekly-enabled');
   next.workflows.weekly_review.weekday = value('workflow-weekly-weekday');
   next.workflows.weekly_review.time = value('workflow-weekly-time');
+  next.calendar = next.calendar || {};
+  next.calendar.enabled = isChecked('calendar-enabled');
+  next.calendar.engine = next.calendar.engine || {};
+  next.calendar.engine.command = value('calendar-command') || 'node';
+  next.calendar.engine.workdir = value('calendar-workdir') || '../calendar-planning-os';
+  next.calendar.engine.cli_path = value('calendar-cli-path') || 'bin/calendar-planning-os.mjs';
+  next.calendar.engine.policy_file = value('calendar-policy-file');
+  next.calendar.engine.routines_file = value('calendar-routines-file');
+  next.calendar.engine.timeout_ms = Number(next.calendar.engine.timeout_ms || 120000);
+  next.calendar.engine.input_path = next.calendar.engine.input_path || './data/runtime/calendar-draft-input.json';
+  next.calendar.draft = next.calendar.draft || {};
+  next.calendar.draft.week_days = Number(value('calendar-week-days') || 5);
+  next.calendar.draft.max_tasks = Number(value('calendar-max-tasks') || 8);
   next.service = next.service || {};
   next.service.prevent_sleep = { enabled: isChecked('service-prevent-sleep') };
   next.background_suggestions = next.background_suggestions || {};
@@ -2621,6 +2711,13 @@ async function runAction(action) {
       setSaveStatus('Folder selected');
       return;
     }
+    if (action === 'choose_calendar_workdir' && result.path) {
+      set('calendar-workdir', result.path);
+      $('output').textContent = result.text || 'Calendar engine folder selected.';
+      setSourceStatus(action, result.text || 'Calendar engine folder selected.');
+      setSaveStatus('Folder selected');
+      return;
+    }
     if (action === 'choose_codex_binary' && result.path) {
       set('env-CODEX_BIN', result.path);
       if (result.state) state = result.state;
@@ -2747,6 +2844,7 @@ function setSourceStatus(action, text) {
   const target = action === 'discover_github_token' ? $('github-token-status') :
     action === 'discover_linear_token' ? $('linear-token-status') :
     action === 'discover_feishu_setup' ? $('feishu-setup-status') :
+    ['choose_calendar_workdir', 'calendar_test', 'calendar_week', 'calendar_today'].includes(action) ? $('calendar-status') :
     ['discover_codex_binary', 'choose_codex_binary', 'choose_codex_home', 'codex_test'].includes(action) ? $('codex-status') : null;
   if (target) target.textContent = text;
 }
