@@ -12,10 +12,11 @@ export interface ParsedProgressCardAction {
 
 export function renderProgressConfirmationCard(config: AppConfig, result: ProgressCaptureResult): object {
   const candidateIds = result.candidates.map((candidate) => candidate.id);
+  const hasCandidates = result.candidates.length > 0;
   return {
     config: { wide_screen_mode: true },
     header: {
-      template: result.candidates.length > 0 ? 'blue' : 'orange',
+      template: hasCandidates ? 'blue' : 'orange',
       title: { tag: 'plain_text', content: '今日进展确认' },
     },
     elements: [
@@ -39,25 +40,41 @@ export function renderProgressConfirmationCard(config: AppConfig, result: Progre
       },
       {
         tag: 'action',
+        actions: progressCardButtons(config, result.date, candidateIds, hasCandidates),
+      },
+    ],
+  };
+}
+
+export function renderProgressBatchReviewCard(config: AppConfig, result: ProgressCaptureResult): object {
+  const candidateIds = result.candidates.map((candidate) => candidate.id);
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      template: 'blue',
+      title: { tag: 'plain_text', content: '进展逐条确认' },
+    },
+    elements: [
+      {
+        tag: 'markdown',
+        content: [
+          '一次性回复所有编号即可，不需要一条条确认。',
+          '',
+          ...result.candidates.map(
+            (candidate, index) =>
+              `${index + 1}. **${escapeMarkdown(candidate.title)}**\n   > 可回复：${index + 1}完成 / ${index + 1}继续 / ${index + 1}忽略`,
+          ),
+          '',
+          '示例：`1完成，2继续，3忽略`',
+          '也可以回复：`全部完成` / `全部明天继续` / `全部忽略`。',
+        ].join('\n'),
+      },
+      {
+        tag: 'action',
         actions: [
-          {
-            tag: 'button',
-            text: { tag: 'plain_text', content: '确认全部' },
-            type: 'primary',
-            value: progressActionValue(config, 'confirm_all', result.date, candidateIds),
-          },
-          {
-            tag: 'button',
-            text: { tag: 'plain_text', content: '先不写入' },
-            type: 'default',
-            value: progressActionValue(config, 'ignore_all', result.date, candidateIds),
-          },
-          {
-            tag: 'button',
-            text: { tag: 'plain_text', content: '查看详情' },
-            type: 'default',
-            value: progressActionValue(config, 'details', result.date, candidateIds),
-          },
+          button('确认全部', progressActionValue(config, 'confirm_all', result.date, candidateIds), 'primary'),
+          button('先不写入', progressActionValue(config, 'ignore_all', result.date, candidateIds), 'default'),
+          button('查看详情', progressActionValue(config, 'details', result.date, candidateIds), 'default'),
         ],
       },
     ],
@@ -83,6 +100,30 @@ function candidateSummaryLines(result: ProgressCaptureResult): string[] {
   const visible = result.candidates.slice(0, 5).map((candidate, index) => `${index + 1}. **${escapeMarkdown(candidate.title)}**`);
   if (result.candidates.length <= visible.length) return visible;
   return [...visible, `还有 ${result.candidates.length - visible.length} 条候选，点「查看详情」展开。`];
+}
+
+function progressCardButtons(config: AppConfig, date: string, candidateIds: string[], hasCandidates: boolean): object[] {
+  if (!hasCandidates) {
+    return [
+      button('查看详情', progressActionValue(config, 'details', date, candidateIds), 'default'),
+      button('先不写入', progressActionValue(config, 'ignore_all', date, candidateIds), 'default'),
+    ];
+  }
+  return [
+    button('确认全部', progressActionValue(config, 'confirm_all', date, candidateIds), 'primary'),
+    button('逐条确认', progressActionValue(config, 'review', date, candidateIds), 'default'),
+    button('先不写入', progressActionValue(config, 'ignore_all', date, candidateIds), 'default'),
+    button('查看详情', progressActionValue(config, 'details', date, candidateIds), 'default'),
+  ];
+}
+
+function button(label: string, value: Record<string, unknown>, type: 'primary' | 'default'): object {
+  return {
+    tag: 'button',
+    text: { tag: 'plain_text', content: label },
+    type,
+    value,
+  };
 }
 
 function progressActionValue(config: AppConfig, action: ProgressCardAction, date: string, candidateIds: string[]): Record<string, unknown> {
