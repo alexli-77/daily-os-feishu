@@ -398,6 +398,7 @@ async function runActionInner(options: UiServerOptions, request: Record<string, 
     const text = [
       result.message,
       '',
+      `engine: ${result.engine}`,
       `workdir: ${result.workdir}`,
       `cli: ${result.cliPath}`,
       `input: ${result.inputPath}`,
@@ -1434,6 +1435,7 @@ npm run service:install</code></pre>
                 <legend>Calendar planning</legend>
                 <p class="hint">Optional bridge to <code>calendar-planning-os</code>. Saving these fields does not require a service restart; the next Feishu command reads the latest config.</p>
                 <label><input id="calendar-enabled" type="checkbox" /> Enabled</label>
+                <label>Engine mode<select id="calendar-engine-mode"><option value="auto">auto</option><option value="external">external</option><option value="builtin">builtin</option></select></label>
                 <label>Command<input id="calendar-command" placeholder="node" /></label>
                 <div class="form-field">
                   <label for="calendar-workdir">calendar-planning-os folder</label>
@@ -2301,6 +2303,7 @@ function render() {
   set('workflow-weekly-weekday', config.workflows.weekly_review.weekday);
   set('workflow-weekly-time', config.workflows.weekly_review.time);
   checked('calendar-enabled', config.calendar.enabled);
+  set('calendar-engine-mode', config.calendar.engine.mode);
   set('calendar-command', config.calendar.engine.command);
   set('calendar-workdir', config.calendar.engine.workdir);
   set('calendar-cli-path', config.calendar.engine.cli_path);
@@ -2568,6 +2571,7 @@ async function saveAll() {
   next.calendar = next.calendar || {};
   next.calendar.enabled = isChecked('calendar-enabled');
   next.calendar.engine = next.calendar.engine || {};
+  next.calendar.engine.mode = value('calendar-engine-mode') || 'auto';
   next.calendar.engine.command = value('calendar-command') || 'node';
   next.calendar.engine.workdir = value('calendar-workdir') || '../calendar-planning-os';
   next.calendar.engine.cli_path = value('calendar-cli-path') || 'bin/calendar-planning-os.mjs';

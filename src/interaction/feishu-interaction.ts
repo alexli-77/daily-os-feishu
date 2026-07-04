@@ -1390,6 +1390,7 @@ async function sendCalendarCardOutput(config: AppConfig, text: string, result: C
       date: result.date,
       eventCount,
       taskCount: result.taskCount,
+      engine: result.engine,
       writebackSupported,
     }),
     text,

@@ -4,7 +4,7 @@ Use this checklist to validate the optional `calendar-planning-os` bridge on a c
 
 ## Goal
 
-Confirm Daily OS can call the optional calendar engine, render draft cards, and keep writeback disabled.
+Confirm Daily OS can call the optional calendar engine, render draft cards, and keep writeback disabled. In `auto` mode, Daily OS uses `calendar-planning-os` when it is installed; otherwise it falls back to the built-in draft-only engine.
 
 ## Setup
 
@@ -29,6 +29,7 @@ npm run start
 
 ```text
 Enabled: on
+Engine mode: auto
 Command: node
 calendar-planning-os folder: ../calendar-planning-os
 CLI path: bin/calendar-planning-os.mjs
@@ -46,11 +47,12 @@ Click `Test Calendar Engine`.
 
 Expected result:
 
-- It reports `Calendar engine OK`.
+- With `builtin`, it reports `Built-in calendar draft engine OK`.
+- With `auto` or `external` and the external repo installed, it reports `Calendar engine OK`.
 - It shows the resolved workdir and CLI path.
 - It does not collect Feishu, Linear, vault, or calendar source data.
 
-If this fails, fix the folder or CLI path before testing real drafts.
+If `external` mode fails, fix the folder or CLI path before testing real drafts. If you only want a no-install smoke test, switch `Engine mode` to `builtin`.
 
 ## Feishu Test
 
@@ -65,6 +67,7 @@ Expected result:
 - Feishu replies with a calendar draft card.
 - The card has confirm, adjust, and skip actions.
 - The card says it has not written to Feishu, Apple, or Google Calendar.
+- The card metadata shows whether `builtin engine` or `external engine` generated the draft.
 
 Then send:
 

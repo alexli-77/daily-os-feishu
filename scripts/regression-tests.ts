@@ -35,6 +35,7 @@ try {
   testDailyOsCommandParsing();
   testCalendarDraftInputUsesWeeklyAndTodoSources();
   await testCalendarBridgeReportsMissingEngine();
+  await testCalendarBridgeUsesBuiltinDraftEngine();
   await testSkillRunCommandUsesConfiguredRunner();
   testEveryFeishuInteractionWorkflowCommandHasCardSender();
   testEveryFeishuInteractionCommandHasSkillCardSender();
@@ -272,12 +273,27 @@ function testCalendarDraftInputUsesWeeklyAndTodoSources(): void {
 
 async function testCalendarBridgeReportsMissingEngine(): Promise<void> {
   const config = testConfig();
+  config.calendar.engine.mode = 'external';
   config.calendar.engine.workdir = path.join(tmp, 'missing-calendar-planning-os');
   config.calendar.engine.cli_path = 'bin/calendar-planning-os.mjs';
   config.calendar.engine.input_path = path.join(tmp, 'calendar-smoke-input.json');
   const result = await testCalendarBridge(config);
   assert.equal(result.ok, false);
   assert.match(result.message, /workdir not found/);
+}
+
+async function testCalendarBridgeUsesBuiltinDraftEngine(): Promise<void> {
+  const config = testConfig();
+  config.calendar.engine.mode = 'builtin';
+  config.calendar.engine.workdir = path.join(tmp, 'missing-calendar-planning-os');
+  config.calendar.engine.cli_path = 'bin/calendar-planning-os.mjs';
+  config.calendar.engine.input_path = path.join(tmp, 'calendar-builtin-input.json');
+  const result = await testCalendarBridge(config);
+  assert.equal(result.ok, true);
+  assert.equal(result.engine, 'builtin');
+  assert.match(result.message, /Built-in calendar draft engine OK/);
+  assert.match(result.stdoutPreview || '', /Smoke test deep work block/);
+  assert.match(result.stdoutPreview || '', /supported": false/);
 }
 
 async function testSkillRunCommandUsesConfiguredRunner(): Promise<void> {
@@ -1067,6 +1083,7 @@ function testCalendarDraftCardRendering(): void {
     date: '2026-07-02',
     eventCount: 3,
     taskCount: 2,
+    engine: 'builtin',
     writebackSupported: false,
   });
   const serialized = JSON.stringify(card);
@@ -1075,6 +1092,7 @@ function testCalendarDraftCardRendering(): void {
   assert.match(serialized, /我要调整/);
   assert.match(serialized, /先不排/);
   assert.match(serialized, /daily_os_calendar_action/);
+  assert.match(serialized, /builtin engine/);
   assert.match(serialized, /不会修改任何日历/);
 }
 
