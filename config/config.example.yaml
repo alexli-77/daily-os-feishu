@@ -286,6 +286,8 @@ skills:
       provider: "auto" # auto | codex | claude
       path: "~/.codex/skills/weekly-review/SKILL.md"
       workdir: "~/.codex/skills/weekly-review"
-      default_mode: "weekly"
+      default_mode: "weekly" # weekly | biweekly：不带 mode 运行 weekly-review 时的默认周期。
+                             # biweekly 生成两周区间要务（如 7.6-7.19 要务），写回仍只占一列，retro 复盘上两周。
+                             # 该值透传给 life-review-os CLI；命令行显式传 `skills run weekly-review biweekly` 会覆盖。
       effects: ["read", "draft", "feishu_write"]
       require_confirmation_for: ["feishu_write"]

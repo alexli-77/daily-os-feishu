@@ -105,7 +105,7 @@ export async function runConfiguredSkill(input: SkillRunInput): Promise<SkillRun
   });
   const inputPackPath = writeSkillInputPack(input.config, entry.id, mode, inputPack);
   const provider = resolveProvider(input.config, entry);
-  if (isLifeReviewOsEntry(entry) && mode === 'weekly') {
+  if (isLifeReviewOsEntry(entry) && (mode === 'weekly' || mode === 'biweekly')) {
     const lifeReview = await runLifeReviewOsSkill({
       entry,
       mode,
