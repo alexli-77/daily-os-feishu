@@ -38,6 +38,7 @@ const PLAIN_ENV_KEYS = [
   'VAULT_GATE_URL',
   'CODEX_BIN',
   'CODEX_HOME',
+  'CLAUDE_BIN',
   'TZ',
   'LARK_APP_ID',
 ];
@@ -345,11 +346,11 @@ async function runActionInner(options: UiServerOptions, request: Record<string, 
   }
 
   if (action === 'discover_codex_binary') {
-    return { ok: true, text: await discoverCodexBinaryForUi(options, env), state: await buildState(options) };
+    return { ok: true, text: await discoverCliBinaryForUi(options, env, CLI_SPECS.codex), state: await buildState(options) };
   }
 
   if (action === 'choose_codex_binary') {
-    return chooseCodexBinary(options, env);
+    return chooseCliBinary(options, env, CLI_SPECS.codex);
   }
 
   if (action === 'choose_codex_home') {
@@ -358,6 +359,18 @@ async function runActionInner(options: UiServerOptions, request: Record<string, 
 
   if (action === 'codex_test') {
     return { ok: true, text: await testCodexForUi(env) };
+  }
+
+  if (action === 'discover_claude_binary') {
+    return { ok: true, text: await discoverCliBinaryForUi(options, env, CLI_SPECS.claude), state: await buildState(options) };
+  }
+
+  if (action === 'choose_claude_binary') {
+    return chooseCliBinary(options, env, CLI_SPECS.claude);
+  }
+
+  if (action === 'claude_test') {
+    return { ok: true, text: await testClaudeForUi(env) };
   }
 
   if (action === 'choose_vault_folder') {
@@ -520,18 +533,54 @@ async function chooseCalendarWorkdirFolder(): Promise<Record<string, unknown>> {
   return { ok: true, path: result.stdout.trim(), text: 'Calendar engine folder selected.' };
 }
 
-async function chooseCodexBinary(options: UiServerOptions, env: Record<string, string>): Promise<Record<string, unknown>> {
+interface CliSpec {
+  key: 'codex' | 'claude';
+  command: string;
+  envKey: string;
+  label: string;
+}
+
+const CLI_SPECS: Record<'codex' | 'claude', CliSpec> = {
+  codex: { key: 'codex', command: 'codex', envKey: 'CODEX_BIN', label: 'Codex CLI' },
+  claude: { key: 'claude', command: 'claude', envKey: 'CLAUDE_BIN', label: 'Claude Code CLI' },
+};
+
+async function chooseCliBinary(options: UiServerOptions, env: Record<string, string>, spec: CliSpec): Promise<Record<string, unknown>> {
+  const prompt = `Enter the ${spec.label} command name or full path`;
   const result = await runCommand(
     'osascript',
-    ['-e', 'POSIX path of (choose file with prompt "Select the Codex CLI executable")'],
-    { timeoutMs: 30000 },
+    ['-e', `text returned of (display dialog "${prompt}" default answer "${spec.command}" with title "Choose ${spec.label}")`],
+    { timeoutMs: 60000 },
   );
-  if (!result.ok) throw new Error('Codex CLI selection was cancelled or unavailable.');
-  const codexPath = result.stdout.trim();
-  const next = { ...env, CODEX_BIN: codexPath };
+  if (!result.ok) throw new Error(`${spec.label} selection was cancelled or unavailable.`);
+  const entered = result.stdout.trim();
+  if (!entered) throw new Error(`No ${spec.label} name or path entered.`);
+  const resolved = await resolveCliBinary(entered, env);
+  if (!resolved) {
+    throw new Error(`Could not find a runnable ${spec.label} from "${entered}". Enter a full path to the executable, or install it and click Find ${spec.label}.`);
+  }
+  const next = { ...env, [spec.envKey]: resolved };
   writeEnvFile(options.envPath, next);
   applyEnv(next);
-  return { ok: true, path: codexPath, text: `Codex CLI path saved: ${codexPath}`, state: await buildState(options) };
+  return { ok: true, path: resolved, text: `${spec.label} path saved: ${resolved}`, state: await buildState(options) };
+}
+
+async function resolveCliBinary(entered: string, env: Record<string, string>): Promise<string> {
+  const expandHome = (value: string) => (value.startsWith('~') ? path.join(os.homedir(), value.slice(1)) : value);
+  if (entered.includes('/')) {
+    const candidate = expandHome(entered);
+    return (await isUsableCli(candidate, env)) ? candidate : '';
+  }
+  const candidates = [
+    await whichCommand(entered),
+    `/opt/homebrew/bin/${entered}`,
+    `/usr/local/bin/${entered}`,
+    path.join(os.homedir(), '.local', 'bin', entered),
+  ];
+  for (const candidate of candidates) {
+    if (candidate && (await isUsableCli(candidate, env))) return candidate;
+  }
+  return '';
 }
 
 async function chooseCodexHome(options: UiServerOptions, env: Record<string, string>): Promise<Record<string, unknown>> {
@@ -548,30 +597,30 @@ async function chooseCodexHome(options: UiServerOptions, env: Record<string, str
   return { ok: true, path: codexHome, text: `Codex home saved: ${codexHome}`, state: await buildState(options) };
 }
 
-async function discoverCodexBinaryForUi(options: UiServerOptions, env: Record<string, string>): Promise<string> {
-  const found = await discoverCodexBinary(env);
+async function discoverCliBinaryForUi(options: UiServerOptions, env: Record<string, string>, spec: CliSpec): Promise<string> {
+  const found = await discoverCliBinary(spec, env);
   if (!found.value) {
-    return 'Codex CLI not found. Install Codex CLI, or click Choose CLI and select the codex executable manually.';
+    return `${spec.label} not found. Install it, or click Choose CLI and enter the executable name or full path.`;
   }
-  const next = { ...env, CODEX_BIN: found.value };
+  const next = { ...env, [spec.envKey]: found.value };
   writeEnvFile(options.envPath, next);
   applyEnv(next);
-  return `Codex CLI found from ${found.source} and saved locally: ${found.value}`;
+  return `${spec.label} found from ${found.source} and saved locally: ${found.value}`;
 }
 
-async function discoverCodexBinary(env: Record<string, string>): Promise<{ value?: string; source: string }> {
+async function discoverCliBinary(spec: CliSpec, env: Record<string, string>): Promise<{ value?: string; source: string }> {
   const candidates = [
-    { value: env.CODEX_BIN, source: 'configured .env' },
-    { value: process.env.CODEX_BIN, source: 'process.env.CODEX_BIN' },
-    { value: await whichCommand('codex'), source: 'PATH' },
-    { value: '/opt/homebrew/bin/codex', source: '/opt/homebrew/bin' },
-    { value: '/usr/local/bin/codex', source: '/usr/local/bin' },
-    { value: path.join(os.homedir(), '.local', 'bin', 'codex'), source: '~/.local/bin' },
+    { value: env[spec.envKey], source: 'configured .env' },
+    { value: process.env[spec.envKey], source: `process.env.${spec.envKey}` },
+    { value: await whichCommand(spec.command), source: 'PATH' },
+    { value: `/opt/homebrew/bin/${spec.command}`, source: '/opt/homebrew/bin' },
+    { value: `/usr/local/bin/${spec.command}`, source: '/usr/local/bin' },
+    { value: path.join(os.homedir(), '.local', 'bin', spec.command), source: '~/.local/bin' },
   ];
 
   for (const candidate of candidates) {
     if (!candidate.value) continue;
-    if (await isUsableCodex(candidate.value, env)) return { value: candidate.value, source: candidate.source };
+    if (await isUsableCli(candidate.value, env)) return { value: candidate.value, source: candidate.source };
   }
   return { source: 'local PATH or common install locations' };
 }
@@ -581,24 +630,37 @@ async function whichCommand(command: string): Promise<string> {
   return result.ok ? result.stdout.trim().split('\n')[0] || '' : '';
 }
 
-async function isUsableCodex(command: string, env: Record<string, string>): Promise<boolean> {
-  const result = await runCommand(command, ['--version'], { timeoutMs: 5000, env: codexEnv(env) });
+async function isUsableCli(command: string, env: Record<string, string>): Promise<boolean> {
+  const result = await runCommand(command, ['--version'], { timeoutMs: 5000, env: cliEnv(env) });
   return result.ok;
 }
 
 async function testCodexForUi(env: Record<string, string>): Promise<string> {
   const codexBin = env.CODEX_BIN || process.env.CODEX_BIN || 'codex';
-  const version = await runCommand(codexBin, ['--version'], { timeoutMs: 10000, env: codexEnv(env) });
+  const version = await runCommand(codexBin, ['--version'], { timeoutMs: 10000, env: cliEnv(env) });
   if (!version.ok) {
     return `Codex CLI is not runnable from ${codexBin}. Click Find Codex CLI or Choose CLI, then try again.\n${version.stderr || version.stdout}`;
   }
-  const login = await runCommand(codexBin, ['login', 'status'], { timeoutMs: 10000, env: codexEnv(env) });
+  const login = await runCommand(codexBin, ['login', 'status'], { timeoutMs: 10000, env: cliEnv(env) });
   const versionText = (version.stdout || version.stderr).trim();
   if (login.ok) return `Codex CLI 正常：${versionText}\n${(login.stdout || login.stderr).trim() || '已登录。'}`;
   return `Codex CLI 正常：${versionText}\n当前配置下 Codex 尚未登录。请在 Terminal 中运行以下命令，然后回到 UI 再点击 Test Codex login：\n${codexBin} login`;
 }
 
-function codexEnv(env: Record<string, string>): NodeJS.ProcessEnv {
+async function testClaudeForUi(env: Record<string, string>): Promise<string> {
+  const claudeBin = env.CLAUDE_BIN || process.env.CLAUDE_BIN || 'claude';
+  const version = await runCommand(claudeBin, ['--version'], { timeoutMs: 10000, env: cliEnv(env) });
+  if (!version.ok) {
+    return `Claude Code CLI is not runnable from ${claudeBin}. Click Find Claude CLI or Choose CLI, then try again.\n${version.stderr || version.stdout}`;
+  }
+  const auth = await runCommand(claudeBin, ['auth', 'status'], { timeoutMs: 10000, env: cliEnv(env) });
+  const versionText = (version.stdout || version.stderr).trim();
+  const loggedIn = auth.ok && /"loggedIn"\s*:\s*true/.test(auth.stdout);
+  if (loggedIn) return `Claude Code CLI 正常：${versionText}\n${auth.stdout.match(/"authMethod"\s*:\s*"([^"]+)"/)?.[1] ?? '已登录。'}`;
+  return `Claude Code CLI 正常：${versionText}\n当前配置下 Claude 尚未登录。请在 Terminal 中运行以下命令，然后回到 UI 再点击 Test Claude login：\n${claudeBin} auth login`;
+}
+
+function cliEnv(env: Record<string, string>): NodeJS.ProcessEnv {
   return { ...process.env, ...env };
 }
 
@@ -1255,7 +1317,7 @@ npm run service:install</code></pre>
               <label>决策校准群 ID<input id="env-DAILY_OS_DECISION_CHAT_ID" placeholder="自动创建，或手动粘贴 oc_xxx" /></label>
               <p class="hint">默认不自动创建，避免客户刚启动工具就被突然拉群。只有确认飞书应用已开通 <code>im:chat</code> 权限后，再启用自动创建。</p>
             </fieldset>
-            <fieldset class="wide-fieldset">
+            <fieldset class="wide-fieldset" id="codex-fieldset">
               <legend>Codex</legend>
               <p class="hint">Use Codex CLI when LLM provider is set to codex. Configure the executable path here when the customer's shell PATH cannot find codex.</p>
               <div class="source-row">
@@ -1273,6 +1335,21 @@ npm run service:install</code></pre>
               </div>
               <p class="hint">如果 Test Codex login 提示未登录，请在 Terminal 中用相同的 Codex binary/home 运行 <code>codex login</code>，然后重新 Run Checks。</p>
               <p class="hint status-line" id="codex-status"></p>
+            </fieldset>
+            <fieldset class="wide-fieldset" id="claude-fieldset" hidden>
+              <legend>Claude Code</legend>
+              <p class="hint">Use the Claude Code CLI when LLM provider is set to claude. Configure the executable path here when the customer's shell PATH cannot find claude.</p>
+              <div class="source-row">
+                <button type="button" class="secondary compact" data-action="discover_claude_binary">Find Claude CLI</button>
+                <button type="button" class="secondary compact" data-action="choose_claude_binary">Choose CLI</button>
+                <button type="button" class="secondary compact" data-action="claude_test">Test Claude login</button>
+              </div>
+              <div class="form-field">
+                <label for="env-CLAUDE_BIN">Claude binary</label>
+                <div class="path-control"><input id="env-CLAUDE_BIN" placeholder="claude or /opt/homebrew/bin/claude" /><button type="button" class="secondary compact" data-action="choose_claude_binary">Choose CLI</button></div>
+              </div>
+              <p class="hint">如果 Test Claude login 提示未登录，请在 Terminal 中用相同的 Claude binary 运行 <code>claude auth login</code>，然后重新 Run Checks。</p>
+              <p class="hint status-line" id="claude-status"></p>
             </fieldset>
             <div class="toggles">
               <label><input id="output-feishu-enabled" type="checkbox" /> Feishu output</label>
@@ -1818,6 +1895,9 @@ fieldset {
 .wide-fieldset {
   margin-top: .85rem;
 }
+fieldset[hidden] {
+  display: none;
+}
 legend {
   padding: 0 .35rem;
   font-weight: 700;
@@ -2174,6 +2254,8 @@ document.querySelectorAll('[data-action]').forEach((button) => {
   button.addEventListener('click', () => runAction(button.dataset.action));
 });
 
+$('llm-provider')?.addEventListener('change', updateProviderSections);
+
 $('todo-list')?.addEventListener('click', (event) => {
   const button = event.target.closest('[data-todo-action]');
   if (!button) return;
@@ -2225,6 +2307,14 @@ async function loadState() {
   render();
 }
 
+function updateProviderSections() {
+  const provider = value('llm-provider');
+  const codex = $('codex-fieldset');
+  const claude = $('claude-fieldset');
+  if (codex) codex.hidden = provider !== 'codex';
+  if (claude) claude.hidden = provider !== 'claude';
+}
+
 function render() {
   const config = state.config;
   $('paths').textContent = state.configPath + '  |  ' + state.envPath;
@@ -2246,6 +2336,8 @@ function render() {
   renderDecisionPolicy(state.decisionPolicy);
   set('env-CODEX_BIN', state.env.CODEX_BIN || 'codex');
   set('env-CODEX_HOME', state.env.CODEX_HOME || '');
+  set('env-CLAUDE_BIN', state.env.CLAUDE_BIN || 'claude');
+  updateProviderSections();
   set('env-LARK_APP_ID', state.env.LARK_APP_ID);
   set('env-FEISHU_CHAT_ID', state.env.FEISHU_CHAT_ID);
   set('env-DAILY_OS_DECISION_CHAT_ID', state.env.DAILY_OS_DECISION_CHAT_ID);
@@ -2596,6 +2688,7 @@ async function saveAll() {
   const envValues = {
     CODEX_BIN: value('env-CODEX_BIN'),
     CODEX_HOME: value('env-CODEX_HOME'),
+    CLAUDE_BIN: value('env-CLAUDE_BIN'),
     LARK_APP_ID: value('env-LARK_APP_ID'),
     FEISHU_CHAT_ID: value('env-FEISHU_CHAT_ID'),
     DAILY_OS_DECISION_CHAT_ID: value('env-DAILY_OS_DECISION_CHAT_ID'),
@@ -2740,6 +2833,15 @@ async function runAction(action) {
       setSaveStatus('Codex saved');
       return;
     }
+    if (action === 'choose_claude_binary' && result.path) {
+      set('env-CLAUDE_BIN', result.path);
+      if (result.state) state = result.state;
+      await loadState();
+      $('output').textContent = result.text || 'Claude CLI selected.';
+      setSourceStatus(action, result.text || 'Claude CLI selected.');
+      setSaveStatus('Claude saved');
+      return;
+    }
     await loadState();
     $('output').textContent = result.text || 'Done.';
     setSourceStatus(action, result.text || 'Done.');
@@ -2849,7 +2951,8 @@ function setSourceStatus(action, text) {
     action === 'discover_linear_token' ? $('linear-token-status') :
     action === 'discover_feishu_setup' ? $('feishu-setup-status') :
     ['choose_calendar_workdir', 'calendar_test', 'calendar_week', 'calendar_today'].includes(action) ? $('calendar-status') :
-    ['discover_codex_binary', 'choose_codex_binary', 'choose_codex_home', 'codex_test'].includes(action) ? $('codex-status') : null;
+    ['discover_codex_binary', 'choose_codex_binary', 'choose_codex_home', 'codex_test'].includes(action) ? $('codex-status') :
+    ['discover_claude_binary', 'choose_claude_binary', 'claude_test'].includes(action) ? $('claude-status') : null;
   if (target) target.textContent = text;
 }
 
