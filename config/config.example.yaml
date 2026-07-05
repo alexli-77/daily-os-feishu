@@ -43,7 +43,9 @@ planning:
 calendar:
   enabled: false
   engine:
-    # Optional local calendar-planning-os bridge. Keep disabled until the engine repo is installed.
+    # auto uses calendar-planning-os when installed, otherwise the built-in draft-only engine.
+    # external requires calendar-planning-os; builtin never writes to a real calendar.
+    mode: "auto" # auto | external | builtin
     command: "node"
     cli_path: "bin/calendar-planning-os.mjs"
     workdir: "../calendar-planning-os"

@@ -18,6 +18,7 @@ export interface CalendarDraftResult {
   draft?: CalendarDraft;
   taskCount: number;
   existingEventCount: number;
+  engine: 'external' | 'builtin';
 }
 
 export interface CalendarBridgeTestResult {
@@ -25,6 +26,7 @@ export interface CalendarBridgeTestResult {
   workdir: string;
   cliPath: string;
   inputPath: string;
+  engine: 'external' | 'builtin';
   message: string;
   stdoutPreview?: string;
 }
@@ -83,6 +85,22 @@ export async function runCalendarDraft(config: AppConfig, period: CalendarDraftP
   const evidence = await collectEvidence(config, date);
   const input = buildCalendarDraftInput(config, evidence, period, date);
   const inputPath = writeCalendarInput(config, input);
+  const engine = resolveCalendarEngine(config);
+  if (engine === 'builtin') {
+    const draft = runBuiltinCalendarDraft(input, period, date);
+    return {
+      period,
+      date,
+      command: 'builtin calendar draft engine',
+      inputPath,
+      markdown: formatBuiltinDraftMarkdown(draft, period),
+      draft,
+      taskCount: input.tasks.length,
+      existingEventCount: input.existingEvents.length,
+      engine,
+    };
+  }
+
   const command = period === 'week' ? 'draft-week' : 'draft-day';
   const args = [resolveCalendarCliPath(config), command, '--input', inputPath, '--format', 'both'];
 
@@ -107,6 +125,7 @@ export async function runCalendarDraft(config: AppConfig, period: CalendarDraftP
     draft: parseDraftFromCliOutput(result.stdout),
     taskCount: input.tasks.length,
     existingEventCount: input.existingEvents.length,
+    engine,
   };
 }
 
@@ -114,12 +133,27 @@ export async function testCalendarBridge(config: AppConfig): Promise<CalendarBri
   const workdir = resolveCalendarWorkdir(config);
   const cliPath = resolveCalendarCliPath(config);
   const inputPath = writeCalendarInput(config, sampleCalendarInput(config));
+  const engine = resolveCalendarEngine(config);
+
+  if (engine === 'builtin') {
+    const sample = sampleCalendarInput(config);
+    const draft = runBuiltinCalendarDraft(sample, 'today', todayInTimezone(config));
+    return {
+      ok: true,
+      workdir,
+      cliPath,
+      inputPath,
+      engine,
+      message: 'Built-in calendar draft engine OK. It can generate draft blocks without installing calendar-planning-os; writeback remains disabled.',
+      stdoutPreview: JSON.stringify(draft, null, 2).slice(0, 1200),
+    };
+  }
 
   if (!fs.existsSync(workdir)) {
-    return { ok: false, workdir, cliPath, inputPath, message: `calendar.engine.workdir not found: ${workdir}` };
+    return { ok: false, workdir, cliPath, inputPath, engine, message: `calendar.engine.workdir not found: ${workdir}` };
   }
   if (!fs.existsSync(cliPath)) {
-    return { ok: false, workdir, cliPath, inputPath, message: `calendar.engine.cli_path not found: ${cliPath}` };
+    return { ok: false, workdir, cliPath, inputPath, engine, message: `calendar.engine.cli_path not found: ${cliPath}` };
   }
 
   const result = await runCommand(config.calendar.engine.command, [cliPath, 'draft-day', '--input', inputPath, '--format', 'json'], {
@@ -133,6 +167,7 @@ export async function testCalendarBridge(config: AppConfig): Promise<CalendarBri
       workdir,
       cliPath,
       inputPath,
+      engine,
       message: `calendar-planning-os smoke test failed: ${(result.stderr || result.stdout).slice(0, 1200)}`,
       stdoutPreview: result.stdout.slice(0, 1200),
     };
@@ -146,6 +181,7 @@ export async function testCalendarBridge(config: AppConfig): Promise<CalendarBri
       workdir,
       cliPath,
       inputPath,
+      engine,
       message: `Calendar engine OK. Generated ${eventCount} sample block(s). Save config, then run daily-os calendar week or daily-os calendar today.`,
       stdoutPreview: result.stdout.slice(0, 1200),
     };
@@ -155,6 +191,7 @@ export async function testCalendarBridge(config: AppConfig): Promise<CalendarBri
       workdir,
       cliPath,
       inputPath,
+      engine,
       message: 'calendar-planning-os ran, but did not return valid JSON for the smoke draft.',
       stdoutPreview: result.stdout.slice(0, 1200),
     };
@@ -318,6 +355,15 @@ function resolveCalendarWorkdir(config: AppConfig): string {
   return workdir ? path.resolve(workdir) : process.cwd();
 }
 
+function resolveCalendarEngine(config: AppConfig): 'external' | 'builtin' {
+  const mode = config.calendar.engine.mode;
+  if (mode === 'builtin') return 'builtin';
+  if (mode === 'external') return 'external';
+  const workdir = resolveCalendarWorkdir(config);
+  const cliPath = resolveCalendarCliPath(config);
+  return fs.existsSync(workdir) && fs.existsSync(cliPath) ? 'external' : 'builtin';
+}
+
 function parseDraftFromCliOutput(output: string): CalendarDraft | undefined {
   const match = output.match(/```json\s*([\s\S]*?)```/);
   if (!match?.[1]) return undefined;
@@ -340,6 +386,118 @@ function defaultCalendarPolicy(): Record<string, unknown> {
     defaultBufferMinutes: 30,
     includeBuffers: true,
   };
+}
+
+function runBuiltinCalendarDraft(input: CalendarDraftInput, period: CalendarDraftPeriod, date: string): CalendarDraft {
+  const policy = normalizeCalendarPolicy(input.policy);
+  const events: CalendarDraftEvent[] = [];
+  const warnings: string[] = ['Built-in draft-only engine used; no calendar writeback is available.'];
+  const days = Math.max(1, input.constraints.days);
+  const taskDays = Array.from({ length: days }, (_, index) => addDays(input.constraints.startDate || date, index));
+  const counters = new Map<string, { deep_work: number; admin: number; review: number }>();
+
+  for (const task of input.tasks) {
+    const preferred = task.preferredDate && taskDays.includes(task.preferredDate) ? task.preferredDate : undefined;
+    const targetDate = preferred || pickBuiltinTaskDate(task, taskDays, counters, policy);
+    const slots = slotsForTaskType(task.type, policy);
+    const slotIndex = nextSlotIndex(targetDate, task.type, counters, slots.length);
+    const slot = slots[slotIndex] || slots[slots.length - 1] || '09:30-10:30';
+    const [slotStart, slotEnd] = slot.split('-');
+    const start = `${targetDate}T${slotStart}:00`;
+    const proposedEnd = addMinutes(start, Math.min(task.estimatedMinutes || 45, minutesBetween(slotStart, slotEnd) || 60));
+    const end = proposedEnd.slice(0, 10) === targetDate ? proposedEnd : `${targetDate}T${slotEnd}:00`;
+    events.push({
+      title: task.title,
+      start,
+      end,
+      type: task.type,
+      sourceTaskIds: [task.id],
+      confidence: 'medium',
+      warnings: overlapsExisting(start, end, input.existingEvents) ? ['Overlaps an existing calendar event; review before using.'] : [],
+    });
+  }
+
+  if (events.some((event) => event.warnings.length > 0)) warnings.push('Some blocks overlap existing calendar events.');
+
+  return {
+    draftId: `builtin-${period}-${date}`,
+    mode: 'draft-only',
+    period: input.period,
+    timezone: input.timezone,
+    events,
+    warnings,
+    writeback: {
+      supported: false,
+      reason: 'Built-in Daily OS calendar draft engine only creates preview blocks.',
+    },
+  };
+}
+
+function normalizeCalendarPolicy(policy: Record<string, unknown>): {
+  deepWorkWindows: string[];
+  adminWindows: string[];
+  reviewWindows: string[];
+  maxDeepWorkBlocksPerDay: number;
+  maxAdminBlocksPerDay: number;
+  maxReviewBlocksPerDay: number;
+} {
+  const defaults = defaultCalendarPolicy();
+  return {
+    deepWorkWindows: arrayOfStrings(policy.deepWorkWindows) || (defaults.deepWorkWindows as string[]),
+    adminWindows: arrayOfStrings(policy.adminWindows) || (defaults.adminWindows as string[]),
+    reviewWindows: arrayOfStrings(policy.reviewWindows) || (defaults.reviewWindows as string[]),
+    maxDeepWorkBlocksPerDay: positiveNumber(policy.maxDeepWorkBlocksPerDay) || Number(defaults.maxDeepWorkBlocksPerDay),
+    maxAdminBlocksPerDay: positiveNumber(policy.maxAdminBlocksPerDay) || Number(defaults.maxAdminBlocksPerDay),
+    maxReviewBlocksPerDay: positiveNumber(policy.maxReviewBlocksPerDay) || Number(defaults.maxReviewBlocksPerDay),
+  };
+}
+
+function pickBuiltinTaskDate(
+  task: CalendarTask,
+  taskDays: string[],
+  counters: Map<string, { deep_work: number; admin: number; review: number }>,
+  policy: ReturnType<typeof normalizeCalendarPolicy>,
+): string {
+  const limit = task.type === 'deep_work' ? policy.maxDeepWorkBlocksPerDay : task.type === 'review' ? policy.maxReviewBlocksPerDay : policy.maxAdminBlocksPerDay;
+  for (const day of taskDays) {
+    const dayCounters = counters.get(day) || { deep_work: 0, admin: 0, review: 0 };
+    if (dayCounters[task.type] < limit) return day;
+  }
+  return taskDays[(taskDays.length - 1) || 0];
+}
+
+function nextSlotIndex(
+  date: string,
+  type: CalendarTask['type'],
+  counters: Map<string, { deep_work: number; admin: number; review: number }>,
+  slotCount: number,
+): number {
+  const dayCounters = counters.get(date) || { deep_work: 0, admin: 0, review: 0 };
+  const index = Math.min(dayCounters[type], Math.max(0, slotCount - 1));
+  dayCounters[type] += 1;
+  counters.set(date, dayCounters);
+  return index;
+}
+
+function slotsForTaskType(type: CalendarTask['type'], policy: ReturnType<typeof normalizeCalendarPolicy>): string[] {
+  if (type === 'deep_work') return policy.deepWorkWindows;
+  if (type === 'review') return policy.reviewWindows;
+  return policy.adminWindows;
+}
+
+function formatBuiltinDraftMarkdown(draft: CalendarDraft, period: CalendarDraftPeriod): string {
+  const title = period === 'week' ? '本周日历草稿' : '今日日历草稿';
+  return [
+    `# ${title}`,
+    '',
+    'Built-in draft-only engine generated this preview. It has not written to any calendar.',
+    '',
+    ...draft.events.map((event) => `- ${formatEventTime(event)} ${event.title}`),
+    '',
+    '```json',
+    JSON.stringify(draft, null, 2),
+    '```',
+  ].join('\n');
 }
 
 function startOfWeek(date: string): string {
@@ -396,6 +554,38 @@ function linearPriority(value: string): CalendarTask['priority'] {
 
 function formatEventTime(event: CalendarDraftEvent): string {
   return `${event.start.slice(5, 16).replace('T', ' ')}-${event.end.slice(11, 16)}`;
+}
+
+function arrayOfStrings(value: unknown): string[] | null {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string') ? value : null;
+}
+
+function positiveNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function minutesBetween(start: string, end: string): number {
+  const startParts = start.split(':').map(Number);
+  const endParts = end.split(':').map(Number);
+  if (startParts.length !== 2 || endParts.length !== 2 || startParts.some(Number.isNaN) || endParts.some(Number.isNaN)) return 0;
+  return endParts[0] * 60 + endParts[1] - (startParts[0] * 60 + startParts[1]);
+}
+
+function addMinutes(start: string, minutes: number): string {
+  const parsed = new Date(`${start}Z`);
+  parsed.setUTCMinutes(parsed.getUTCMinutes() + Math.max(1, minutes));
+  return parsed.toISOString().slice(0, 16);
+}
+
+function overlapsExisting(start: string, end: string, events: CalendarExistingEvent[]): boolean {
+  const startMs = Date.parse(`${start}Z`);
+  const endMs = Date.parse(`${end}Z`);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return false;
+  return events.some((event) => {
+    const existingStart = Date.parse(event.start);
+    const existingEnd = Date.parse(event.end);
+    return Number.isFinite(existingStart) && Number.isFinite(existingEnd) && startMs < existingEnd && endMs > existingStart;
+  });
 }
 
 function visit(value: unknown, fn: (value: unknown) => void): void {

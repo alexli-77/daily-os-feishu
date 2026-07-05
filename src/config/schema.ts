@@ -93,6 +93,7 @@ export const AppConfigSchema = z.object({
       enabled: z.boolean().default(false),
       engine: z
         .object({
+          mode: z.enum(['auto', 'external', 'builtin']).default('auto'),
           command: z.string().default('node'),
           cli_path: z.string().default('bin/calendar-planning-os.mjs'),
           workdir: z.string().default('../calendar-planning-os'),
@@ -102,6 +103,7 @@ export const AppConfigSchema = z.object({
           input_path: z.string().default('./data/runtime/calendar-draft-input.json'),
         })
         .default({
+          mode: 'auto',
           command: 'node',
           cli_path: 'bin/calendar-planning-os.mjs',
           workdir: '../calendar-planning-os',
@@ -123,6 +125,7 @@ export const AppConfigSchema = z.object({
     .default({
       enabled: false,
       engine: {
+        mode: 'auto',
         command: 'node',
         cli_path: 'bin/calendar-planning-os.mjs',
         workdir: '../calendar-planning-os',

@@ -35,6 +35,7 @@ export interface FeishuCalendarDraftCardOptions {
   date: string;
   eventCount: number;
   taskCount: number;
+  engine?: 'external' | 'builtin';
   writebackSupported: boolean;
 }
 
@@ -272,7 +273,7 @@ export function renderFeishuCalendarDraftCard(text: string, options: FeishuCalen
         content: [
           stripTextOnlyInstructions(text),
           '',
-          `> ${options.date} · ${options.taskCount} 个任务 · ${options.eventCount} 个时间块`,
+          `> ${options.date} · ${options.taskCount} 个任务 · ${options.eventCount} 个时间块 · ${options.engine || 'external'} engine`,
           options.writebackSupported ? '> Calendar writeback: engine reports supported.' : '> Calendar writeback: 当前关闭；这张卡不会修改任何日历。',
         ].join('\n'),
       },
