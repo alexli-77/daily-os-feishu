@@ -63,7 +63,7 @@ export async function runLifeReviewOsSkill(input: {
   const cli = requireLifeReviewOsCli(input.entry);
   const args = [cli, 'run', input.mode, '--json', '--provider', input.provider, '--daily-os-input', input.inputPackPath];
   if (input.userText.trim()) args.push('--user-text', input.userText.trim());
-  const result = await runCommand('node', args, { cwd: lifeReviewOsRoot(cli), timeoutMs: 300000 });
+  const result = await runCommand('node', args, { cwd: lifeReviewOsRoot(cli), timeoutMs: 660000 });
   const parsed = parseLifeReviewOsJson(result.stdout, result.stderr, 'run', result.ok);
   return {
     runId: stringValue(parsed.run_id),
