@@ -4,6 +4,7 @@ import OpenAI from 'openai';
 import type { AppConfig, WorkflowName } from '../config/schema.js';
 import type { Evidence } from '../workflows/types.js';
 import type { MemoryBundle } from '../storage/memory.js';
+import { billingFromConfig, checkBudget, estimateCostUsd, recordUsage } from './token-meter.js';
 
 export interface AgentInput {
   config: AppConfig;
@@ -11,18 +12,31 @@ export interface AgentInput {
   date: string;
   evidence: Evidence;
   memory: MemoryBundle;
+  /** Stable id for the current workflow run; used for per-task budget accounting. */
+  runId?: string;
 }
 
 export async function runOpenAiAgent(input: AgentInput): Promise<string> {
   if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is required when llm.provider=openai');
+  const billing = billingFromConfig(input.config);
+  const runId = input.runId ?? `${input.workflow}-${input.date}`;
+  // Three-tier budget circuit breaker: block the call if any tier is already spent.
+  checkBudget(billing, { runId });
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const response = await client.chat.completions.create({
-    model: input.config.llm.model,
-    messages: [
-      { role: 'system', content: buildSystemPrompt() },
-      { role: 'user', content: buildUserPrompt(input) },
-    ],
-  });
+  const response = await client.chat.completions.create(
+    {
+      model: input.config.llm.model,
+      messages: [
+        { role: 'system', content: buildSystemPrompt() },
+        { role: 'user', content: buildUserPrompt(input) },
+      ],
+    },
+    { timeout: 180000 },
+  );
+  const inputTokens = response.usage?.prompt_tokens ?? 0;
+  const outputTokens = response.usage?.completion_tokens ?? 0;
+  const cost = estimateCostUsd(input.config.llm.model, inputTokens, outputTokens, billing.price_overrides);
+  recordUsage(runId, 'openai', input.config.llm.model, inputTokens, outputTokens, cost);
   return normalizeAgentOutput(response.choices[0]?.message.content || '');
 }
 

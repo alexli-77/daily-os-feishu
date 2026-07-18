@@ -1,5 +1,5 @@
-import type { AppConfig, WorkflowName } from '../config/schema.js';
-import { feishuSdkStatus, sendFeishuSdkCard, sendFeishuSdkMessage } from './feishu-sdk.js';
+import type { AppConfig } from '../config/schema.js';
+import { feishuSdkStatus, sendFeishuSdkCard, sendFeishuSdkMessage, type FeishuSdkMessageOptions } from './feishu-sdk.js';
 import { addDays } from '../utils/date.js';
 import { commandExists, runCommand } from '../utils/command.js';
 import type { EvidenceSource } from '../workflows/types.js';
@@ -281,7 +281,7 @@ function tryParseJson(value: string): unknown | null {
 export async function sendFeishuMessage(
   config: AppConfig,
   text: string,
-  options: { workflow?: WorkflowName; date?: string; detailId?: string } = {},
+  options: FeishuSdkMessageOptions = {},
 ): Promise<void> {
   const output = config.output.feishu;
   if (!output.enabled) return;

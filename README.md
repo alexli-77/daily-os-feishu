@@ -183,6 +183,10 @@ npm run build
 npm run service:install
 ```
 
+The background service runs the compiled output in `dist/`. After changing any
+source code, run `npm run build` again so the production path picks up the new
+code; `npm run dev`/`start` run from source via `tsx` and do not need a rebuild.
+
 Remove it:
 
 ```bash

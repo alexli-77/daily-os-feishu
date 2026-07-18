@@ -8,8 +8,22 @@ user:
   timezone: "America/Toronto"
 
 llm:
-  provider: "codex" # codex | openai | claude
-  model: "default" # codex/claude: 'default' uses the CLI account's model; openai: an API model id
+  # 程序化调度请使用 API-key provider（anthropic / openai）。
+  # codex / claude 为订阅 CLI，用于程序化调度不合规（Anthropic 2026-02 条款），仅作迁移期回退。
+  provider: "codex" # codex | openai | claude | anthropic
+  model: "default" # codex/claude: 'default' uses the CLI account's model; openai/anthropic: an API model id (anthropic 默认 claude-sonnet-5)
+
+# 三层预算熔断：每次 LLM 调用前检查累计花费，任一层触顶即抛错并写 data/runtime/budget-alerts.jsonl。
+# 计量落盘于 data/runtime/usage-ledger.jsonl（每条调用一行 JSON）。
+billing:
+  per_task_usd: 2 # 单次 workflow run 的花费上限
+  daily_usd: 10 # 当日（UTC）累计花费上限
+  monthly_usd: 100 # 当月（UTC）累计花费上限
+  # 可选：覆盖内置每百万 token 价格表（USD / 1M tokens），键为模型名或前缀
+  # price_overrides:
+  #   claude-sonnet-5:
+  #     input: 3
+  #     output: 15
 
 workflows:
   daily_plan:
@@ -31,6 +45,10 @@ planning:
     enabled: true
     # The source that should anchor daily planning before Linear/tasks are selected.
     # Put private document names or table markers only in your local config/config.yaml.
+    # The current-cycle OKR at memory-vault 10_OKR/current-okr.md is always
+    # collected into the daily-plan prompt (memory repository) and, when the
+    # local/remote Vault is enabled, also surfaces as the `vault_okr` source
+    # via sources.vault.read_paths.okr below.
     primary_source_hint: "Primary weekly planning source"
     primary_labels: ["weekly priorities", "每周要务"]
     primary_markers: []
@@ -187,6 +205,10 @@ sources:
         due_within_days: 7
         limit: 12
       read_paths:
+        # Current-cycle OKR anchors daily-plan strategy alignment.
+        # This path is relative to your vault; the shipped memory vault keeps it
+        # at memory-vault/default/10_OKR/current-okr.md.
+        okr: "10_OKR/current-okr.md"
         todos: "99_Meta/todos.md"
         routing: "99_Meta/routing.md"
         watch_list: "99_Meta/watch-list.md"

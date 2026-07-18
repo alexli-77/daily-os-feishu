@@ -7,7 +7,78 @@ const MAX_DETAIL_CHARS = 7000;
 const MAX_ROW_TITLE_CHARS = 96;
 const MAX_ROW_GOAL_CHARS = 80;
 
+/** A single ranked todo emitted by the daily-plan LLM (LEO-209). */
+export interface DailyPlanTodo {
+  rank: number;
+  text: string;
+  candidateId: string;
+}
+
+export interface DailyPlanTodoPlan {
+  todos: DailyPlanTodo[];
+  note?: string;
+}
+
+/**
+ * Parse the LEO-209 daily-plan JSON output `{ todos: [{ rank, text,
+ * candidateId }], note? }`. Returns null when the content is not the expected
+ * JSON so callers can fall back to the legacy long-form extraction path.
+ */
+export function parseDailyPlanTodoPlan(content: string): DailyPlanTodoPlan | null {
+  const json = extractJsonObject(content);
+  if (!json) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || !Array.isArray((parsed as { todos?: unknown }).todos)) return null;
+  const todos = ((parsed as { todos: unknown[] }).todos)
+    .map((todo, index): DailyPlanTodo | null => {
+      if (!todo || typeof todo !== 'object') return null;
+      const record = todo as Record<string, unknown>;
+      const text = typeof record.text === 'string' ? record.text.trim() : '';
+      if (!text) return null;
+      const rank = typeof record.rank === 'number' && Number.isFinite(record.rank) ? record.rank : index + 1;
+      const candidateId = typeof record.candidateId === 'string' ? record.candidateId : '';
+      return { rank, text, candidateId };
+    })
+    .filter((todo): todo is DailyPlanTodo => Boolean(todo))
+    .sort((left, right) => left.rank - right.rank)
+    .map((todo, index) => ({ ...todo, rank: index + 1 }));
+  if (todos.length === 0) return null;
+  const note = typeof (parsed as { note?: unknown }).note === 'string' ? (parsed as { note: string }).note.trim() : '';
+  return { todos, ...(note ? { note } : {}) };
+}
+
+/** Structured todos for card buttons; [] when content is not the LEO-209 JSON. */
+export function extractDailyPlanTodos(content: string): DailyPlanTodo[] {
+  return parseDailyPlanTodoPlan(content)?.todos ?? [];
+}
+
+function renderDailyPlanTodoSummary(plan: DailyPlanTodoPlan): string {
+  const lines = ['**今日 todo：**', ...plan.todos.map((todo) => `${todo.rank}. ${todo.text}`)];
+  if (plan.note) lines.push('', `> ${plan.note}`);
+  lines.push('', '完成一条就点它下面的「✅ 完成」按钮；想调整点「我要调整」。');
+  return trimSummary(lines.join('\n'), MAX_SUMMARY_CHARS);
+}
+
+function extractJsonObject(content: string): string | null {
+  const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
+  const source = (fenced ?? content).trim();
+  const start = source.indexOf('{');
+  const end = source.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) return null;
+  return source.slice(start, end + 1);
+}
+
 export function formatWorkflowSummaryForFeishu(workflow: WorkflowName, date: string, content: string, evidence?: Evidence, config?: AppConfig): string {
+  if (workflow === 'daily_plan') {
+    const plan = parseDailyPlanTodoPlan(content);
+    if (plan) return renderDailyPlanTodoSummary(plan);
+    console.warn('[summary] daily_plan output was not LEO-209 todo JSON; falling back to legacy long-form extraction.');
+  }
   const clean = normalize(content);
   const intro = introFor(workflow, clean);
   const overview = workflowOverview(workflow, clean, evidence, config);

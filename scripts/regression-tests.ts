@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../src/config/load-config.js';
 import { coalesceChatSuggestions } from '../src/chat/context-analysis.js';
 import type { ChatContextSuggestion } from '../src/chat/context-analysis.js';
@@ -9,7 +11,7 @@ import { parseDailyOsCommand, runParsedDailyOsCommand } from '../src/interaction
 import { handlePendingBackgroundSuggestionReply } from '../src/service/background-suggestions.js';
 import { renderFeishuCalendarDraftCard, renderFeishuSkillCard, renderFeishuSkillWritebackPreviewCard, renderFeishuWorkflowCard } from '../src/connectors/feishu-sdk.js';
 import { handleFeishuFeedbackCommand, shouldTreatAsFeedbackWorkflowRevision } from '../src/feedback/feishu-feedback.js';
-import { shouldRunScheduledWorkflow } from '../src/service/launchd.js';
+import { acquireSchedulerLock, releaseSchedulerLock, shouldRunScheduledWorkflow } from '../src/service/launchd.js';
 import { formatRecentWorkflowRuns, listRecentWorkflowRuns } from '../src/workflows/run-ledger.js';
 import { runWorkflow } from '../src/workflows/run-workflow.js';
 import { feishuDocsSource } from '../src/workflows/evidence.js';
@@ -24,11 +26,17 @@ import { executeLifeReviewOsWriteback, prepareLifeReviewOsWriteback, runLifeRevi
 import { formatWorkflowRevisionMemoryNote, parseWorkflowRevisionItems } from '../src/interaction/workflow-revision.js';
 import { handleTodoInboxCommand, openTodoInboxItems, parseTodoInboxCommand, updateTodoInboxItemById } from '../src/todo/inbox.js';
 import { buildCalendarDraftInput, testCalendarBridge } from '../src/calendar/bridge.js';
+import { isSelfOriginMessage, SelfSentMessageCache, type SelfOriginContext } from '../src/interaction/self-origin.js';
+import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
+import { startUiServer } from '../src/ui/server.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-os-regression-'));
 
 try {
   testFeishuUserMessageFiltering();
+  testSelfOriginMessageSkipsSelfAndProcessesUsers();
+  testSelfOriginMessageDualIdentityCacheFallback();
+  testSelfOriginMessageDegradesWhenIdentityUnavailable();
   testChatSuggestionCoalescing();
   testUnifiedProviderPromptContract();
   testAgentOutputNormalization();
@@ -53,7 +61,13 @@ try {
   testWorkflowSummaryQuotesLinearMetadata();
   testWorkflowDetailsShowEvidenceTrace();
   testSchedulerSkipsDailyReviewOnWeeklyReviewDay();
-  await testWorkflowRunLedgerRecordsSendFailure();
+  testSchedulerReclaimsStaleLock();
+  // Requires a logged-in local Claude/Codex CLI; skipped in CI/sandbox via env flag.
+  if (!process.env.DAILY_OS_SKIP_AGENT_TESTS) {
+    await testWorkflowRunLedgerRecordsSendFailure();
+  } else {
+    console.log('  (skipped testWorkflowRunLedgerRecordsSendFailure: DAILY_OS_SKIP_AGENT_TESTS set)');
+  }
   testWeeklyReviewSummaryPrioritizesReviewEvidence();
   testWeeklyReviewSummaryShowsStructuredPriorityItems();
   testWeeklyPrioritiesExtractPortfolioReviewItem();
@@ -66,9 +80,36 @@ try {
   testSkillWritebackPreviewCardRendering();
   testWeeklyReviewWritebackParsing();
   await testLifeReviewOsBridgeUsesExternalCli();
+  await testUiServerEnforcesAuthTokenAndOrigin();
+  // Integrated MVP suites (LEO-207/208/209/210) + LEO-211 adversarial suite.
+  // Each is a standalone tsx runner; run as an isolated subprocess so their
+  // process.chdir / global.fetch / server side effects never leak into the
+  // in-process regression tests above. A non-zero exit fails the whole run.
+  runIntegratedSuites([
+    'scripts/tests/billing.test.ts',
+    'scripts/tests/okr.test.ts',
+    'scripts/tests/todo-scorer.test.ts',
+    'scripts/tests/platform-ui.test.ts',
+    'scripts/tests/adversarial.test.ts',
+  ]);
   console.log('Regression tests passed.');
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+function runIntegratedSuites(files: string[]): void {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const tsxBin = path.join(repoRoot, 'node_modules', '.bin', 'tsx');
+  for (const file of files) {
+    console.log(`\n--- integrated suite: ${file} ---`);
+    const result = spawnSync(tsxBin, [file], {
+      cwd: repoRoot,
+      stdio: 'inherit',
+      env: process.env,
+    });
+    if (result.error) throw result.error;
+    assert.equal(result.status, 0, `integrated suite failed: ${file} (exit ${result.status})`);
+  }
 }
 
 function testUnifiedProviderPromptContract(): void {
@@ -142,6 +183,76 @@ function testFeishuUserMessageFiltering(): void {
   assert.equal(records[0]?.id, 'user-1');
   assert.equal(records[0]?.text, 'LEO-7 邮件已经完成，待周一发布');
   assert.ok(records[0]?.createdAt instanceof Date);
+}
+
+function selfOriginTestMessage(overrides: Partial<NormalizedMessage>): NormalizedMessage {
+  return {
+    messageId: 'om_default',
+    chatId: 'oc_chat',
+    chatType: 'group',
+    senderId: 'ou_owner',
+    senderName: 'Owner',
+    content: '',
+    rawContentType: 'text',
+    resources: [],
+    mentions: [],
+    mentionAll: false,
+    mentionedBot: false,
+    createTime: Date.now(),
+    ...overrides,
+  };
+}
+
+function testSelfOriginMessageSkipsSelfAndProcessesUsers(): void {
+  const botOpenId = 'ou_bot_self';
+  const ctx: SelfOriginContext = {
+    botOpenIds: new Set([botOpenId]),
+    selfSentMessageIds: { has: () => false },
+    identityAvailable: true,
+  };
+
+  // senderId === bot self → treated as self-origin and skipped, even though its
+  // content looks like an ordinary user message.
+  const selfMessage = selfOriginTestMessage({ messageId: 'om_self', senderId: botOpenId, content: 'LEO-7 邮件已经完成' });
+  assert.equal(isSelfOriginMessage(selfMessage, ctx), true);
+
+  // senderId === real user → processed normally, even when the content happens to
+  // look like generated Daily OS copy (identity beats the legacy prefix regex).
+  const userMessage = selfOriginTestMessage({ messageId: 'om_user', senderId: 'ou_owner', content: '老板，我帮您整理了今天的安排。' });
+  assert.equal(isSelfOriginMessage(userMessage, ctx), false);
+}
+
+function testSelfOriginMessageDualIdentityCacheFallback(): void {
+  // lark-cli `--as user` path: the echo comes back with the human owner's
+  // open_id (not the bot), so identity alone cannot flag it. The short-TTL
+  // self-sent message_id cache is the minimal fallback that catches it.
+  const cache = new SelfSentMessageCache();
+  cache.record('om_echo');
+  const ctx: SelfOriginContext = {
+    botOpenIds: new Set(['ou_bot_self']),
+    selfSentMessageIds: cache,
+    identityAvailable: true,
+  };
+  const echo = selfOriginTestMessage({ messageId: 'om_echo', senderId: 'ou_owner', content: '任意出站文案' });
+  assert.equal(isSelfOriginMessage(echo, ctx), true);
+
+  const freshUserMessage = selfOriginTestMessage({ messageId: 'om_fresh', senderId: 'ou_owner', content: '任意出站文案' });
+  assert.equal(isSelfOriginMessage(freshUserMessage, ctx), false);
+}
+
+function testSelfOriginMessageDegradesWhenIdentityUnavailable(): void {
+  // When the bot identity could not be resolved, fall back to the legacy
+  // outbound-copy prefix heuristics.
+  const ctx: SelfOriginContext = {
+    botOpenIds: new Set<string>(),
+    selfSentMessageIds: { has: () => false },
+    identityAvailable: false,
+  };
+  const generated = selfOriginTestMessage({ messageId: 'om_gen', content: '老板，我帮您整理了今天的安排。' });
+  assert.equal(isSelfOriginMessage(generated, ctx), true);
+
+  const genuine = selfOriginTestMessage({ messageId: 'om_real', content: '帮我把 LEO-12 降级，明天再跟进' });
+  assert.equal(isSelfOriginMessage(genuine, ctx), false);
 }
 
 function testChatSuggestionCoalescing(): void {
@@ -835,6 +946,28 @@ function testSchedulerSkipsDailyReviewOnWeeklyReviewDay(): void {
   );
 }
 
+function testSchedulerReclaimsStaleLock(): void {
+  const lockDir = path.join(tmp, 'scheduler-locks');
+  const key = '2026-07-16:daily_plan';
+
+  const firstLock = acquireSchedulerLock(key, lockDir);
+  assert.ok(firstLock, 'first acquire should succeed');
+
+  // A fresh lock (as if another process is still holding it) must block re-acquire.
+  assert.equal(acquireSchedulerLock(key, lockDir), null, 'a fresh lock must block re-acquire');
+
+  // Simulate a lock left behind by a crashed process by aging its mtime past the TTL.
+  const staleSeconds = (Date.now() - 31 * 60 * 1000) / 1000;
+  fs.utimesSync(firstLock!, staleSeconds, staleSeconds);
+
+  // The next acquire should self-heal: clear the stale lock and re-acquire.
+  const reclaimed = acquireSchedulerLock(key, lockDir);
+  assert.ok(reclaimed, 'a stale lock should be cleared and re-acquired');
+
+  releaseSchedulerLock(reclaimed!);
+  assert.equal(fs.existsSync(reclaimed!), false, 'releasing the lock should remove the file');
+}
+
 async function testWorkflowRunLedgerRecordsSendFailure(): Promise<void> {
   const config = testConfig();
   config.sources.vault.enabled = false;
@@ -1242,6 +1375,53 @@ async function testLifeReviewOsBridgeUsesExternalCli(): Promise<void> {
   const written = await executeLifeReviewOsWriteback(config, 'weekly-review', preview.token);
   assert.equal(written.taskHeader, '6.22-6.28 要务');
   assert.equal(written.itemCount, 1);
+}
+
+async function testUiServerEnforcesAuthTokenAndOrigin(): Promise<void> {
+  const controls = await startUiServer({
+    configPath: path.join(tmp, 'ui-config.yaml'),
+    envPath: path.join(tmp, 'ui.env'),
+    host: '127.0.0.1',
+    port: 0,
+    open: false,
+  });
+
+  try {
+    const base = controls.url;
+
+    // No token -> 401
+    const noToken = await fetch(`${base}/api/logs`);
+    assert.equal(noToken.status, 401, 'requests without a token must be rejected with 401');
+
+    // Wrong token -> 401
+    const wrongToken = await fetch(`${base}/api/logs`, { headers: { Authorization: 'Bearer not-the-token' } });
+    assert.equal(wrongToken.status, 401, 'requests with an incorrect token must be rejected with 401');
+
+    // Valid token via Authorization header -> 200
+    const withToken = await fetch(`${base}/api/logs`, { headers: { Authorization: `Bearer ${controls.token}` } });
+    assert.equal(withToken.status, 200, 'requests carrying the runtime token must succeed');
+    const okBody = (await withToken.json()) as { ok?: boolean };
+    assert.equal(okBody.ok, true);
+
+    // Valid token via query string -> 200 (browser bootstrap path)
+    const withQueryToken = await fetch(`${base}/api/logs?token=${controls.token}`);
+    assert.equal(withQueryToken.status, 200, 'a query-string token must also authenticate');
+
+    // Forged cross-site Origin -> 403 (CSRF defence), even with a valid token
+    const forgedOrigin = await fetch(`${base}/api/logs?token=${controls.token}`, {
+      headers: { Origin: 'http://evil.example.com' },
+    });
+    assert.equal(forgedOrigin.status, 403, 'a forged cross-site Origin must be rejected with 403');
+
+    // env-secret must not leak the plaintext value by default (no reveal flag)
+    const secret = (await fetch(`${base}/api/env-secret?key=OPENAI_API_KEY&token=${controls.token}`).then((response) =>
+      response.json(),
+    )) as { ok?: boolean; value?: unknown };
+    assert.equal(secret.ok, true);
+    assert.equal(secret.value, undefined, 'env-secret must not return a plaintext secret without an explicit local reveal');
+  } finally {
+    await controls.stop();
+  }
 }
 
 function testConfig(): ReturnType<typeof loadConfig> {

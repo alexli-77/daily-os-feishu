@@ -45,6 +45,9 @@
     "personal-agent"
   ],
   "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.66.1",
     "js-yaml": "^4.1.0",

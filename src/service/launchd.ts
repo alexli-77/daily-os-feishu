@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { AppConfig, WorkflowName } from '../config/schema.js';
 import { runCommand } from '../utils/command.js';
+import { writeFileAtomic } from '../utils/atomic-write.js';
 import { runWorkflow } from '../workflows/run-workflow.js';
 import { collectProgressCandidates, hasConfirmedProgress, type ProgressCandidate } from '../progress/capture.js';
 import { renderProgressConfirmationCard } from '../progress/card.js';
@@ -13,6 +14,7 @@ import { pollFeishuFeedback } from '../feedback/feishu-feedback.js';
 const LABEL = 'com.daily-os-feishu.agent';
 const SCHEDULER_STATE_PATH = './data/memory/scheduler-state.json';
 const SCHEDULER_LOCK_DIR = './data/runtime/scheduler-locks';
+const SCHEDULER_LOCK_STALE_MS = 30 * 60_000;
 const RETRY_DELAY_MINUTES = 15;
 
 export interface LaunchAgentStatus {
@@ -277,24 +279,45 @@ function unmarkFired(state: SchedulerRuntimeState, key: string): void {
 
 function writeSchedulerState(fired: Set<string>): void {
   const recent = [...fired].filter((item) => isRecentSchedulerKey(item));
-  fs.mkdirSync(path.dirname(SCHEDULER_STATE_PATH), { recursive: true });
-  fs.writeFileSync(SCHEDULER_STATE_PATH, JSON.stringify({ fired: recent }, null, 2), 'utf8');
+  writeFileAtomic(SCHEDULER_STATE_PATH, JSON.stringify({ fired: recent }, null, 2));
 }
 
-function acquireSchedulerLock(key: string): string | null {
-  fs.mkdirSync(SCHEDULER_LOCK_DIR, { recursive: true });
-  const lockPath = path.join(SCHEDULER_LOCK_DIR, `${hashSchedulerKey(key)}.lock`);
+export function acquireSchedulerLock(key: string, lockDir: string = SCHEDULER_LOCK_DIR): string | null {
+  fs.mkdirSync(lockDir, { recursive: true });
+  const lockPath = path.join(lockDir, `${hashSchedulerKey(key)}.lock`);
   try {
     const fd = fs.openSync(lockPath, 'wx');
     fs.closeSync(fd);
     return lockPath;
   } catch (error) {
-    if (isFileExistsError(error)) return null;
-    throw error;
+    if (!isFileExistsError(error)) throw error;
+    // A leftover lock from a crashed process would otherwise silence the
+    // workflow for the rest of the day. Reclaim it once it is provably stale.
+    if (!reclaimStaleSchedulerLock(lockPath)) return null;
+    try {
+      const fd = fs.openSync(lockPath, 'wx');
+      fs.closeSync(fd);
+      return lockPath;
+    } catch (retryError) {
+      if (isFileExistsError(retryError)) return null;
+      throw retryError;
+    }
   }
 }
 
-function releaseSchedulerLock(lockPath: string): void {
+function reclaimStaleSchedulerLock(lockPath: string): boolean {
+  try {
+    const ageMs = Date.now() - fs.statSync(lockPath).mtimeMs;
+    if (ageMs < SCHEDULER_LOCK_STALE_MS) return false;
+    fs.rmSync(lockPath, { force: true });
+    console.warn(`[scheduler] cleared stale lock ${path.basename(lockPath)} (age ${Math.round(ageMs / 60_000)}m)`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function releaseSchedulerLock(lockPath: string): void {
   fs.rmSync(lockPath, { force: true });
 }
 

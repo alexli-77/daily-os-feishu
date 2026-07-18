@@ -32,7 +32,8 @@ import {
 import { parseProgressCardAction, renderProgressBatchReviewCard, renderProgressConfirmationCard } from '../progress/card.js';
 import { todayInTimezone } from '../utils/date.js';
 import { appendDailyMemory, appendFeedbackLog, readLatestWorkflowOutput, readWorkflowDetailCache } from '../storage/memory.js';
-import { formatLatestWorkflowDetails, formatWorkflowSummaryForFeishu } from '../workflows/summary.js';
+import { extractDailyPlanTodos, formatLatestWorkflowDetails, formatWorkflowSummaryForFeishu } from '../workflows/summary.js';
+import { recordTodoFeedback, recordTodoPresented } from '../todo/feedback.js';
 import { markWorkflowRunFailed, markWorkflowRunSucceeded } from '../workflows/run-ledger.js';
 import { handlePendingBackgroundSuggestionReply } from '../service/background-suggestions.js';
 import { renderFeishuCalendarDraftCard, renderFeishuSkillCard, renderFeishuSkillWritebackPreviewCard, renderFeishuWorkflowCard } from '../connectors/feishu-sdk.js';
@@ -42,6 +43,14 @@ import { executeLifeReviewOsWriteback, prepareLifeReviewOsWriteback } from '../s
 import { formatWorkflowRevisionMemoryNote } from './workflow-revision.js';
 import { handleTodoInboxCommand, parseTodoInboxCommand } from '../todo/inbox.js';
 import type { CalendarDraftPeriod, CalendarDraftResult } from '../calendar/bridge.js';
+import { isSelfOriginMessage, SelfOriginGuard, type SelfOriginContext } from './self-origin.js';
+
+/**
+ * Self-origin echo guard (LEO-202 / H3). Resolves the bot's own open_id at
+ * startup and records message_ids we emit, so inbound events that originated
+ * from the bot are skipped instead of re-processed. See ./self-origin.ts.
+ */
+let selfOriginGuard: SelfOriginGuard | undefined;
 
 interface FeishuInteractionControls {
   stop: () => Promise<void>;
@@ -173,6 +182,8 @@ export async function startFeishuInteraction(configProvider: ConfigProvider): Pr
   });
 
   await channel.connect();
+  selfOriginGuard = new SelfOriginGuard(getConfig(), channel);
+  await selfOriginGuard.resolve();
   console.log('daily-os-feishu 飞书交互层已启动。');
   if (getConfig().decision.onboarding.auto_create_on_setup) {
     try {
@@ -199,6 +210,13 @@ async function intakeMessage(input: {
   activeAgentRuns: Map<string, ActiveAgentRun>;
 }): Promise<void> {
   if (!input.config.interaction.feishu.enabled) return;
+  // Primary echo guard (LEO-202 / H3): drop anything that originated from the
+  // bot itself before it can be queued and re-processed. Identity check first,
+  // prefix heuristics only as a degradation path (see ./self-origin.ts).
+  if (selfOriginGuard?.isSelfOrigin(input.message)) {
+    console.log(`[interaction] skipped self-origin message ${input.message.chatId}/${input.message.messageId}`);
+    return;
+  }
   const mode = await resolveChatMode(input.channel, input.message.chatId, input.chatModes, input.message.chatType);
   const scope = scopeFor(input.message, mode);
   const access = decideFeishuAccess(input.config, {
@@ -227,7 +245,12 @@ async function intakeMessage(input: {
     input.message.chatType !== 'p2p' &&
     input.config.interaction.feishu.require_mention_in_groups &&
     !input.message.mentionedBot &&
-    !shouldAcceptUnmentionedGroupMessage(input.message, input.config.interaction.feishu.command_prefix, input.config.interaction.feishu.agent_mode.enabled)
+    !shouldAcceptUnmentionedGroupMessage(
+      input.message,
+      input.config.interaction.feishu.command_prefix,
+      input.config.interaction.feishu.agent_mode.enabled,
+      selfOriginGuard?.context(),
+    )
   ) {
     return;
   }
@@ -376,8 +399,8 @@ async function runBatch(input: {
       accessDecision,
       sessionScopeId: session.scope_id,
       stopAgentRun: async () => stopAgentRun(input.activeAgentRuns, input.scope),
-      sendWorkflowCard: async ({ workflow, date, summary }) => {
-        await sendWorkflowCardOutput(input.config, workflow, date, summary, `interaction:${input.scope}`);
+      sendWorkflowCard: async ({ workflow, date, text, summary }) => {
+        await sendWorkflowCardOutput(input.config, workflow, date, summary, `interaction:${input.scope}`, text);
       },
       sendSkillCard: async ({ result: skillResult, text: skillText }) => {
         await sendSkillCardOutput(input.config, skillText, skillResult, `interaction:${input.scope}`);
@@ -417,8 +440,8 @@ async function runBatch(input: {
     accessDecision,
     sessionScopeId: session.scope_id,
     stopAgentRun: async () => stopAgentRun(input.activeAgentRuns, input.scope),
-    sendWorkflowCard: async ({ workflow, date, summary }) => {
-      await sendWorkflowCardOutput(input.config, workflow, date, summary, `interaction:${input.scope}`);
+    sendWorkflowCard: async ({ workflow, date, text, summary }) => {
+      await sendWorkflowCardOutput(input.config, workflow, date, summary, `interaction:${input.scope}`, text);
     },
     sendSkillCard: async ({ result: skillResult, text: skillText }) => {
       await sendSkillCardOutput(input.config, skillText, skillResult, `interaction:${input.scope}`);
@@ -463,7 +486,7 @@ async function runBatch(input: {
     return;
   }
 
-  if (isWorkflowRevisionFollowUp(input.config, last, text)) {
+  if (isWorkflowRevisionFollowUp(input.config, last, text, selfOriginGuard?.context())) {
     const control = decideFeishuControl(input.config, accessDecision, { effect: 'memory_write' });
     if (!control.ok) {
       await replyToMessage(input.channel, last, `权限不足：${control.reason}`, input.config.interaction.feishu.reply_mode);
@@ -573,10 +596,15 @@ function isStopText(text: string): boolean {
   return normalized === '/stop' || normalized === 'stop' || normalized === 'daily-os stop' || normalized === '停止' || normalized === '停止当前任务';
 }
 
-function shouldAcceptUnmentionedGroupMessage(message: NormalizedMessage, prefix: string, allowFreeformReplies: boolean): boolean {
+function shouldAcceptUnmentionedGroupMessage(
+  message: NormalizedMessage,
+  prefix: string,
+  allowFreeformReplies: boolean,
+  selfOriginCtx: SelfOriginContext | undefined,
+): boolean {
   const normalized = message.content.replace(/\s+/g, ' ').trim();
   if (!normalized) return false;
-  if (isGeneratedDailyOsText(normalized)) return false;
+  if (selfOriginCtx && isSelfOriginMessage(message, selfOriginCtx)) return false;
   if (normalized.toLowerCase().startsWith(`${prefix.toLowerCase()} `) || normalized.toLowerCase() === prefix.toLowerCase()) return true;
   if (!message.replyToMessageId && !message.threadId) return false;
   if (allowFreeformReplies) return true;
@@ -634,10 +662,16 @@ function isDetailReply(text: string): boolean {
   return ['详情', '查看详情', '全文', '完整内容', 'details', 'detail'].includes(normalized);
 }
 
-function isWorkflowRevisionFollowUp(config: AppConfig, message: NormalizedMessage, text: string): boolean {
+function isWorkflowRevisionFollowUp(
+  config: AppConfig,
+  message: NormalizedMessage,
+  text: string,
+  selfOriginCtx: SelfOriginContext | undefined,
+): boolean {
+  const selfOrigin = selfOriginCtx ? isSelfOriginMessage(message, selfOriginCtx) : false;
   return Boolean(
     (message.replyToMessageId || message.threadId) &&
-      !isGeneratedDailyOsText(text) &&
+      !selfOrigin &&
       !isDailyOsCommandText(text, config.interaction.feishu.command_prefix) &&
       isLikelyWorkflowRevisionText(text),
   );
@@ -661,26 +695,6 @@ function isLikelyWorkflowRevisionText(text: string): boolean {
   if (normalized.length < 4) return false;
   if (/^daily-os\s+(plan|review|weekly|details|progress|status)\b/i.test(normalized)) return false;
   return /修改|调整|改成|降级|优先|不做|先做|安排|计划|复盘|review|weekly|周报|周复盘|本周|今天|明天|leo-\d+/i.test(normalized);
-}
-
-function isGeneratedDailyOsText(text: string): boolean {
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  if (!normalized) return false;
-  return (
-    normalized.startsWith('收到，我已把这条修改意见写入') ||
-    normalized.startsWith('<card title="Daily OS">') ||
-    normalized.startsWith('老板，我在后台看了') ||
-    normalized.startsWith('Running ') ||
-    normalized.startsWith('老板，我帮您') ||
-    normalized.startsWith('老板您好') ||
-    normalized.startsWith('老板，我把') ||
-    normalized.includes('请发送 daily-os weekly，我会按这条意见重新整理') ||
-    normalized.includes('请发送 daily-os plan，我会按这条意见重新整理') ||
-    normalized.includes('请发送 daily-os review，我会按这条意见重新整理') ||
-    normalized.includes('请点卡片里的「重新生成」') ||
-    normalized.includes('如果下周安排要改，直接回复') ||
-    normalized.includes('您看下周先按这个节奏走可以吗？')
-  );
 }
 
 function revisionWorkflowForText(text: string): WorkflowName {
@@ -765,6 +779,11 @@ async function handleCardAction(input: {
     await handleWorkflowCardCommand({ ...input, command: commandAction });
     return;
   }
+  const todoAction = parseTodoCardAction(input.event.action.value);
+  if (todoAction) {
+    await handleTodoCardAction({ ...input, action: todoAction });
+    return;
+  }
   const action = parseCardAction(input.event.action.value);
   if (!action) return;
   const access = decideFeishuAccess(input.config, {
@@ -800,8 +819,14 @@ async function handleCardAction(input: {
     const date = todayInTimezone(input.config);
     const evidence = action === 'weekly_review' ? await collectEvidence(input.config, date) : undefined;
     const summary = formatWorkflowSummaryForFeishu(action, date, output, evidence, input.config);
+    const todos = action === 'daily_plan' ? extractDailyPlanTodos(output) : [];
     try {
-      await input.channel.send(input.event.chatId, { card: renderFeishuWorkflowCard(summary, { workflow: action, date }) }, { replyTo: input.event.messageId });
+      await input.channel.send(
+        input.event.chatId,
+        { card: renderFeishuWorkflowCard(summary, { workflow: action, date, ...(todos.length ? { todos } : {}) }) },
+        { replyTo: input.event.messageId },
+      );
+      if (todos.length) recordTodoPresented(input.config, date, todos.map((todo) => ({ candidateId: todo.candidateId, rank: todo.rank })));
       markWorkflowRunSucceeded(input.config, result.run, { enabled: true, provider: 'feishu_interaction', mode: 'card', status: 'succeeded' });
     } catch (error) {
       markWorkflowRunFailed(input.config, result.run, error, { sendFailed: true });
@@ -896,8 +921,8 @@ async function handleWorkflowCardCommand(input: {
     accessDecision: access,
     sessionScopeId: input.event.chatId,
     stopAgentRun: async () => stopAgentRun(input.activeAgentRuns, input.event.chatId),
-    sendWorkflowCard: async ({ workflow, date, summary }) => {
-      await sendWorkflowCardOutput(input.config, workflow, date, summary, `card-command:${input.event.chatId}`);
+    sendWorkflowCard: async ({ workflow, date, text, summary }) => {
+      await sendWorkflowCardOutput(input.config, workflow, date, summary, `card-command:${input.event.chatId}`, text);
     },
     sendSkillCard: async ({ result: skillResult, text: skillText }) => {
       await sendSkillCardOutput(input.config, skillText, skillResult, `card-command:${input.event.chatId}`);
@@ -1176,8 +1201,8 @@ async function handleSkillCardAction(input: {
     accessDecision: access,
     sessionScopeId: input.event.chatId,
     stopAgentRun: async () => stopAgentRun(input.activeAgentRuns, input.event.chatId),
-    sendWorkflowCard: async ({ workflow, date, summary }) => {
-      await sendWorkflowCardOutput(input.config, workflow, date, summary, `skill-card:${input.event.chatId}`);
+    sendWorkflowCard: async ({ workflow, date, text, summary }) => {
+      await sendWorkflowCardOutput(input.config, workflow, date, summary, `skill-card:${input.event.chatId}`, text);
     },
     sendSkillCard: async ({ result: skillResult, text: skillText }) => {
       await sendSkillCardOutput(input.config, skillText, skillResult, `skill-card:${input.event.chatId}`);
@@ -1292,6 +1317,55 @@ function parseWorkflowCardCommand(value: unknown): WorkflowCardCommand | null {
   return null;
 }
 
+interface TodoCardAction {
+  action: 'complete' | 'defer';
+  candidateId: string;
+  rank: number;
+}
+
+function parseTodoCardAction(value: unknown): TodoCardAction | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as { daily_os_todo_action?: unknown; candidate_id?: unknown; rank?: unknown };
+  const action = raw.daily_os_todo_action;
+  if (action !== 'complete' && action !== 'defer') return null;
+  const candidateId = typeof raw.candidate_id === 'string' ? raw.candidate_id : '';
+  const rank = typeof raw.rank === 'string' ? Number.parseInt(raw.rank, 10) : typeof raw.rank === 'number' ? raw.rank : 0;
+  return { action, candidateId, rank: Number.isFinite(rank) ? rank : 0 };
+}
+
+async function handleTodoCardAction(input: {
+  config: AppConfig;
+  channel: LarkChannel;
+  event: CardActionEvent;
+  activeAgentRuns: Map<string, ActiveAgentRun>;
+  action: TodoCardAction;
+}): Promise<void> {
+  const access = decideFeishuAccess(input.config, {
+    senderOpenId: input.event.operator.openId,
+    chatId: input.event.chatId,
+    chatType: 'group',
+  });
+  if (!access.ok) {
+    console.warn(`[interaction] denied todo card action ${input.event.chatId}; operator=${input.event.operator.openId.slice(-6)}; reason=${access.reason}`);
+    return;
+  }
+  const date = todayInTimezone(input.config);
+  recordTodoFeedback(input.config, {
+    date,
+    event: input.action.action,
+    candidateId: input.action.candidateId,
+    rank: input.action.rank,
+    source: `card-action:${input.event.chatId}`,
+  });
+  const label = input.action.action === 'complete' ? '完成' : '推迟';
+  await input.channel.send(
+    input.event.chatId,
+    { text: `收到，已记录第 ${input.action.rank} 条为「${label}」。我会用它来校准明天的 todo 排序。` },
+    { replyTo: input.event.messageId },
+  );
+  console.log(`[interaction] handled ${input.event.chatId}; todo-action=${input.action.action}; rank=${input.action.rank}`);
+}
+
 function parseCalendarCardAction(value: unknown): CalendarCardAction | null {
   if (!value || typeof value !== 'object') return null;
   const raw = value as { daily_os_calendar_action?: unknown; period?: unknown };
@@ -1350,15 +1424,28 @@ function stableStringify(value: unknown): string {
 
 async function replyToMessage(channel: LarkChannel, message: NormalizedMessage, text: string, mode: 'markdown' | 'text'): Promise<void> {
   const chatMode = message.threadId ? 'topic' : message.chatType;
-  await channel.send(message.chatId, toSendInput(text, mode), {
+  const result = await channel.send(message.chatId, toSendInput(text, mode), {
     replyTo: message.messageId,
     ...(chatMode === 'topic' ? { replyInThread: true } : {}),
   });
+  // Record our own outbound message_id so the dual-identity fallback in the
+  // self-origin guard can recognize this reply if it ever echoes back (see
+  // ./self-origin.ts — SelfSentMessageCache).
+  selfOriginGuard?.recordSelfSent(result.messageId);
 }
 
-async function sendWorkflowCardOutput(config: AppConfig, workflow: WorkflowName, date: string, summary: string, source: string): Promise<void> {
+async function sendWorkflowCardOutput(
+  config: AppConfig,
+  workflow: WorkflowName,
+  date: string,
+  summary: string,
+  source: string,
+  rawText?: string,
+): Promise<void> {
   console.log(`[interaction] sending workflow-card source=${source}; workflow=${workflow}; bytes=${Buffer.byteLength(summary, 'utf8')}`);
-  await sendFeishuCard(config, renderFeishuWorkflowCard(summary, { workflow, date }), summary);
+  const todos = workflow === 'daily_plan' && rawText ? extractDailyPlanTodos(rawText) : [];
+  await sendFeishuCard(config, renderFeishuWorkflowCard(summary, { workflow, date, ...(todos.length ? { todos } : {}) }), summary);
+  if (todos.length) recordTodoPresented(config, date, todos.map((todo) => ({ candidateId: todo.candidateId, rank: todo.rank })));
   console.log(`[interaction] sent workflow-card source=${source}; workflow=${workflow}`);
 }
 

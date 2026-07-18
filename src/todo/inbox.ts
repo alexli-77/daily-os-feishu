@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import type { AppConfig } from '../config/schema.js';
 import { parseWorkflowRevisionItems, type WorkflowRevisionItemType } from '../interaction/workflow-revision.js';
+import { writeFileAtomic } from '../utils/atomic-write.js';
 
 export type TodoInboxStatus = 'open' | 'done' | 'deferred' | 'deleted';
 export type TodoInboxItemType = WorkflowRevisionItemType | 'reminder';
@@ -188,7 +189,7 @@ export function syncTodoInboxVaultNote(config: AppConfig): string {
   const current = fs.existsSync(vaultPath) ? fs.readFileSync(vaultPath, 'utf8') : '# Daily OS Todo Inbox\n';
   const block = renderGeneratedTodoBlock(listTodoInboxItems(config));
   const next = replaceGeneratedBlock(current, block);
-  fs.writeFileSync(vaultPath, next, 'utf8');
+  writeFileAtomic(vaultPath, next);
   return vaultPath;
 }
 
@@ -200,8 +201,7 @@ function appendTodoInboxItems(config: AppConfig, items: TodoInboxItem[]): void {
 
 function writeTodoInboxItems(config: AppConfig, items: TodoInboxItem[]): void {
   const ledgerPath = path.resolve(config.todo_inbox.ledger_path);
-  fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
-  fs.writeFileSync(ledgerPath, `${items.map((item) => JSON.stringify(item)).join('\n')}${items.length ? '\n' : ''}`, 'utf8');
+  writeFileAtomic(ledgerPath, `${items.map((item) => JSON.stringify(item)).join('\n')}${items.length ? '\n' : ''}`);
 }
 
 function updateTodoItem(config: AppConfig, action: 'done' | 'defer' | 'delete', target: string, note?: string): TodoInboxCommandResult {

@@ -1,4 +1,5 @@
 import http from 'node:http';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -28,6 +29,25 @@ import {
   updateTodoInboxItemById,
 } from '../todo/inbox.js';
 import { formatCalendarDraftForFeishu, runCalendarDraft, testCalendarBridge } from '../calendar/bridge.js';
+import {
+  SESSION_COOKIE,
+  addUser,
+  createSession,
+  destroySession,
+  ensureAuthInitialized,
+  findUser,
+  getSession,
+  listUsers,
+  parseCookies,
+  setPassword,
+  verifyPassword,
+  type Role,
+} from './auth.js';
+import { PLATFORM_PAGES, renderLoginPage, renderPlatformPage, type PageContext } from './pages.js';
+import { runManager } from '../service/run-manager.js';
+import { scanAndIndex } from '../storage/artifacts.js';
+import { listRecentWorkflowRuns, markWorkflowRunFailed } from '../workflows/run-ledger.js';
+import { writeFileAtomic } from '../utils/atomic-write.js';
 
 const SECRET_ENV_KEYS = new Set(['OPENAI_API_KEY', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'VAULT_GATE_TOKEN', 'LARK_APP_SECRET']);
 const UI_RUNTIME_PATH = './data/runtime/ui.json';
@@ -44,6 +64,64 @@ const PLAIN_ENV_KEYS = [
 ];
 const ENV_KEYS = [...PLAIN_ENV_KEYS, ...SECRET_ENV_KEYS];
 
+// Local-only auth token generated per server start. All /api/* routes require it,
+// and it is written into ui.json (for mac-companion) and injected into the served HTML.
+let runtimeToken = '';
+const HTML_TOKEN_PLACEHOLDER = '__UI_TOKEN_PLACEHOLDER__';
+const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
+
+function extractHostname(hostHeader: string | undefined): string {
+  if (!hostHeader) return '';
+  const value = hostHeader.trim();
+  const bracketed = value.match(/^\[(.+)\]/); // IPv6 like [::1]:14573
+  if (bracketed) return bracketed[1].toLowerCase();
+  return value.split(':')[0].toLowerCase();
+}
+
+function isPublicBind(host: string): boolean {
+  return host === '0.0.0.0' || host === '::';
+}
+
+function isAllowedHostname(hostname: string, options: UiServerOptions): boolean {
+  if (!hostname) return false;
+  if (LOOPBACK_HOSTNAMES.has(hostname)) return true;
+  // When bound to a public address, host allow-listing is not meaningful; the token is the gate.
+  if (isPublicBind(options.host)) return true;
+  const configured = extractHostname(options.host);
+  return Boolean(configured) && hostname === configured;
+}
+
+function isAllowedApiOrigin(originHeader: string | undefined, options: UiServerOptions): boolean {
+  if (!originHeader) return true; // same-origin GET or non-browser client (mac-companion) sends no Origin
+  try {
+    return isAllowedHostname(new URL(originHeader).hostname.toLowerCase(), options);
+  } catch {
+    return false;
+  }
+}
+
+function extractRequestToken(request: http.IncomingMessage, url: URL): string {
+  const header = request.headers.authorization;
+  if (typeof header === 'string') {
+    const match = header.match(/^Bearer\s+(.+)$/i);
+    if (match) return match[1].trim();
+  }
+  return url.searchParams.get('token') || '';
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+function maskSecret(value: string): string {
+  if (!value) return '';
+  if (value.length <= 8) return '***';
+  return `${value.slice(0, 3)}***${value.slice(-2)}`;
+}
+
 export interface UiServerOptions {
   configPath: string;
   envPath: string;
@@ -54,11 +132,19 @@ export interface UiServerOptions {
 
 export interface UiServerControls {
   url: string;
+  token: string;
   stop: () => Promise<void>;
 }
 
 export async function startUiServer(options: UiServerOptions): Promise<UiServerControls> {
   ensureLocalFiles(options.configPath, options.envPath);
+
+  // First-run bootstrap for the web console: create an `admin` with a random
+  // password when no users exist yet. Surface it once so the operator can log in.
+  const authInit = ensureAuthInitialized();
+
+  const token = crypto.randomBytes(32).toString('hex');
+  runtimeToken = token;
 
   const server = http.createServer((request, response) => {
     void handleRequest(request, response, options);
@@ -69,17 +155,40 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerC
   const address = server.address();
   const port = typeof address === 'object' && address ? address.port : options.port;
   const url = `http://${options.host === '0.0.0.0' ? '127.0.0.1' : options.host}:${port}`;
-  writeUiRuntime(url);
+  writeUiRuntime(url, token, authInit.createdAdmin ? authInit.initialPassword : undefined);
   console.log(`daily-os-feishu UI running at ${url}`);
+  if (authInit.createdAdmin && authInit.initialPassword) {
+    console.log('');
+    console.log('  ================================================================');
+    console.log('  Web console admin account created (first run).');
+    console.log(`    username: ${authInit.adminUsername}`);
+    console.log(`    password: ${authInit.initialPassword}`);
+    console.log('  Saved to data/runtime/ui.json (admin_initial_password). Change it after first login.');
+    console.log('  ================================================================');
+    console.log('');
+  }
   console.log('Press Ctrl+C to stop.');
 
+  if (isPublicBind(options.host) || !LOOPBACK_HOSTNAMES.has(extractHostname(options.host))) {
+    console.warn('');
+    console.warn('  ****************************************************************');
+    console.warn(`  *  WARNING: UI is bound to a non-loopback address (${options.host}).`);
+    console.warn('  *  The local auth token is REQUIRED for every /api request, but');
+    console.warn('  *  anyone on your network who obtains it can control this app.');
+    console.warn('  *  Prefer binding to 127.0.0.1 unless you understand the risk.');
+    console.warn('  ****************************************************************');
+    console.warn('');
+  }
+
   if (options.open) {
-    const opened = await runCommand('open', [url], { timeoutMs: 5000 });
+    const openUrl = `${url}${url.includes('?') ? '&' : '?'}token=${token}`;
+    const opened = await runCommand('open', [openUrl], { timeoutMs: 5000 });
     if (!opened.ok) console.warn(`Could not open browser: ${opened.stderr || opened.stdout}`);
   }
 
   return {
     url,
+    token,
     stop: async () => {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
@@ -132,10 +241,29 @@ function isAddressInUse(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && 'code' in error && (error as { code?: unknown }).code === 'EADDRINUSE');
 }
 
-function writeUiRuntime(url: string): void {
+function writeUiRuntime(url: string, token: string, adminInitialPassword?: string): void {
   const filePath = path.resolve(UI_RUNTIME_PATH);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify({ url, pid: process.pid, updated_at: new Date().toISOString() }, null, 2), 'utf8');
+  const payload = JSON.stringify(
+    {
+      url,
+      token,
+      pid: process.pid,
+      updated_at: new Date().toISOString(),
+      ...(adminInitialPassword ? { admin_initial_password: adminInitialPassword } : {}),
+    },
+    null,
+    2,
+  );
+  // Write atomically via a temp file so mac-companion never reads a half-written token.
+  const tempPath = `${filePath}.${process.pid}.tmp`;
+  fs.writeFileSync(tempPath, payload, { encoding: 'utf8', mode: 0o600 });
+  fs.renameSync(tempPath, filePath);
+  try {
+    fs.chmodSync(filePath, 0o600);
+  } catch {
+    // best-effort: token file should stay owner-only, but do not fail startup on chmod issues
+  }
 }
 
 async function handleRequest(request: http.IncomingMessage, response: http.ServerResponse, options: UiServerOptions): Promise<void> {
@@ -143,12 +271,74 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
   try {
     const url = new URL(request.url || '/', `http://${request.headers.host || '127.0.0.1'}`);
     attachNetworkLog(request, response, url, started);
-    if (request.method === 'GET' && url.pathname === '/') return send(response, 200, HTML, 'text/html; charset=utf-8');
+
+    const hostname = extractHostname(request.headers.host);
+    const isLoopbackRequest = LOOPBACK_HOSTNAMES.has(hostname);
+    // DNS-rebinding defence: reject any request whose Host header is not an allowed local host.
+    if (!isAllowedHostname(hostname, options)) {
+      return sendJson(response, { ok: false, error: 'Forbidden host' }, 403);
+    }
+
+    // Auth context: a valid runtime token (mac-companion / existing SPA / CLI open
+    // with ?token=) grants admin-equivalent access; a browser session cookie grants
+    // its stored role. Either one satisfies the /api gate.
+    const auth = resolveAuthContext(request, url);
+
+    // Public console auth endpoints. Still Origin-checked, but no token/session required.
+    if (url.pathname === '/api/login' || url.pathname === '/api/logout') {
+      if (!isAllowedApiOrigin(request.headers.origin, options)) {
+        return sendJson(response, { ok: false, error: 'Forbidden origin' }, 403);
+      }
+      if (request.method === 'POST' && url.pathname === '/api/login') return handleLogin(request, response);
+      if (request.method === 'POST' && url.pathname === '/api/logout') return handleLogout(request, response, auth);
+      return sendJson(response, { ok: false, error: 'Not found' }, 404);
+    }
+
+    // Auth + CSRF defence for all /api routes.
+    if (url.pathname.startsWith('/api/')) {
+      if (!isAllowedApiOrigin(request.headers.origin, options)) {
+        return sendJson(response, { ok: false, error: 'Forbidden origin' }, 403);
+      }
+      if (!auth.authenticated) {
+        return sendJson(response, { ok: false, error: 'Unauthorized' }, 401);
+      }
+      // Members are read-only in the console except for explicitly whitelisted actions.
+      if (auth.role === 'member' && isWriteRequest(request.method) && !isMemberWriteWhitelisted(url.pathname)) {
+        return sendJson(response, { ok: false, error: 'Forbidden for member role' }, 403);
+      }
+    }
+
+    // Login page (public) + logged-in redirect target.
+    if (request.method === 'GET' && url.pathname === '/login') {
+      if (auth.authenticated) return redirect(response, '/dashboard');
+      return send(response, 200, renderLoginPage(), 'text/html; charset=utf-8');
+    }
+
+    // Server-rendered console pages require an authenticated session or token.
+    if (request.method === 'GET' && PLATFORM_PAGES.has(url.pathname)) {
+      if (!auth.authenticated) return redirect(response, '/login');
+      const ctx = buildPageContext(auth, url, options);
+      return send(response, 200, renderPlatformPage(url.pathname, ctx), 'text/html; charset=utf-8');
+    }
+
+    // Console API routes (auth + member gate already enforced above).
+    if (request.method === 'POST' && url.pathname === '/api/today/todo-feedback') return sendJson(response, await todoFeedback(await readJson(request)));
+    if (request.method === 'POST' && url.pathname === '/api/runs/cancel') return sendJson(response, await cancelRun(options, await readJson(request)));
+    if (request.method === 'POST' && url.pathname === '/api/runs/rerun') return sendJson(response, await rerunWorkflow(options, await readJson(request)));
+    if (request.method === 'POST' && url.pathname === '/api/schedules/backfill') return sendJson(response, await backfillSchedule(options, await readJson(request)));
+    if (request.method === 'GET' && url.pathname === '/api/schedules/logs') return sendScheduleLogs(response, url);
+    if (request.method === 'POST' && url.pathname === '/api/artifacts/reindex') return sendJson(response, reindexArtifacts());
+    if (request.method === 'POST' && url.pathname === '/api/admin/users') return sendJson(response, adminUsers(auth, await readJson(request)));
+
+    if (request.method === 'GET' && url.pathname === '/') return send(response, 200, renderHtml(), 'text/html; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/assets/app.css') return send(response, 200, CSS, 'text/css; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/assets/app.js') return send(response, 200, JS, 'application/javascript; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/api/state') return sendJson(response, await buildState(options));
     if (request.method === 'GET' && url.pathname === '/api/logs') return sendJson(response, { ok: true, logs: readUiLogs() });
-    if (request.method === 'GET' && url.pathname === '/api/env-secret') return sendJson(response, readSecret(options, url.searchParams.get('key') || ''));
+    if (request.method === 'GET' && url.pathname === '/api/env-secret') {
+      const reveal = url.searchParams.get('reveal') === '1';
+      return sendJson(response, readSecret(options, url.searchParams.get('key') || '', { reveal, loopback: isLoopbackRequest }));
+    }
     if (request.method === 'POST' && url.pathname === '/api/capture') return sendJson(response, await captureTodo(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/todo-inbox') return sendJson(response, await updateTodoInbox(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/decision-policy') return sendJson(response, await saveDecisionPolicy(options, await readJson(request)));
@@ -163,6 +353,234 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
     return sendJson(response, { ok: false, error: 'Not found' }, 404);
   } catch (error) {
     sendJson(response, { ok: false, error: error instanceof Error ? error.message : String(error) }, 500);
+  }
+}
+
+interface AuthContext {
+  authenticated: boolean;
+  role: Role;
+  username: string;
+  via: 'token' | 'session' | 'none';
+  sessionToken?: string;
+}
+
+// A valid runtime token maps to admin (mac-companion, existing SPA, CLI open).
+// Otherwise fall back to the browser session cookie and its stored role.
+function resolveAuthContext(request: http.IncomingMessage, url: URL): AuthContext {
+  const token = extractRequestToken(request, url);
+  if (token && runtimeToken && timingSafeEqual(token, runtimeToken)) {
+    return { authenticated: true, role: 'admin', username: 'runtime-token', via: 'token' };
+  }
+  const cookies = parseCookies(request.headers.cookie);
+  const sessionToken = cookies[SESSION_COOKIE];
+  if (sessionToken) {
+    const session = getSession(sessionToken);
+    if (session) {
+      return { authenticated: true, role: session.role, username: session.username, via: 'session', sessionToken };
+    }
+  }
+  return { authenticated: false, role: 'member', username: '', via: 'none' };
+}
+
+function isWriteRequest(method: string | undefined): boolean {
+  return method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE';
+}
+
+// Members may only trigger these write endpoints; everything else is admin-only.
+const MEMBER_WRITE_WHITELIST = new Set(['/api/today/todo-feedback']);
+function isMemberWriteWhitelisted(pathname: string): boolean {
+  return MEMBER_WRITE_WHITELIST.has(pathname);
+}
+
+function redirect(response: http.ServerResponse, location: string): void {
+  response.writeHead(302, { location, 'cache-control': 'no-store' });
+  response.end();
+}
+
+function buildPageContext(auth: AuthContext, url: URL, options: UiServerOptions): PageContext {
+  const env = readEnvFile(options.envPath);
+  applyEnv(env);
+  const config = loadConfig(options.configPath);
+  return { config, role: auth.role, username: auth.username, url };
+}
+
+function sessionCookieHeader(token: string): string {
+  return `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${7 * 24 * 60 * 60}`;
+}
+
+function clearCookieHeader(): string {
+  return `${SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`;
+}
+
+// --- login brute-force throttle --------------------------------------------
+// Basic defence: after a few failed attempts for the same (username, client)
+// key inside a rolling window, add an escalating delay before answering. This
+// slows credential-stuffing without a full lockout that could be abused for DoS.
+interface LoginAttemptState {
+  failures: number;
+  last: number;
+}
+const loginAttempts = new Map<string, LoginAttemptState>();
+const LOGIN_FREE_ATTEMPTS = 3;
+const LOGIN_DELAY_STEP_MS = 200;
+const LOGIN_MAX_DELAY_MS = 3000;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+
+function loginThrottleKey(request: http.IncomingMessage, username: string): string {
+  const ip = request.socket.remoteAddress || 'unknown';
+  return `${ip}::${username.toLowerCase()}`;
+}
+
+/** Delay to apply for the *next* attempt given the current failure count. */
+export function loginFailureDelayMs(failures: number): number {
+  if (failures <= LOGIN_FREE_ATTEMPTS) return 0;
+  return Math.min((failures - LOGIN_FREE_ATTEMPTS) * LOGIN_DELAY_STEP_MS, LOGIN_MAX_DELAY_MS);
+}
+
+function recordLoginFailure(key: string): number {
+  const now = Date.now();
+  const prev = loginAttempts.get(key);
+  const failures = prev && now - prev.last < LOGIN_WINDOW_MS ? prev.failures + 1 : 1;
+  loginAttempts.set(key, { failures, last: now });
+  return failures;
+}
+
+function clearLoginFailures(key: string): void {
+  loginAttempts.delete(key);
+}
+
+/** Test-only: reset the login throttle so unit tests start clean. */
+export function resetLoginThrottleForTests(): void {
+  loginAttempts.clear();
+}
+
+async function handleLogin(request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
+  const body = readRecord(await readJson(request));
+  const username = String(body.username || '').trim();
+  const password = String(body.password || '');
+  if (!username || !password) return sendJson(response, { ok: false, error: 'Username and password are required.' }, 400);
+  const throttleKey = loginThrottleKey(request, username);
+  const user = findUser(username);
+  if (!user || !verifyPassword(user, password)) {
+    const failures = recordLoginFailure(throttleKey);
+    const delayMs = loginFailureDelayMs(failures);
+    if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    return sendJson(response, { ok: false, error: 'Invalid username or password.' }, 401);
+  }
+  clearLoginFailures(throttleKey);
+  const session = createSession(user.username, user.role);
+  response.writeHead(200, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+    'set-cookie': sessionCookieHeader(session.token),
+  });
+  response.end(JSON.stringify({ ok: true, role: user.role, username: user.username }));
+}
+
+function handleLogout(_request: http.IncomingMessage, response: http.ServerResponse, auth: AuthContext): void {
+  if (auth.sessionToken) destroySession(auth.sessionToken);
+  response.writeHead(200, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+    'set-cookie': clearCookieHeader(),
+  });
+  response.end(JSON.stringify({ ok: true }));
+}
+
+async function todoFeedback(body: unknown): Promise<Record<string, unknown>> {
+  const request = readRecord(body);
+  const id = String(request.id || '').trim();
+  const action = String(request.action || '').trim();
+  if (!id) return { ok: false, error: 'Todo id is required.' };
+  if (action !== 'check' && action !== 'defer') return { ok: false, error: 'action must be check or defer.' };
+  const filePath = path.resolve('./data/runtime/todo-feedback.jsonl');
+  const entry = JSON.stringify({ id, action, ts: new Date().toISOString() });
+  const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
+  writeFileAtomic(filePath, `${existing}${entry}\n`);
+  return { ok: true, id, action };
+}
+
+async function cancelRun(options: UiServerOptions, body: unknown): Promise<Record<string, unknown>> {
+  const request = readRecord(body);
+  const runId = String(request.runId || '').trim();
+  if (!runId) return { ok: false, error: 'runId is required.' };
+  const result = await runManager.cancel(runId);
+  if (!result.ok) return { ok: false, error: `Run not active: ${runId}` };
+  // Best-effort ledger writeback for in-process runs that have no killable child.
+  try {
+    const config = loadConfig(options.configPath);
+    const run = listRecentWorkflowRuns(config, 50).find((item) => item.id === runId);
+    if (run && run.status === 'running') markWorkflowRunFailed(config, run, 'Cancelled by operator from console.');
+  } catch {
+    // ledger writeback is best-effort; the process signal already happened.
+  }
+  return { ok: true, runId, status: result.status, signals: result.signals };
+}
+
+async function rerunWorkflow(options: UiServerOptions, body: unknown): Promise<Record<string, unknown>> {
+  const request = readRecord(body);
+  const workflow = String(request.workflow || '').trim();
+  if (!isWorkflowName(workflow)) return { ok: false, error: `Unknown workflow: ${workflow}` };
+  const env = readEnvFile(options.envPath);
+  applyEnv(env);
+  const config = loadConfig(options.configPath);
+  const text = await runWorkflow(config, workflow, { send: false, trigger: 'ui', source: 'console-rerun' });
+  return { ok: true, workflow, chars: text.length };
+}
+
+async function backfillSchedule(options: UiServerOptions, body: unknown): Promise<Record<string, unknown>> {
+  const request = readRecord(body);
+  const workflow = String(request.workflow || '').trim();
+  if (!isWorkflowName(workflow)) return { ok: false, error: `Unknown workflow: ${workflow}` };
+  const env = readEnvFile(options.envPath);
+  applyEnv(env);
+  const config = loadConfig(options.configPath);
+  const text = await runWorkflow(config, workflow, { send: true, trigger: 'ui', source: 'console-backfill' });
+  return { ok: true, workflow, chars: text.length };
+}
+
+function isWorkflowName(value: string): value is WorkflowName {
+  return value === 'daily_plan' || value === 'daily_review' || value === 'weekly_review';
+}
+
+// Only allow tailing known log files inside the repo logs/ directory.
+function sendScheduleLogs(response: http.ServerResponse, url: URL): void {
+  const name = url.searchParams.get('name') || 'launchd.err.log';
+  if (!/^[A-Za-z0-9._-]+$/.test(name)) return send(response, 400, 'Invalid log name.', 'text/plain; charset=utf-8');
+  const filePath = path.resolve('logs', name);
+  const logsRoot = path.resolve('logs');
+  if (!filePath.startsWith(logsRoot + path.sep) || !fs.existsSync(filePath)) {
+    return send(response, 404, `Log not found: ${name}`, 'text/plain; charset=utf-8');
+  }
+  const raw = fs.readFileSync(filePath, 'utf8');
+  const tail = raw.split('\n').slice(-300).join('\n');
+  send(response, 200, tail, 'text/plain; charset=utf-8');
+}
+
+function reindexArtifacts(): Record<string, unknown> {
+  const result = scanAndIndex();
+  return { ok: true, ...result };
+}
+
+function adminUsers(auth: AuthContext, body: unknown): Record<string, unknown> {
+  if (auth.role !== 'admin') return { ok: false, error: 'Admin role required.' };
+  const request = readRecord(body);
+  const action = String(request.action || 'add').trim();
+  const username = String(request.username || '').trim();
+  const password = String(request.password || '');
+  try {
+    if (action === 'add') {
+      const role: Role = request.role === 'admin' ? 'admin' : 'member';
+      addUser(username, password, role);
+      return { ok: true, action, username, role, users: listUsers() };
+    }
+    if (action === 'set_password') {
+      setPassword(username, password);
+      return { ok: true, action, username, users: listUsers() };
+    }
+    return { ok: false, error: `Unknown action: ${action}` };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 }
 
@@ -187,10 +605,22 @@ function safeLogPath(url: URL): string {
   return url.pathname;
 }
 
-function readSecret(options: UiServerOptions, key: string): Record<string, unknown> {
+function readSecret(
+  options: UiServerOptions,
+  key: string,
+  access: { reveal: boolean; loopback: boolean },
+): Record<string, unknown> {
   if (!SECRET_ENV_KEYS.has(key)) return { ok: false, error: 'Secret key is not allowed' };
   const env = readEnvFile(options.envPath);
-  return { ok: true, key, value: env[key] || process.env[key] || '' };
+  const value = env[key] || process.env[key] || '';
+  const present = Boolean(value);
+  // Default response never leaks the plaintext value: presence + masked preview only.
+  // The real value is echoed back only for an explicit local reveal (token already verified
+  // by the request guard, and the request must come from a loopback host).
+  if (access.reveal && access.loopback) {
+    return { ok: true, key, present, masked: maskSecret(value), value };
+  }
+  return { ok: true, key, present, masked: maskSecret(value) };
 }
 
 async function buildState(options: UiServerOptions): Promise<Record<string, unknown>> {
@@ -998,6 +1428,12 @@ function sendJson(response: http.ServerResponse, body: unknown, status = 200): v
   send(response, status, JSON.stringify(body), 'application/json; charset=utf-8');
 }
 
+function renderHtml(): string {
+  // Inject the current runtime token so any local page load (CLI open, mac-companion open,
+  // manual navigation) can authenticate its /api calls without a query string.
+  return HTML.split(HTML_TOKEN_PLACEHOLDER).join(runtimeToken);
+}
+
 function send(response: http.ServerResponse, status: number, body: string, contentType: string): void {
   response.writeHead(status, {
     'content-type': contentType,
@@ -1571,6 +2007,7 @@ npm run service:install</code></pre>
       </section>
     </main>
 
+    <script>window.__UI_TOKEN__ = '__UI_TOKEN_PLACEHOLDER__';</script>
     <script src="/assets/app.js"></script>
   </body>
 </html>`;
@@ -2234,6 +2671,34 @@ pre {
 
 const JS = String.raw`let state;
 
+const UI_TOKEN = (function () {
+  // Priority: ?token=... (first open) -> sessionStorage -> token injected into the page HTML.
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const fromQuery = params.get('token');
+    if (fromQuery) {
+      sessionStorage.setItem('daily_os_ui_token', fromQuery);
+      params.delete('token');
+      const cleaned = window.location.pathname + (params.toString() ? '?' + params.toString() : '') + window.location.hash;
+      window.history.replaceState({}, document.title, cleaned);
+      return fromQuery;
+    }
+    const stored = sessionStorage.getItem('daily_os_ui_token');
+    if (stored) return stored;
+  } catch (error) {
+    // sessionStorage may be unavailable; fall back to the injected token.
+  }
+  return window.__UI_TOKEN__ || '';
+})();
+
+function apiFetch(url, options) {
+  const opts = options ? Object.assign({}, options) : {};
+  const headers = Object.assign({}, opts.headers || {});
+  if (UI_TOKEN) headers['Authorization'] = 'Bearer ' + UI_TOKEN;
+  opts.headers = headers;
+  return fetch(url, opts);
+}
+
 const $ = (id) => document.getElementById(id);
 const set = (id, value) => { const el = $(id); if (el) el.value = value ?? ''; };
 const checked = (id, value) => { const el = $(id); if (el) el.checked = Boolean(value); };
@@ -2300,7 +2765,7 @@ loadState().catch((error) => {
 });
 
 async function loadState() {
-  const response = await fetch('/api/state');
+  const response = await apiFetch('/api/state');
   const data = await response.json();
   if (!data.ok) throw new Error(data.error || 'Failed to load state');
   state = data;
@@ -2734,7 +3199,7 @@ async function toggleSecret(key) {
   if (!input) return;
 
   if (input.dataset.masked === 'true') {
-    const result = await fetch('/api/env-secret?key=' + encodeURIComponent(key)).then((response) => response.json());
+    const result = await apiFetch('/api/env-secret?key=' + encodeURIComponent(key) + '&reveal=1').then((response) => response.json());
     if (!result.ok) throw new Error(result.error || 'Failed to read secret');
     input.type = 'text';
     input.value = result.value || '';
@@ -2857,14 +3322,14 @@ async function runAction(action) {
 }
 
 async function loadLogs() {
-  const response = await fetch('/api/logs');
+  const response = await apiFetch('/api/logs');
   const data = await response.json();
   if (!data.ok) throw new Error(data.error || 'Failed to load logs');
   renderLogs(data.logs || []);
 }
 
 async function clearLogs() {
-  const response = await fetch('/api/logs', { method: 'DELETE' });
+  const response = await apiFetch('/api/logs', { method: 'DELETE' });
   const data = await response.json();
   if (!data.ok) throw new Error(data.error || 'Failed to clear logs');
   renderLogs(data.logs || []);
@@ -2957,7 +3422,7 @@ function setSourceStatus(action, text) {
 }
 
 async function post(url, body) {
-  const response = await fetch(url, {
+  const response = await apiFetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
