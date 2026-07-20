@@ -91,6 +91,10 @@ try {
     'scripts/tests/todo-scorer.test.ts',
     'scripts/tests/platform-ui.test.ts',
     'scripts/tests/adversarial.test.ts',
+    // LEO-109 / LEO-212 / LEO-120 feature suites (incl. adversarial cases).
+    'scripts/tests/okr-writeback-flow.test.ts',
+    'scripts/tests/scheduler-port.test.ts',
+    'scripts/tests/sync-drift.test.ts',
   ]);
   console.log('Regression tests passed.');
 } finally {

@@ -3,7 +3,8 @@ import { runAgent } from '../agent/index.js';
 import { collectEvidence } from './evidence.js';
 import { todayInTimezone } from '../utils/date.js';
 import { appendDailyMemory, loadMemory, writeLatestWorkflowOutput, writeWorkflowDetailCache } from '../storage/memory.js';
-import { sendFeishuMessage } from '../connectors/lark-cli.js';
+import { sendFeishuCard, sendFeishuMessage } from '../connectors/lark-cli.js';
+import { collectSyncDrift, filterUndecidedFindings, renderSyncDriftCard } from '../progress/sync-drift.js';
 import { buildWorkflowEvidenceTrace, extractDailyPlanTodos, formatWorkflowSummaryForFeishu } from './summary.js';
 import { buildScoredTodos } from '../todo/scorer.js';
 import { recordTodoPresented } from '../todo/feedback.js';
@@ -91,6 +92,19 @@ export async function runWorkflowDetailed(
       } catch (error) {
         run = markWorkflowRunFailed(config, run, error, { sendFailed: true });
         throw error;
+      }
+      // LEO-120: companion "possible sync drift" card with ignore / mark-handled /
+      // draft buttons. Only sent for daily_review when the optional check is on
+      // and there are undecided findings. A failure here never fails the run.
+      if (workflow === 'daily_review' && config.progress_sync_check.enabled) {
+        try {
+          const findings = filterUndecidedFindings(collectSyncDrift(evidence, config).findings, date);
+          if (findings.length > 0) {
+            await sendFeishuCard(config, renderSyncDriftCard(config, date, findings), '有今天的进展可能还没同步到 GitHub / Linear。');
+          }
+        } catch (error) {
+          console.warn(`[workflow] sync-drift companion card skipped: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
       run = markWorkflowRunSucceeded(config, run, { status: 'succeeded' });
     } else {

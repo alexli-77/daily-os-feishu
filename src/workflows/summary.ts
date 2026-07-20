@@ -1,6 +1,7 @@
 import type { AppConfig, WorkflowName } from '../config/schema.js';
 import type { MemoryBundle } from '../storage/memory.js';
 import type { Evidence } from './types.js';
+import { collectSyncDrift, filterUndecidedFindings, renderSyncDriftSection } from '../progress/sync-drift.js';
 
 const MAX_SUMMARY_CHARS = 2200;
 const MAX_DETAIL_CHARS = 7000;
@@ -84,15 +85,28 @@ export function formatWorkflowSummaryForFeishu(workflow: WorkflowName, date: str
   const overview = workflowOverview(workflow, clean, evidence, config);
   const fallback = sentencePreview(clean, 420);
   const fallbackLines = normalizedTextKey(fallback) === normalizedTextKey(intro) ? [] : [fallback];
+  const driftLines = workflow === 'daily_review' ? syncDriftSectionLines(date, evidence, config) : [];
   const lines = [
     intro,
     '',
     ...(overview.length > 0 ? overview : fallbackLines),
+    ...(driftLines.length > 0 ? ['', ...driftLines] : []),
     '',
     actionHint(workflow),
     closingLine(workflow),
   ];
   return trimSummary(lines.join('\n'), MAX_SUMMARY_CHARS);
+}
+
+/**
+ * LEO-120: append the "🔄 可能需要同步的任务" section to the daily-review card
+ * only when the optional check is enabled and there are undecided findings.
+ * Disabled or no-drift -> zero trace, so the review card stays clean.
+ */
+function syncDriftSectionLines(date: string, evidence?: Evidence, config?: AppConfig): string[] {
+  if (!config?.progress_sync_check.enabled || !evidence) return [];
+  const findings = filterUndecidedFindings(collectSyncDrift(evidence, config).findings, date);
+  return renderSyncDriftSection(findings);
 }
 
 export function formatLatestWorkflowDetails(input: { workflow: WorkflowName; date: string; generated_at: string; content: string; evidence_trace?: string }): string {

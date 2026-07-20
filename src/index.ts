@@ -9,6 +9,7 @@ import { todayInTimezone } from './utils/date.js';
 import { ensureMemoryFiles } from './storage/memory.js';
 import { formatDoctor, runDoctor } from './cli/doctor.js';
 import { installLaunchAgent, runScheduler, uninstallLaunchAgent } from './service/launchd.js';
+import { createScheduler } from './service/scheduler-port.js';
 import { pollFeishuFeedback } from './feedback/feishu-feedback.js';
 import { readUiRuntimeUrl, startUiServer } from './ui/server.js';
 import { startFeishuInteraction } from './interaction/feishu-interaction.js';
@@ -181,8 +182,9 @@ async function startAll(options: CliOptions): Promise<void> {
     open: options.openUi,
   });
 
-  await runScheduler(getConfig);
-  console.log('daily-os-feishu scheduler 已启动。');
+  const scheduler = createScheduler(getConfig);
+  await scheduler.start();
+  console.log(`daily-os-feishu scheduler 已启动（${scheduler.driver} 驱动）。`);
   const sleepControls = startPreventSleep(config.service.prevent_sleep.enabled);
   const chromeControls = startChromeSnapshotService(config);
 
@@ -201,6 +203,7 @@ async function startAll(options: CliOptions): Promise<void> {
     if (interactionControls) await interactionControls.stop();
     await chromeControls.stop();
     await sleepControls.stop();
+    await scheduler.stop();
     await ui.stop();
   });
 }

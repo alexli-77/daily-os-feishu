@@ -82,6 +82,14 @@ service:
     # Closing a MacBook lid, especially on battery, can still force sleep.
     enabled: false
 
+# 调度形态（同一份代码，两种运行形态）：
+#   auto   — 默认。macOS 主机（非容器）→ launchd；其它（Linux / 容器内）→ loop 进程内循环。
+#   launchd — 强制走 macOS launchd 供养的形态。
+#   loop   — 强制进程内 setInterval 循环（Docker / Linux 用这个）。
+# 环境变量 DAILY_OS_SCHEDULER=launchd|loop|auto 会覆盖此字段。
+scheduler:
+  driver: "auto" # auto | launchd | loop
+
 output:
   feishu:
     enabled: true
@@ -155,6 +163,15 @@ progress:
   ledger_dir: "./data/memory/progress"
   no_progress_reminder_time: "16:30"
   max_candidates: 12
+
+# LEO-120: optional daily-review check for "progress made today but not yet
+# synced to GitHub/Linear". Off by default (conservative). When enabled it reuses
+# the existing sources.github / sources.linear configuration, matches deterministically
+# (LEO-123 ids, owner/repo#123 with repo context, issue/PR URLs) and only ever
+# produces suggestions — it never writes to GitHub or Linear. When disabled, the
+# daily review produces zero trace.
+progress_sync_check:
+  enabled: false
 
 todo_inbox:
   enabled: true

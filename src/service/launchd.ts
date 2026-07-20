@@ -26,9 +26,29 @@ export interface LaunchAgentStatus {
 
 type ConfigProvider = AppConfig | (() => AppConfig);
 
-interface SchedulerRuntimeState {
+export interface SchedulerRuntimeState {
   fired: Set<string>;
   retryAfter: Map<string, number>;
+}
+
+/**
+ * Per-tick injection seam. Defaults preserve the production behavior exactly
+ * (`new Date()` clock, the real workflow runner); tests and alternate drivers
+ * override them without re-implementing the scheduling semantics.
+ */
+export type WorkflowRunner = (
+  config: AppConfig,
+  workflow: WorkflowName,
+  options: { send?: boolean; trigger?: 'scheduler'; source?: string },
+) => Promise<string>;
+
+export interface SchedulerTickOptions {
+  now?: () => Date;
+  runWorkflow?: WorkflowRunner;
+}
+
+export interface SchedulerControls {
+  stop(): void;
 }
 
 export async function installLaunchAgent(repoRoot = process.cwd()): Promise<string> {
@@ -62,26 +82,54 @@ export async function getLaunchAgentStatus(): Promise<LaunchAgentStatus> {
   };
 }
 
-export async function runScheduler(config: ConfigProvider): Promise<void> {
-  const state: SchedulerRuntimeState = {
+export function createSchedulerState(): SchedulerRuntimeState {
+  return {
     fired: readSchedulerState(),
     retryAfter: new Map(),
   };
-  await safeTick(config, state);
-  setInterval(() => void safeTick(config, state), 60_000);
 }
 
-async function safeTick(configProvider: ConfigProvider, state: SchedulerRuntimeState): Promise<void> {
+/**
+ * Run a single scheduler tick (catch-up + lock + retry semantics). Exposed so
+ * the LoopDriver (Docker/Linux) can drive ticks on its own interval without
+ * duplicating the scheduling logic that lives here.
+ */
+export async function runSchedulerTick(
+  configProvider: ConfigProvider,
+  state: SchedulerRuntimeState,
+  options: SchedulerTickOptions = {},
+): Promise<void> {
+  await safeTick(configProvider, state, options);
+}
+
+export async function runScheduler(
+  config: ConfigProvider,
+  options: SchedulerTickOptions = {},
+): Promise<SchedulerControls> {
+  const state = createSchedulerState();
+  await safeTick(config, state, options);
+  // Not unref'd: `service run` compat mode relies on this interval to keep the
+  // process alive. `stop()` clears it during graceful shutdown.
+  const timer = setInterval(() => void safeTick(config, state, options), 60_000);
+  return {
+    stop(): void {
+      clearInterval(timer);
+    },
+  };
+}
+
+async function safeTick(configProvider: ConfigProvider, state: SchedulerRuntimeState, options: SchedulerTickOptions): Promise<void> {
   try {
-    await tick(configProvider, state);
+    await tick(configProvider, state, options);
   } catch (error) {
     console.error(`[scheduler] tick failed: ${error instanceof Error ? error.stack || error.message : String(error)}`);
   }
 }
 
-async function tick(configProvider: ConfigProvider, state: SchedulerRuntimeState): Promise<void> {
+async function tick(configProvider: ConfigProvider, state: SchedulerRuntimeState, options: SchedulerTickOptions): Promise<void> {
   const config = readRuntimeConfig(configProvider);
-  const now = new Date();
+  const runWorkflowFn = options.runWorkflow ?? runWorkflow;
+  const now = options.now ? options.now() : new Date();
   const time = timeInZone(now, config.user.timezone);
   const date = dateInZone(now, config.user.timezone);
   const weekday = new Intl.DateTimeFormat('en-US', { timeZone: config.user.timezone, weekday: 'short' }).format(now).toUpperCase();
@@ -109,7 +157,7 @@ async function tick(configProvider: ConfigProvider, state: SchedulerRuntimeState
     if (state.fired.has(key) || isRetryBlocked(state, key, now)) continue;
     if (!claimFired(state, key)) continue;
     try {
-      await runWorkflow(config, item.workflow, { trigger: 'scheduler', source: key });
+      await runWorkflowFn(config, item.workflow, { trigger: 'scheduler', source: key });
       clearRetry(state, key);
     } catch (error) {
       unmarkFired(state, key);

@@ -156,6 +156,15 @@ export const AppConfigSchema = z.object({
     .default({
       prevent_sleep: { enabled: false },
     }),
+  scheduler: z
+    .object({
+      // auto: pick launchd on a macOS host outside a container, otherwise the
+      // in-process loop. Env var DAILY_OS_SCHEDULER overrides this field.
+      driver: z.enum(['auto', 'launchd', 'loop']).default('auto'),
+    })
+    .default({
+      driver: 'auto',
+    }),
   output: z.object({
     feishu: z.object({
       enabled: z.boolean().default(true),
@@ -367,6 +376,16 @@ export const AppConfigSchema = z.object({
       no_progress_reminder_time: '16:30',
       max_candidates: 12,
     }),
+  // LEO-120: optional daily-review check for "progress made today but not yet
+  // synced to GitHub/Linear". Off by default (conservative); when off the daily
+  // review produces zero trace. Reuses the existing sources.github/sources.linear
+  // configuration — this flag never introduces a new source config flow and never
+  // writes to GitHub or Linear.
+  progress_sync_check: z
+    .object({
+      enabled: z.boolean().default(false),
+    })
+    .default({ enabled: false }),
   todo_inbox: z
     .object({
       enabled: z.boolean().default(true),

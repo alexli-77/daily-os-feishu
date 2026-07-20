@@ -1,0 +1,28 @@
+# daily-os-feishu — Docker Compose (Linux server shape).
+#
+# Prereqs:
+#   1. cp .env.example .env  and fill in an API-key provider + Feishu creds.
+#      The container has no claude/codex CLI, so set llm.provider = anthropic | openai.
+#   2. cp config/config.example.yaml config/config.yaml  (scheduler.driver: auto|loop)
+#   3. docker compose up -d --build
+#
+# Data survives container replacement via the mounted volumes below.
+services:
+  daily-os-feishu:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: daily-os-feishu:latest
+    container_name: daily-os-feishu
+    env_file: .env
+    environment:
+      DAILY_OS_SCHEDULER: loop
+      DAILY_OS_IN_CONTAINER: "1"
+      DAILY_OS_UI_HOST: 0.0.0.0
+    ports:
+      - "14573:14573"
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+      - ./memory-vault:/app/memory-vault
+    restart: unless-stopped

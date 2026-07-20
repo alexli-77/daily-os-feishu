@@ -1,0 +1,20 @@
+# Build context hygiene — keep the image small and reproducible.
+node_modules
+dist
+.git
+.github
+.claude
+
+# Runtime state / secrets — mounted at runtime, never baked into the image.
+.env
+data
+logs
+memory-vault/default
+mac-companion
+
+# Local noise
+*.log
+.DS_Store
+npm-debug.log*
+coverage
+docs/assets

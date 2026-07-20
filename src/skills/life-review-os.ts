@@ -208,9 +208,20 @@ function numberValue(value: unknown): number {
   return typeof value === 'number' ? value : typeof value === 'string' ? Number(value) || 0 : 0;
 }
 
-function stripWritebackJsonBlock(value: string): string {
+/**
+ * Strip only the Feishu `writeback_plan` fenced JSON block from a life-review-os
+ * draft, processing one ```json fence at a time so a co-located biweekly
+ * `kr_progress` block always survives. Removing the block per-fence (rather than
+ * with a single spanning regex) is what keeps a kr_progress block that appears
+ * before the writeback_plan block from being swallowed — that block is the only
+ * channel the Feishu biweekly flow has to reach the local-OKR write-back card
+ * (LEO-109). Any fence that itself carries `kr_progress` is kept verbatim.
+ */
+export function stripWritebackJsonBlock(value: string): string {
   return value
-    .replace(/```json\s*\{[\s\S]*?"writeback_plan"[\s\S]*?\}\s*```/gi, '')
+    .replace(/```json\s*([\s\S]*?)```/gi, (match, body: string) =>
+      /"writeback_plan"/.test(body) && !/"kr_progress"/.test(body) ? '' : match,
+    )
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }

@@ -30,6 +30,14 @@ import {
   formatProgressCandidates,
 } from '../progress/capture.js';
 import { parseProgressCardAction, renderProgressBatchReviewCard, renderProgressConfirmationCard } from '../progress/card.js';
+import {
+  collectSyncDrift,
+  filterUndecidedFindings,
+  parseSyncDriftCardAction,
+  recordSyncDriftDecision,
+  renderSyncDriftDraft,
+  type ParsedSyncDriftCardAction,
+} from '../progress/sync-drift.js';
 import { todayInTimezone } from '../utils/date.js';
 import { appendDailyMemory, appendFeedbackLog, readLatestWorkflowOutput, readWorkflowDetailCache } from '../storage/memory.js';
 import { extractDailyPlanTodos, formatLatestWorkflowDetails, formatWorkflowSummaryForFeishu } from '../workflows/summary.js';
@@ -39,7 +47,9 @@ import { handlePendingBackgroundSuggestionReply } from '../service/background-su
 import { renderFeishuCalendarDraftCard, renderFeishuSkillCard, renderFeishuSkillWritebackPreviewCard, renderFeishuWorkflowCard } from '../connectors/feishu-sdk.js';
 import { sendFeishuCard } from '../connectors/lark-cli.js';
 import type { SkillRunResult } from '../skills/runner.js';
+import { readLatestSkillRun } from '../skills/runner.js';
 import { executeLifeReviewOsWriteback, prepareLifeReviewOsWriteback } from '../skills/life-review-os.js';
+import { buildOkrWritebackPreview, executeConfirmedOkrWriteback, renderOkrWritebackCard } from './okr-writeback-card.js';
 import { formatWorkflowRevisionMemoryNote } from './workflow-revision.js';
 import { handleTodoInboxCommand, parseTodoInboxCommand } from '../todo/inbox.js';
 import type { CalendarDraftPeriod, CalendarDraftResult } from '../calendar/bridge.js';
@@ -82,7 +92,7 @@ type WorkflowCardCommand = {
 };
 
 type SkillCardAction = {
-  action: 'confirm_writeback' | 'writeback_info' | 'prepare_writeback' | 'execute_writeback' | 'rerun' | 'dismiss';
+  action: 'confirm_writeback' | 'writeback_info' | 'prepare_writeback' | 'execute_writeback' | 'confirm_okr_writeback' | 'rerun' | 'dismiss';
   skillId: string;
   mode?: string;
   runId?: string;
@@ -759,6 +769,11 @@ async function handleCardAction(input: {
     await handleProgressCardAction({ ...input, action: progressAction });
     return;
   }
+  const syncDriftAction = parseSyncDriftCardAction(input.event.action.value, input.config);
+  if (syncDriftAction) {
+    await handleSyncDriftCardAction({ ...input, action: syncDriftAction });
+    return;
+  }
   const agentAction = parseAgentRunCardAction(input.event.action.value, input.config);
   if (agentAction) {
     await handleAgentRunCardAction({ ...input, action: agentAction });
@@ -989,6 +1004,53 @@ async function handleProgressCardAction(input: {
   await input.channel.send(input.event.chatId, { text: '好的，这次不写入今日进展账本。' }, { replyTo: input.event.messageId });
 }
 
+async function handleSyncDriftCardAction(input: {
+  config: AppConfig;
+  channel: LarkChannel;
+  event: CardActionEvent;
+  action: ParsedSyncDriftCardAction;
+}): Promise<void> {
+  const access = decideFeishuAccess(input.config, {
+    senderOpenId: input.event.operator.openId,
+    chatId: input.event.chatId,
+    chatType: 'group',
+  });
+  if (!access.ok) {
+    console.warn(`[interaction] denied sync-drift card action ${input.event.chatId}; operator=${input.event.operator.openId.slice(-6)}; reason=${access.reason}`);
+    return;
+  }
+  // "起草更新" only produces suggestion text (read effect); ignore / mark-handled
+  // record a local decision so the same finding+date is not re-prompted.
+  const control = decideFeishuControl(input.config, access, {
+    effect: input.action.action === 'draft' ? 'read' : 'memory_write',
+  });
+  if (!control.ok) {
+    await input.channel.send(input.event.chatId, { text: `权限不足：${control.reason}` }, { replyTo: input.event.messageId });
+    return;
+  }
+
+  if (input.action.action === 'draft') {
+    const evidence = await collectEvidence(input.config, input.action.date);
+    const findings = filterUndecidedFindings(collectSyncDrift(evidence, input.config).findings, input.action.date);
+    await input.channel.send(
+      input.event.chatId,
+      toSendInput(renderSyncDriftDraft(findings), input.config.interaction.feishu.reply_mode),
+      { replyTo: input.event.messageId },
+    );
+    return;
+  }
+
+  for (const key of input.action.keys) {
+    recordSyncDriftDecision({ key, date: input.action.date, decision: input.action.action });
+  }
+  const label = input.action.action === 'ignore' ? '忽略' : '标记已处理';
+  await input.channel.send(
+    input.event.chatId,
+    { text: `好的，已${label}这些同步提醒，今天不会再重复提示。GitHub / Linear 不会被自动修改。` },
+    { replyTo: input.event.messageId },
+  );
+}
+
 async function handleCalendarCardAction(input: {
   config: AppConfig;
   channel: LarkChannel;
@@ -1171,6 +1233,40 @@ async function handleSkillCardAction(input: {
       );
     } catch (error) {
       await input.channel.send(input.event.chatId, { text: `写回失败：${error instanceof Error ? error.message : String(error)}` }, { replyTo: input.event.messageId });
+    }
+    return;
+  }
+  if (input.action.action === 'confirm_okr_writeback') {
+    const control = decideFeishuControl(input.config, access, { effect: 'memory_write' });
+    if (!control.ok) {
+      await input.channel.send(input.event.chatId, { text: `权限不足：${control.reason}` }, { replyTo: input.event.messageId });
+      return;
+    }
+    const run = readLatestSkillRun(input.config, input.action.skillId, input.action.mode || 'biweekly', input.action.runId);
+    if (!run) {
+      await input.channel.send(input.event.chatId, { text: '找不到对应的双周复盘草稿，请先重新运行 biweekly。' }, { replyTo: input.event.messageId });
+      return;
+    }
+    try {
+      const date = todayInTimezone(input.config);
+      const { outcome, incrementLines } = executeConfirmedOkrWriteback({ config: input.config, draft: run.output, date });
+      const failedLines = outcome.results.filter((entry) => !entry.ok).map((entry) => `- ${entry.krId}：${entry.reason || '写回失败'}`);
+      await input.channel.send(
+        input.event.chatId,
+        {
+          text: [
+            `已写回本地 OKR：成功 ${outcome.succeeded} 条，失败 ${outcome.failed} 条。`,
+            outcome.historyAppended ? `滚动历史新增 ${outcome.historyAppended} 行。` : '',
+            incrementLines.length ? ['', '进度增量：', ...incrementLines.map((line) => `- ${line}`)].join('\n') : '',
+            failedLines.length ? ['', '失败明细：', ...failedLines].join('\n') : '',
+          ]
+            .filter(Boolean)
+            .join('\n'),
+        },
+        { replyTo: input.event.messageId },
+      );
+    } catch (error) {
+      await input.channel.send(input.event.chatId, { text: `本地 OKR 写回失败：${error instanceof Error ? error.message : String(error)}` }, { replyTo: input.event.messageId });
     }
     return;
   }
@@ -1385,6 +1481,7 @@ function parseSkillCardAction(value: unknown): SkillCardAction | null {
       action !== 'writeback_info' &&
       action !== 'prepare_writeback' &&
       action !== 'execute_writeback' &&
+      action !== 'confirm_okr_writeback' &&
       action !== 'rerun' &&
       action !== 'dismiss') ||
     typeof skillId !== 'string' ||
@@ -1464,6 +1561,33 @@ async function sendSkillCardOutput(config: AppConfig, text: string, result: Skil
     text,
   );
   console.log(`[interaction] sent skill-card source=${source}; skill=${result.skillId}`);
+  await maybeSendOkrWritebackCard(config, result, source);
+}
+
+/**
+ * For biweekly review drafts that carry a parseable KR-progress block, follow the
+ * skill card with a local-OKR write-back confirm card (LEO-109). Degrades
+ * silently to narrative-only when nothing parses or no KR matches.
+ */
+async function maybeSendOkrWritebackCard(config: AppConfig, result: SkillRunResult, source: string): Promise<void> {
+  if (result.mode !== 'biweekly') return;
+  try {
+    const preview = buildOkrWritebackPreview({ config, draft: result.output });
+    if (!preview.hasProgress) return;
+    await sendFeishuCard(
+      config,
+      renderOkrWritebackCard({
+        skillId: result.skillId,
+        mode: result.mode,
+        ...(result.runId ? { runId: result.runId } : {}),
+        preview,
+      }),
+      preview.incrementLines.join('\n'),
+    );
+    console.log(`[interaction] sent okr-writeback-card source=${source}; skill=${result.skillId}; krs=${preview.matched.length}`);
+  } catch (error) {
+    console.warn(`[interaction] okr-writeback-card skipped: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 async function sendCalendarCardOutput(config: AppConfig, text: string, result: CalendarDraftResult, source: string): Promise<void> {
