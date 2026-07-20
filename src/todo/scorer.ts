@@ -1,0 +1,407 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import type { AppConfig } from '../config/schema.js';
+import type { Evidence, EvidenceSource } from '../workflows/types.js';
+import { DEFAULT_TOP_N, loadScorerWeights, type ScorerWeights } from './scorer-config.js';
+
+/**
+ * LEO-209 — programmatic todo scorer.
+ *
+ * Normalizes the four candidate sources (todo_inbox, Linear, vault open todos,
+ * Feishu weekly priorities) into a single `TodoCandidate` pool, dedupes them,
+ * and applies a transparent weighted score so the daily-plan prompt receives a
+ * ranked top-N with a per-item breakdown instead of an unscored blob.
+ */
+export type TodoSource = 'todo_inbox' | 'linear' | 'vault' | 'weekly_priorities';
+
+export interface TodoCandidate {
+  id: string;
+  title: string;
+  source: TodoSource;
+  dueDate?: string;
+  priority?: string;
+  carryOverDays?: number;
+  okrKrId?: string;
+  calendarProximityMin?: number;
+  isCustomerFacing?: boolean;
+  /** Weaker OKR signal that only comes from a Feishu weekly-priority tag. */
+  weeklyOkrHit?: boolean;
+}
+
+export interface ScoreBreakdown {
+  overdue?: number;
+  dueWithin24h?: number;
+  linearPriority?: number;
+  calendarWithin2h?: number;
+  carryOver?: number;
+  okr?: number;
+  customerFacing?: number;
+}
+
+export interface ScoredTodoCandidate extends TodoCandidate {
+  rank: number;
+  score: number;
+  breakdown: ScoreBreakdown;
+}
+
+export interface ScoreAndRankOptions {
+  weights?: ScorerWeights;
+  topN?: number;
+  now?: Date;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const CUSTOMER_SIGNAL =
+  /客户|甲方|合同|签约|付费|交付|对接|demo|演示|上线|发布|回款|投放|customer|client|delivery|ship|launch|invoice/i;
+
+// --- public API ------------------------------------------------------------
+
+/**
+ * Build the ranked top-N candidates directly from collected evidence. This is
+ * the entry point the daily-plan input assembly uses.
+ */
+export function buildScoredTodos(
+  config: AppConfig,
+  evidence: Evidence,
+  date: string,
+  options: ScoreAndRankOptions = {},
+): { generated_at: string; weights: ScorerWeights; top: ScoredTodoCandidate[]; total_candidates: number } {
+  const weights = options.weights ?? loadScorerWeights();
+  const now = options.now ?? new Date(`${date}T00:00:00`);
+  const candidates = normalizeCandidates({ config, evidence, date, now });
+  const top = scoreAndRank(candidates, { ...options, weights, now });
+  return {
+    generated_at: new Date().toISOString(),
+    weights,
+    top,
+    total_candidates: candidates.length,
+  };
+}
+
+/**
+ * Collect + dedupe candidates from the four evidence sources.
+ */
+export function normalizeCandidates(input: {
+  config: AppConfig;
+  evidence: Evidence;
+  date: string;
+  now?: Date;
+}): TodoCandidate[] {
+  const { evidence, date } = input;
+  const now = input.now ?? new Date(`${date}T00:00:00`);
+  const okrIndex = loadOkrIndex();
+  const raw: TodoCandidate[] = [
+    ...fromTodoInbox(evidence.sources.todo_inbox, now),
+    ...fromLinear(evidence.sources.linear),
+    ...fromVault(evidence.sources.vault_scan),
+    ...fromWeeklyPriorities(evidence.sources.weekly_priorities),
+  ].map((candidate) => enrichOkr(candidate, okrIndex));
+  return dedupeCandidates(raw);
+}
+
+/**
+ * Score + rank candidates, returning the top-N with a per-item breakdown.
+ */
+export function scoreAndRank(candidates: TodoCandidate[], options: ScoreAndRankOptions = {}): ScoredTodoCandidate[] {
+  const weights = options.weights ?? loadScorerWeights();
+  const now = options.now ?? new Date();
+  const topN = options.topN ?? DEFAULT_TOP_N;
+  const scored = candidates.map((candidate) => {
+    const { score, breakdown } = scoreCandidate(candidate, weights, now);
+    return { ...candidate, score, breakdown, rank: 0 };
+  });
+  scored.sort((left, right) => right.score - left.score || left.title.localeCompare(right.title));
+  return scored.slice(0, topN).map((candidate, index) => ({ ...candidate, rank: index + 1 }));
+}
+
+/**
+ * Weighted score for a single candidate.
+ *
+ * score = overdue?35 + dueWithin24h?25 + linear(Urgent20/High12) +
+ *         calendarProximity(<=120min?15) + min(carryOverDays*5,15) +
+ *         okr(linked12 | weeklyHit6) + customerFacing?10
+ */
+export function scoreCandidate(
+  candidate: TodoCandidate,
+  weights: ScorerWeights,
+  now: Date = new Date(),
+): { score: number; breakdown: ScoreBreakdown } {
+  const breakdown: ScoreBreakdown = {};
+
+  const dueMs = parseDateMs(candidate.dueDate);
+  if (dueMs !== null) {
+    if (dueMs < now.getTime()) breakdown.overdue = weights.overdue;
+    else if (dueMs - now.getTime() <= DAY_MS) breakdown.dueWithin24h = weights.dueWithin24h;
+  }
+
+  const linearPoints = linearPriorityPoints(candidate, weights);
+  if (linearPoints > 0) breakdown.linearPriority = linearPoints;
+
+  if (typeof candidate.calendarProximityMin === 'number' && candidate.calendarProximityMin <= 120) {
+    breakdown.calendarWithin2h = weights.calendarWithin2h;
+  }
+
+  if (typeof candidate.carryOverDays === 'number' && candidate.carryOverDays > 0) {
+    breakdown.carryOver = Math.min(candidate.carryOverDays * weights.carryOverPerDay, weights.carryOverCap);
+  }
+
+  if (candidate.okrKrId) breakdown.okr = weights.okrLinked;
+  else if (candidate.weeklyOkrHit) breakdown.okr = weights.okrWeeklyHit;
+
+  if (candidate.isCustomerFacing) breakdown.customerFacing = weights.customerFacing;
+
+  const score = Object.values(breakdown).reduce((sum, value) => sum + (value ?? 0), 0);
+  return { score, breakdown };
+}
+
+// --- source normalizers ----------------------------------------------------
+
+function fromTodoInbox(source: EvidenceSource | undefined, now: Date): TodoCandidate[] {
+  if (!source || source.state !== 'available' || !isRecord(source.data)) return [];
+  const open = Array.isArray(source.data.open) ? source.data.open : [];
+  return open
+    .filter(isRecord)
+    .filter((item) => typeof item.text === 'string' && item.text.trim())
+    .map((item) => {
+      const title = String(item.text).trim();
+      const createdMs = parseDateMs(typeof item.created_at === 'string' ? item.created_at : undefined);
+      const carryOverDays = createdMs !== null ? Math.max(0, Math.floor((now.getTime() - createdMs) / DAY_MS)) : undefined;
+      return {
+        id: `todo_inbox:${typeof item.id === 'string' ? item.id : title}`,
+        title,
+        source: 'todo_inbox' as const,
+        ...(typeof item.due_hint === 'string' && item.due_hint ? { dueDate: item.due_hint } : {}),
+        ...(carryOverDays !== undefined ? { carryOverDays } : {}),
+        isCustomerFacing: CUSTOMER_SIGNAL.test(title),
+      };
+    });
+}
+
+function fromLinear(source: EvidenceSource | undefined): TodoCandidate[] {
+  if (!source || source.state !== 'available') return [];
+  return linearItems(source.data)
+    .filter(isRecord)
+    .filter((item) => typeof item.identifier === 'string')
+    .map((item) => {
+      const identifier = String(item.identifier);
+      const title = typeof item.title === 'string' && item.title ? item.title : identifier;
+      const priorityLabel = linearPriorityLabel(item.priority);
+      return {
+        id: `linear:${identifier}`,
+        title: `${identifier} ${title}`.trim(),
+        source: 'linear' as const,
+        ...(typeof item.dueDate === 'string' && item.dueDate ? { dueDate: item.dueDate } : {}),
+        ...(priorityLabel ? { priority: priorityLabel } : {}),
+        isCustomerFacing: CUSTOMER_SIGNAL.test(title),
+      };
+    });
+}
+
+function fromVault(source: EvidenceSource | undefined): TodoCandidate[] {
+  if (!source || source.state !== 'available' || !isRecord(source.data)) return [];
+  const candidates = Array.isArray(source.data.candidates) ? source.data.candidates : [];
+  return candidates
+    .filter(isRecord)
+    .filter((item) => typeof item.title === 'string' && item.title.trim())
+    .map((item) => {
+      const title = String(item.title).trim();
+      const summary = typeof item.summary === 'string' ? item.summary : '';
+      const due = typeof item.due === 'string' && item.due ? item.due : typeof item.next_review === 'string' ? item.next_review : undefined;
+      return {
+        id: `vault:${typeof item.path === 'string' ? item.path : title}`,
+        title,
+        source: 'vault' as const,
+        ...(due ? { dueDate: due } : {}),
+        ...(typeof item.priority === 'string' && item.priority ? { priority: item.priority } : {}),
+        isCustomerFacing: CUSTOMER_SIGNAL.test(`${title} ${summary}`),
+      };
+    });
+}
+
+function fromWeeklyPriorities(source: EvidenceSource | undefined): TodoCandidate[] {
+  if (!source || source.state !== 'available' || !isRecord(source.data) || !Array.isArray(source.data.items)) return [];
+  return source.data.items
+    .filter(isRecord)
+    .map((item, index): TodoCandidate | null => {
+      const text = typeof item.item === 'string' ? item.item.trim() : '';
+      if (!text || /✅/.test(text)) return null;
+      const okrTag = typeof item.okr === 'string' ? item.okr.trim() : '';
+      return {
+        id: `weekly:${index}:${text.slice(0, 24)}`,
+        title: text,
+        source: 'weekly_priorities' as const,
+        ...(okrTag ? { weeklyOkrHit: true } : {}),
+        isCustomerFacing: CUSTOMER_SIGNAL.test(text),
+      };
+    })
+    .filter((candidate): candidate is TodoCandidate => Boolean(candidate));
+}
+
+// --- dedupe ----------------------------------------------------------------
+
+const SOURCE_PRIORITY: Record<TodoSource, number> = {
+  linear: 4,
+  todo_inbox: 3,
+  weekly_priorities: 2,
+  vault: 1,
+};
+
+function dedupeCandidates(candidates: TodoCandidate[]): TodoCandidate[] {
+  const kept: TodoCandidate[] = [];
+  for (const candidate of candidates) {
+    const key = normalizeTitle(candidate.title);
+    const existingIndex = kept.findIndex(
+      (other) => other.id === candidate.id || titlesSimilar(normalizeTitle(other.title), key),
+    );
+    if (existingIndex === -1) {
+      kept.push(candidate);
+      continue;
+    }
+    // Same-id duplicates or near-identical titles: keep the higher-priority
+    // source, merging any signal the winner is missing.
+    const existing = kept[existingIndex];
+    const winner = SOURCE_PRIORITY[candidate.source] > SOURCE_PRIORITY[existing.source] ? candidate : existing;
+    const loser = winner === candidate ? existing : candidate;
+    kept[existingIndex] = mergeCandidate(winner, loser);
+  }
+  return kept;
+}
+
+function mergeCandidate(winner: TodoCandidate, loser: TodoCandidate): TodoCandidate {
+  return {
+    ...winner,
+    dueDate: winner.dueDate ?? loser.dueDate,
+    priority: winner.priority ?? loser.priority,
+    carryOverDays: winner.carryOverDays ?? loser.carryOverDays,
+    okrKrId: winner.okrKrId ?? loser.okrKrId,
+    calendarProximityMin: winner.calendarProximityMin ?? loser.calendarProximityMin,
+    isCustomerFacing: winner.isCustomerFacing || loser.isCustomerFacing,
+    weeklyOkrHit: winner.weeklyOkrHit || loser.weeklyOkrHit,
+  };
+}
+
+function normalizeTitle(value: string): string {
+  return value
+    .replace(/[A-Z][A-Z0-9]+-\d+/g, (m) => m) // keep issue ids for signal
+    .replace(/[\s\p{P}\p{S}]/gu, '')
+    .toLowerCase();
+}
+
+function titlesSimilar(left: string, right: string): boolean {
+  if (!left || !right) return false;
+  if (left === right) return true;
+  const shorter = left.length <= right.length ? left : right;
+  const longer = shorter === left ? right : left;
+  if (shorter.length >= 6 && longer.includes(shorter)) return true;
+  // Shared long token overlap (handles Chinese phrases without word breaks).
+  // The shared run must be a *substantial* fraction of the shorter title
+  // (>=60%, min 6 chars) so genuinely different tasks that merely share a short
+  // common phrase — e.g. a year/quarter marker like "2026年度" — are not
+  // wrongly merged (LEO-211 dedupe false-positive fix).
+  const windowLen = Math.max(6, Math.ceil(shorter.length * 0.6));
+  if (shorter.length < windowLen) return false;
+  for (let index = 0; index <= shorter.length - windowLen; index += 1) {
+    if (longer.includes(shorter.slice(index, index + windowLen))) return true;
+  }
+  return false;
+}
+
+// --- OKR (lightweight local parse) -----------------------------------------
+
+interface OkrKr {
+  id: string;
+  description: string;
+}
+
+/**
+ * Parse the local OKR files (memory-vault/default/10_OKR/*.md) into a flat list
+ * of real (non-placeholder) key results. Kept private to the scorer per the
+ * LEO-209 boundary — the dedicated OKR loader lives elsewhere and is off-limits.
+ */
+function loadOkrIndex(root = 'memory-vault/default/10_OKR'): OkrKr[] {
+  try {
+    const dir = path.resolve(root);
+    if (!fs.existsSync(dir)) return [];
+    const files = fs.readdirSync(dir).filter((name) => name.endsWith('.md'));
+    const krs: OkrKr[] = [];
+    for (const file of files) {
+      const content = fs.readFileSync(path.join(dir, file), 'utf8');
+      for (const line of content.split('\n')) {
+        // KR table rows: | O1-KR1 | Description | ... |
+        const match = line.match(/^\s*\|\s*([A-Z]\d+-KR\d+)\s*\|\s*([^|]+?)\s*\|/);
+        if (!match) continue;
+        const id = match[1].trim();
+        const description = match[2].trim();
+        if (/^todo\b/i.test(description) || description.includes('—')) continue; // skip scaffold placeholders
+        krs.push({ id, description });
+      }
+    }
+    return krs;
+  } catch {
+    return [];
+  }
+}
+
+function enrichOkr(candidate: TodoCandidate, okrIndex: OkrKr[]): TodoCandidate {
+  if (candidate.okrKrId) return candidate;
+  const haystack = candidate.title.toLowerCase();
+  const stripped = haystack.replace(/[\s\p{P}\p{S}]/gu, '');
+  for (const kr of okrIndex) {
+    if (haystack.includes(kr.id.toLowerCase())) return { ...candidate, okrKrId: kr.id };
+    const term = significantTerm(kr.description);
+    if (term && stripped.includes(term)) return { ...candidate, okrKrId: kr.id };
+  }
+  return candidate;
+}
+
+function significantTerm(description: string): string | null {
+  const cleaned = description.toLowerCase().replace(/[\s\p{P}\p{S}]/gu, '');
+  return cleaned.length >= 4 ? cleaned.slice(0, 6) : null;
+}
+
+// --- helpers ---------------------------------------------------------------
+
+function linearPriorityPoints(candidate: TodoCandidate, weights: ScorerWeights): number {
+  if (candidate.source !== 'linear' || !candidate.priority) return 0;
+  const label = candidate.priority.toLowerCase();
+  if (label.includes('urgent')) return weights.linearUrgent;
+  if (label.includes('high')) return weights.linearHigh;
+  return 0;
+}
+
+function linearPriorityLabel(value: unknown): string {
+  if (typeof value !== 'number') return '';
+  if (value === 1) return 'Urgent (1)';
+  if (value === 2) return 'High (2)';
+  if (value === 3) return 'Medium (3)';
+  if (value === 4) return 'Low (4)';
+  return '';
+}
+
+function linearItems(data: unknown): unknown[] {
+  for (const keyPath of [['items'], ['data', 'issues', 'nodes'], ['issues', 'nodes']]) {
+    let current: unknown = data;
+    let ok = true;
+    for (const key of keyPath) {
+      if (!isRecord(current)) {
+        ok = false;
+        break;
+      }
+      current = current[key];
+    }
+    if (ok && Array.isArray(current)) return current;
+  }
+  return [];
+}
+
+function parseDateMs(value: string | undefined): number | null {
+  if (!value) return null;
+  const isoLike = value.match(/\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2})?/)?.[0];
+  if (!isoLike) return null;
+  const ms = Date.parse(isoLike.length === 10 ? `${isoLike}T00:00:00` : isoLike.replace(' ', 'T'));
+  return Number.isNaN(ms) ? null : ms;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}

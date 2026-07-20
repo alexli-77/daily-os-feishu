@@ -9,6 +9,8 @@ import { loadMemory, readLatestWorkflowOutput } from '../storage/memory.js';
 import { readProgressLedger } from '../progress/capture.js';
 import { listRecentWorkflowRuns } from '../workflows/run-ledger.js';
 import { collectEvidence } from '../workflows/evidence.js';
+import { loadOkrFromDir, buildOkrSummary } from '../okr/loader.js';
+import { resolveOkrDir } from '../okr/biweekly-progress.js';
 import { isLifeReviewOsEntry, runLifeReviewOsSkill } from './life-review-os.js';
 
 type SkillEntry = AppConfig['skills']['registry'][number];
@@ -181,6 +183,7 @@ async function buildSkillInputPack(
     sample: summarizeSourceData(source.data),
   }));
   const structuredEvidence = compactEvidenceForWeeklyPlanning(evidence);
+  const okrChainSummary = loadLocalOkrChainSummary(config);
 
   return redactSensitive(
     [
@@ -225,8 +228,29 @@ async function buildSkillInputPack(
       '## Structured Evidence For Weekly Planning',
       'Use this as supplemental context only. The weekly-review engine must still map every selected item to the Feishu 🐶 OKR table row before write-back.',
       JSON.stringify(structuredEvidence, null, 2),
+      '',
+      '## Local OKR Chain',
+      '本地 10_OKR 的 north-star / annual / current 三层解析结果（krId 权威来源）。biweekly 的 kr_progress 块里的 krId 必须来自此处（形如 O1-KR2）；无法从证据确认进度的 KR 不要写进 kr_progress。',
+      okrChainSummary || '(no local OKR chain found)',
     ].join('\n'),
   );
+}
+
+/**
+ * Load the local OKR strategy stack as a krId reference block for the skill
+ * input pack. The biweekly `kr_progress` write-back contract requires the LLM to
+ * cite real local krIds (O1-KR2), which live in the vault's 10_OKR files rather
+ * than in the Feishu weekly table. Degrades to '' when no OKR chain is present.
+ */
+function loadLocalOkrChainSummary(config: AppConfig): string {
+  try {
+    const okrDir = resolveOkrDir(config.memory.repository_path);
+    if (!fs.existsSync(okrDir)) return '';
+    const model = loadOkrFromDir(okrDir);
+    return buildOkrSummary(model);
+  } catch {
+    return '';
+  }
 }
 
 function writeSkillInputPack(config: AppConfig, skillId: string, mode: string, content: string): string {

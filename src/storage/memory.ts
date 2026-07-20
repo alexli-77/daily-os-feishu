@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AppConfig, WorkflowName } from '../config/schema.js';
+import { writeFileAtomic } from '../utils/atomic-write.js';
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const DEFAULT_MEMORY_REPOSITORY_PATH = path.join(PROJECT_ROOT, 'memory-vault', 'default');
@@ -66,7 +67,7 @@ export function writeLatestWorkflowOutput(config: AppConfig, workflow: WorkflowN
     content: content.trim(),
     ...(evidenceTrace ? { evidence_trace: evidenceTrace } : {}),
   };
-  fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf8');
+  writeFileAtomic(filePath, JSON.stringify(payload, null, 2));
   return filePath;
 }
 

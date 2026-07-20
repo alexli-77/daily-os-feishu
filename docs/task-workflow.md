@@ -90,6 +90,13 @@ npm run alpha:smoke:ci
 7. Publish a GitHub prerelease using the release notes file.
 8. Mark the Linear release issue Done.
 
+## Review Cadence: Weekly vs Biweekly
+
+The weekly-review skill runs in two modes on a fixed cadence (the biweekly slot is the `cycle`-configured every-other-week trigger, sharing the weekly workflow's schedule):
+
+- **weekly** — 下周计划。产出本周对账 + 下周 MIT/安排，面向执行排班，不做 OKR 指标化写回。
+- **biweekly** — OKR 进度 + retro。在叙述之外，LLM 基于本地 OKR 链（`10_OKR` 三层）输出结构化 JSON（`kr_progress` / `obstacles` / `next_priorities`），系统把每个 KR 渲染成 `O1-KR2: 40%→55% (+15)` 增量。用户在飞书确认卡点「确认写回本地 OKR」后，才逐条更新 `10_OKR/*.md` 的 Current/Progress/Updated，并向 `data/runtime/okr-progress-history.jsonl` 追加滚动历史（供后续趋势图）。解析失败时自动降级为纯叙述、不写回；不匹配本地 OKR 的 krId 直接跳过；本流程只写本地文件，不自动写飞书。
+
 ## Privacy Rules
 
 Never commit:

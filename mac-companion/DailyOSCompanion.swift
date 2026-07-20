@@ -729,6 +729,7 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
     request.httpMethod = "POST"
     request.timeoutInterval = 600
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    authorizeRequest(&request)
     request.httpBody = try? JSONSerialization.data(withJSONObject: ["action": action], options: [])
 
     URLSession.shared.dataTask(with: request) { data, response, error in
@@ -753,6 +754,7 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
     request.httpMethod = "POST"
     request.timeoutInterval = 30
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    authorizeRequest(&request)
     request.httpBody = try? JSONSerialization.data(withJSONObject: ["text": text], options: [])
 
     URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
@@ -791,6 +793,7 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
     var request = URLRequest(url: uiRuntimeURL().appendingPathComponent("api/state"))
     request.httpMethod = "GET"
     request.timeoutInterval = 30
+    authorizeRequest(&request)
 
     URLSession.shared.dataTask(with: request) { data, response, error in
       if let error {
@@ -1119,6 +1122,28 @@ final class DailyOSCompanionApp: NSObject, NSApplicationDelegate {
     }
 
     return URL(string: "http://127.0.0.1:14573")!
+  }
+
+  private func uiRuntimeToken() -> String? {
+    let fileURL = URL(fileURLWithPath: repoRoot)
+      .appendingPathComponent("data/runtime/ui.json")
+
+    if
+      let data = try? Data(contentsOf: fileURL),
+      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+      let token = object["token"] as? String,
+      !token.isEmpty
+    {
+      return token
+    }
+
+    return nil
+  }
+
+  private func authorizeRequest(_ request: inout URLRequest) {
+    if let token = uiRuntimeToken() {
+      request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    }
   }
 
   private func penguinImage(named fileName: String) -> NSImage? {

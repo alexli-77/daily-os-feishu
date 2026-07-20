@@ -56,9 +56,19 @@ export const AppConfigSchema = z.object({
     timezone: z.string().default('UTC'),
   }),
   llm: z.object({
-    provider: z.enum(['codex', 'openai', 'claude']).default('codex'),
+    provider: z.enum(['codex', 'openai', 'claude', 'anthropic']).default('codex'),
     model: z.string().default('default'),
   }),
+  billing: z
+    .object({
+      per_task_usd: z.number().nonnegative().default(2),
+      daily_usd: z.number().nonnegative().default(10),
+      monthly_usd: z.number().nonnegative().default(100),
+      price_overrides: z
+        .record(z.object({ input: z.number().nonnegative(), output: z.number().nonnegative() }))
+        .optional(),
+    })
+    .default({ per_task_usd: 2, daily_usd: 10, monthly_usd: 100 }),
   workflows: z.object({
     daily_plan: z.object({ enabled: z.boolean().default(true), time: z.string().default('08:00') }),
     daily_review: z.object({
@@ -145,6 +155,15 @@ export const AppConfigSchema = z.object({
     })
     .default({
       prevent_sleep: { enabled: false },
+    }),
+  scheduler: z
+    .object({
+      // auto: pick launchd on a macOS host outside a container, otherwise the
+      // in-process loop. Env var DAILY_OS_SCHEDULER overrides this field.
+      driver: z.enum(['auto', 'launchd', 'loop']).default('auto'),
+    })
+    .default({
+      driver: 'auto',
     }),
   output: z.object({
     feishu: z.object({
@@ -251,6 +270,19 @@ export const AppConfigSchema = z.object({
             access_level: 'read_only',
             allowed_workspaces: [],
           }),
+        // Self-origin echo guard (LEO-202 / H3): identify the bot's own open_id so
+        // inbound events from the bot itself are skipped instead of re-processed.
+        // These are optional overrides — the bot identity is otherwise resolved
+        // from the Feishu SDK (`/open-apis/bot/v3/info`) at startup.
+        self: z
+          .object({
+            bot_open_id_env: z.string().default('FEISHU_BOT_OPEN_ID'),
+            bot_open_ids: z.array(z.string()).default([]),
+          })
+          .default({
+            bot_open_id_env: 'FEISHU_BOT_OPEN_ID',
+            bot_open_ids: [],
+          }),
       }),
     })
     .default({
@@ -286,6 +318,10 @@ export const AppConfigSchema = z.object({
           allowed_chat_ids: [],
           access_level: 'read_only',
           allowed_workspaces: [],
+        },
+        self: {
+          bot_open_id_env: 'FEISHU_BOT_OPEN_ID',
+          bot_open_ids: [],
         },
       },
     }),
@@ -340,6 +376,16 @@ export const AppConfigSchema = z.object({
       no_progress_reminder_time: '16:30',
       max_candidates: 12,
     }),
+  // LEO-120: optional daily-review check for "progress made today but not yet
+  // synced to GitHub/Linear". Off by default (conservative); when off the daily
+  // review produces zero trace. Reuses the existing sources.github/sources.linear
+  // configuration — this flag never introduces a new source config flow and never
+  // writes to GitHub or Linear.
+  progress_sync_check: z
+    .object({
+      enabled: z.boolean().default(false),
+    })
+    .default({ enabled: false }),
   todo_inbox: z
     .object({
       enabled: z.boolean().default(true),
@@ -404,6 +450,7 @@ export const AppConfigSchema = z.object({
           limit: z.number().int().positive().default(12),
         }),
         read_paths: z.object({
+          okr: z.string().default('10_OKR/current-okr.md'),
           todos: z.string().default('99_Meta/todos.md'),
           routing: z.string().default('99_Meta/routing.md'),
           watch_list: z.string().default('99_Meta/watch-list.md'),

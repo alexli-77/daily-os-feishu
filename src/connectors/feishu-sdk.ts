@@ -1,6 +1,7 @@
 import { AppType, Client, Domain, LoggerLevel } from '@larksuiteoapi/node-sdk';
 import type { WorkflowName } from '../config/schema.js';
 import type { CalendarDraftPeriod } from '../calendar/bridge.js';
+import type { DailyPlanTodo } from '../workflows/summary.js';
 
 export type FeishuSdkSendMode = 'markdown' | 'text';
 
@@ -8,7 +9,12 @@ export interface FeishuSdkMessageOptions {
   workflow?: WorkflowName;
   date?: string;
   detailId?: string;
+  /** Ranked daily todos (LEO-209) rendered as per-item completion buttons. */
+  todos?: DailyPlanTodo[];
 }
+
+/** Cap on per-todo completion buttons so the card stays compact. */
+const MAX_TODO_BUTTONS = 5;
 
 export interface FeishuSkillCardOptions {
   skillId: string;
@@ -297,6 +303,11 @@ export function renderFeishuCalendarDraftCard(text: string, options: FeishuCalen
 function workflowActions(workflow: WorkflowName, options?: FeishuSdkMessageOptions): object[] {
   const actions: object[] = [cardButton('看详情', { daily_os_command: 'details', ...(options?.detailId ? { detail_id: options.detailId } : {}) }, 'primary')];
   if (workflow === 'daily_plan') {
+    for (const todo of (options?.todos ?? []).slice(0, MAX_TODO_BUTTONS)) {
+      actions.push(
+        cardButton(`✅ 完成 ${todo.rank}`, { daily_os_todo_action: 'complete', candidate_id: todo.candidateId, rank: String(todo.rank) }, 'default'),
+      );
+    }
     actions.push(cardButton('就按这个来', { daily_os_command: 'confirm_todo' }, 'default'));
     actions.push(cardButton('我要调整', { daily_os_command: 'revise_todo' }, 'default'));
     actions.push(cardButton('今晚复盘', { daily_os_action: 'daily_review' }, 'default'));

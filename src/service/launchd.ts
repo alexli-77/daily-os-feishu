@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { AppConfig, WorkflowName } from '../config/schema.js';
 import { runCommand } from '../utils/command.js';
+import { writeFileAtomic } from '../utils/atomic-write.js';
 import { runWorkflow } from '../workflows/run-workflow.js';
 import { collectProgressCandidates, hasConfirmedProgress, type ProgressCandidate } from '../progress/capture.js';
 import { renderProgressConfirmationCard } from '../progress/card.js';
@@ -13,6 +14,7 @@ import { pollFeishuFeedback } from '../feedback/feishu-feedback.js';
 const LABEL = 'com.daily-os-feishu.agent';
 const SCHEDULER_STATE_PATH = './data/memory/scheduler-state.json';
 const SCHEDULER_LOCK_DIR = './data/runtime/scheduler-locks';
+const SCHEDULER_LOCK_STALE_MS = 30 * 60_000;
 const RETRY_DELAY_MINUTES = 15;
 
 export interface LaunchAgentStatus {
@@ -24,9 +26,29 @@ export interface LaunchAgentStatus {
 
 type ConfigProvider = AppConfig | (() => AppConfig);
 
-interface SchedulerRuntimeState {
+export interface SchedulerRuntimeState {
   fired: Set<string>;
   retryAfter: Map<string, number>;
+}
+
+/**
+ * Per-tick injection seam. Defaults preserve the production behavior exactly
+ * (`new Date()` clock, the real workflow runner); tests and alternate drivers
+ * override them without re-implementing the scheduling semantics.
+ */
+export type WorkflowRunner = (
+  config: AppConfig,
+  workflow: WorkflowName,
+  options: { send?: boolean; trigger?: 'scheduler'; source?: string },
+) => Promise<string>;
+
+export interface SchedulerTickOptions {
+  now?: () => Date;
+  runWorkflow?: WorkflowRunner;
+}
+
+export interface SchedulerControls {
+  stop(): void;
 }
 
 export async function installLaunchAgent(repoRoot = process.cwd()): Promise<string> {
@@ -60,26 +82,54 @@ export async function getLaunchAgentStatus(): Promise<LaunchAgentStatus> {
   };
 }
 
-export async function runScheduler(config: ConfigProvider): Promise<void> {
-  const state: SchedulerRuntimeState = {
+export function createSchedulerState(): SchedulerRuntimeState {
+  return {
     fired: readSchedulerState(),
     retryAfter: new Map(),
   };
-  await safeTick(config, state);
-  setInterval(() => void safeTick(config, state), 60_000);
 }
 
-async function safeTick(configProvider: ConfigProvider, state: SchedulerRuntimeState): Promise<void> {
+/**
+ * Run a single scheduler tick (catch-up + lock + retry semantics). Exposed so
+ * the LoopDriver (Docker/Linux) can drive ticks on its own interval without
+ * duplicating the scheduling logic that lives here.
+ */
+export async function runSchedulerTick(
+  configProvider: ConfigProvider,
+  state: SchedulerRuntimeState,
+  options: SchedulerTickOptions = {},
+): Promise<void> {
+  await safeTick(configProvider, state, options);
+}
+
+export async function runScheduler(
+  config: ConfigProvider,
+  options: SchedulerTickOptions = {},
+): Promise<SchedulerControls> {
+  const state = createSchedulerState();
+  await safeTick(config, state, options);
+  // Not unref'd: `service run` compat mode relies on this interval to keep the
+  // process alive. `stop()` clears it during graceful shutdown.
+  const timer = setInterval(() => void safeTick(config, state, options), 60_000);
+  return {
+    stop(): void {
+      clearInterval(timer);
+    },
+  };
+}
+
+async function safeTick(configProvider: ConfigProvider, state: SchedulerRuntimeState, options: SchedulerTickOptions): Promise<void> {
   try {
-    await tick(configProvider, state);
+    await tick(configProvider, state, options);
   } catch (error) {
     console.error(`[scheduler] tick failed: ${error instanceof Error ? error.stack || error.message : String(error)}`);
   }
 }
 
-async function tick(configProvider: ConfigProvider, state: SchedulerRuntimeState): Promise<void> {
+async function tick(configProvider: ConfigProvider, state: SchedulerRuntimeState, options: SchedulerTickOptions): Promise<void> {
   const config = readRuntimeConfig(configProvider);
-  const now = new Date();
+  const runWorkflowFn = options.runWorkflow ?? runWorkflow;
+  const now = options.now ? options.now() : new Date();
   const time = timeInZone(now, config.user.timezone);
   const date = dateInZone(now, config.user.timezone);
   const weekday = new Intl.DateTimeFormat('en-US', { timeZone: config.user.timezone, weekday: 'short' }).format(now).toUpperCase();
@@ -107,7 +157,7 @@ async function tick(configProvider: ConfigProvider, state: SchedulerRuntimeState
     if (state.fired.has(key) || isRetryBlocked(state, key, now)) continue;
     if (!claimFired(state, key)) continue;
     try {
-      await runWorkflow(config, item.workflow, { trigger: 'scheduler', source: key });
+      await runWorkflowFn(config, item.workflow, { trigger: 'scheduler', source: key });
       clearRetry(state, key);
     } catch (error) {
       unmarkFired(state, key);
@@ -277,24 +327,45 @@ function unmarkFired(state: SchedulerRuntimeState, key: string): void {
 
 function writeSchedulerState(fired: Set<string>): void {
   const recent = [...fired].filter((item) => isRecentSchedulerKey(item));
-  fs.mkdirSync(path.dirname(SCHEDULER_STATE_PATH), { recursive: true });
-  fs.writeFileSync(SCHEDULER_STATE_PATH, JSON.stringify({ fired: recent }, null, 2), 'utf8');
+  writeFileAtomic(SCHEDULER_STATE_PATH, JSON.stringify({ fired: recent }, null, 2));
 }
 
-function acquireSchedulerLock(key: string): string | null {
-  fs.mkdirSync(SCHEDULER_LOCK_DIR, { recursive: true });
-  const lockPath = path.join(SCHEDULER_LOCK_DIR, `${hashSchedulerKey(key)}.lock`);
+export function acquireSchedulerLock(key: string, lockDir: string = SCHEDULER_LOCK_DIR): string | null {
+  fs.mkdirSync(lockDir, { recursive: true });
+  const lockPath = path.join(lockDir, `${hashSchedulerKey(key)}.lock`);
   try {
     const fd = fs.openSync(lockPath, 'wx');
     fs.closeSync(fd);
     return lockPath;
   } catch (error) {
-    if (isFileExistsError(error)) return null;
-    throw error;
+    if (!isFileExistsError(error)) throw error;
+    // A leftover lock from a crashed process would otherwise silence the
+    // workflow for the rest of the day. Reclaim it once it is provably stale.
+    if (!reclaimStaleSchedulerLock(lockPath)) return null;
+    try {
+      const fd = fs.openSync(lockPath, 'wx');
+      fs.closeSync(fd);
+      return lockPath;
+    } catch (retryError) {
+      if (isFileExistsError(retryError)) return null;
+      throw retryError;
+    }
   }
 }
 
-function releaseSchedulerLock(lockPath: string): void {
+function reclaimStaleSchedulerLock(lockPath: string): boolean {
+  try {
+    const ageMs = Date.now() - fs.statSync(lockPath).mtimeMs;
+    if (ageMs < SCHEDULER_LOCK_STALE_MS) return false;
+    fs.rmSync(lockPath, { force: true });
+    console.warn(`[scheduler] cleared stale lock ${path.basename(lockPath)} (age ${Math.round(ageMs / 60_000)}m)`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function releaseSchedulerLock(lockPath: string): void {
   fs.rmSync(lockPath, { force: true });
 }
 

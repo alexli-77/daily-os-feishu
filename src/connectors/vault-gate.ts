@@ -5,6 +5,15 @@ import type { AppConfig } from '../config/schema.js';
 import { decisionPolicyFiles } from '../decision/policy.js';
 import type { EvidenceSource } from '../workflows/types.js';
 import { sourceFromResult } from '../workflows/types.js';
+import { buildOkrSummary, loadOkrFromDir, okrDirName, parseOkrContents, type OkrLevel, type OkrModel } from '../okr/loader.js';
+
+// LEO-208: filenames of the strategy-stack OKR files that live in the vault's
+// 10_OKR directory. `current-okr.md` is also referenced by read_paths.okr.
+const OKR_STRATEGY_FILES: Array<{ level: OkrLevel; file: string }> = [
+  { level: 'northStar', file: 'north-star-okr.md' },
+  { level: 'annual', file: 'annual-okr.md' },
+  { level: 'quarterly', file: 'current-okr.md' },
+];
 
 const MAX_MARKDOWN_FILES = 240;
 const MAX_NOTE_CHARS = 60_000;
@@ -62,7 +71,53 @@ async function collectRemoteVault(config: AppConfig): Promise<Record<string, Evi
     endpoint.searchParams.set('path', relativePath);
     result[`vault_${name}`] = await fetchJson(endpoint, headers);
   }
+  // LEO-208: replace the raw vault_okr file with a structured strategy-stack
+  // summary parsed from all three OKR files.
+  result.vault_okr = await buildRemoteOkrEvidence(cfg.read_paths.okr, baseUrl, headers);
   return result;
+}
+
+async function buildRemoteOkrEvidence(okrReadPath: string, baseUrl: string, headers: Record<string, string>): Promise<EvidenceSource> {
+  const okrRelDir = path.posix.dirname(okrReadPath.replaceAll('\\', '/')) || okrDirName();
+  const contents: Partial<Record<OkrLevel, string>> = {};
+  for (const { level, file } of OKR_STRATEGY_FILES) {
+    const content = await fetchRemoteText(baseUrl, headers, `${okrRelDir}/${file}`);
+    if (content != null) contents[level] = content;
+  }
+  return okrSourceFromModel(parseOkrContents(contents));
+}
+
+async function fetchRemoteText(baseUrl: string, headers: Record<string, string>, relPath: string): Promise<string | null> {
+  try {
+    const endpoint = new URL('/read', baseUrl);
+    endpoint.searchParams.set('path', relPath);
+    const response = await fetch(endpoint, { headers });
+    if (!response.ok) return null;
+    const json = (await response.json()) as unknown;
+    if (typeof json === 'string') return json;
+    if (json && typeof json === 'object' && typeof (json as { content?: unknown }).content === 'string') {
+      return (json as { content: string }).content;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function okrSourceFromModel(model: OkrModel): EvidenceSource {
+  const objectiveCount = model.northStar.length + model.annual.length + model.quarterly.length;
+  if (model.warnings.length > 0) console.warn(`[okr] ${model.warnings.join('; ')}`);
+  return {
+    state: objectiveCount > 0 ? 'available' : model.warnings.length > 0 ? 'missing' : 'empty',
+    ...(model.warnings.length > 0 ? { detail: model.warnings.join('; ') } : {}),
+    data: {
+      summary: buildOkrSummary(model),
+      northStar: model.northStar,
+      annual: model.annual,
+      quarterly: model.quarterly,
+      warnings: model.warnings,
+    },
+  };
 }
 
 async function fetchJson(url: URL, headers: Record<string, string>): Promise<EvidenceSource> {
@@ -83,8 +138,19 @@ function collectLocalVault(config: AppConfig, date: string): Record<string, Evid
   for (const [name, relativePath] of Object.entries(readPaths)) {
     out[`vault_${name}`] = readLocalVaultFile(root, relativePath);
   }
+  // LEO-208: replace the raw vault_okr file with a structured strategy-stack
+  // summary parsed from all three OKR files in 10_OKR/.
+  out.vault_okr = buildLocalOkrEvidence(root, readPaths.okr);
   out.vault_scan = sourceFromResult(scanLocalVault(config, root, date));
   return out;
+}
+
+function buildLocalOkrEvidence(root: string, okrReadPath: string): EvidenceSource {
+  const okrRelDir = path.dirname(okrReadPath) || okrDirName();
+  const okrDir = safeVaultPath(root, okrRelDir);
+  if (!okrDir) return { state: 'error', detail: `unsafe okr dir: ${okrRelDir}` };
+  if (!fs.existsSync(okrDir)) return { state: 'missing', detail: `missing okr dir: ${okrRelDir}` };
+  return okrSourceFromModel(loadOkrFromDir(okrDir));
 }
 
 function readLocalVaultFile(root: string, relativePath: string): EvidenceSource {
