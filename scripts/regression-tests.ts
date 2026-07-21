@@ -89,6 +89,7 @@ try {
     'scripts/tests/billing.test.ts',
     'scripts/tests/okr.test.ts',
     'scripts/tests/todo-scorer.test.ts',
+    'scripts/tests/daily-review-reconcile.test.ts',
     'scripts/tests/platform-ui.test.ts',
     'scripts/tests/adversarial.test.ts',
     // LEO-109 / LEO-212 / LEO-120 feature suites (incl. adversarial cases).

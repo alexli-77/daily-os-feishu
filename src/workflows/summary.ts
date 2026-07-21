@@ -58,6 +58,127 @@ export function extractDailyPlanTodos(content: string): DailyPlanTodo[] {
   return parseDailyPlanTodoPlan(content)?.todos ?? [];
 }
 
+/** LEO-232 — one reconciled line of the daily review against the morning todo. */
+export type DailyReviewReconStatus = 'done' | 'progressed' | 'open';
+
+export interface DailyReviewReconItem {
+  candidateId: string;
+  text: string;
+  status: DailyReviewReconStatus;
+  evidence?: string;
+}
+
+export interface DailyReviewReconciliation {
+  reconciliation: DailyReviewReconItem[];
+  carryOver: string[];
+  note?: string;
+}
+
+/**
+ * Parse the LEO-232 daily-review reconciliation JSON
+ * `{ reconciliation: [{ candidateId, text, status, evidence }], carry_over: [candidateId...], note? }`.
+ * Returns null when the content is not that JSON, or when the reconciliation
+ * list is empty, so callers fall back to the legacy grouped render.
+ */
+export function parseDailyReviewReconciliation(content: string): DailyReviewReconciliation | null {
+  const json = extractJsonObject(content);
+  if (!json) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || !Array.isArray((parsed as { reconciliation?: unknown }).reconciliation)) {
+    return null;
+  }
+  const reconciliation = ((parsed as { reconciliation: unknown[] }).reconciliation)
+    .map((item): DailyReviewReconItem | null => {
+      if (!item || typeof item !== 'object') return null;
+      const record = item as Record<string, unknown>;
+      const text = typeof record.text === 'string' ? record.text.trim() : '';
+      if (!text) return null;
+      const candidateId = typeof record.candidateId === 'string' ? record.candidateId.trim() : '';
+      const status = normalizeReconStatus(record.status);
+      const evidence = typeof record.evidence === 'string' ? record.evidence.trim() : '';
+      return { candidateId, text, status, ...(evidence ? { evidence } : {}) };
+    })
+    .filter((item): item is DailyReviewReconItem => Boolean(item));
+  if (reconciliation.length === 0) return null;
+  const carryOver = Array.isArray((parsed as { carry_over?: unknown }).carry_over)
+    ? ((parsed as { carry_over: unknown[] }).carry_over)
+        .map((id) => (typeof id === 'string' ? id.trim() : ''))
+        .filter(Boolean)
+    : [];
+  const note = typeof (parsed as { note?: unknown }).note === 'string' ? (parsed as { note: string }).note.trim() : '';
+  return { reconciliation, carryOver, ...(note ? { note } : {}) };
+}
+
+/**
+ * LEO-232 — the carry-over candidateIds to persist when the review is confirmed:
+ * the model's `carry_over` list restricted to items that are still `open` (a
+ * done/progressed item is never carried forward, even if the model lists it).
+ */
+export function selectCarryOverCandidateIds(recon: DailyReviewReconciliation): string[] {
+  const openIds = new Set(
+    recon.reconciliation.filter((item) => item.status === 'open' && item.candidateId).map((item) => item.candidateId),
+  );
+  return recon.carryOver.filter((id) => openIds.has(id));
+}
+
+function normalizeReconStatus(value: unknown): DailyReviewReconStatus {
+  if (value === 'done' || value === 'progressed' || value === 'open') return value;
+  return 'open';
+}
+
+const RECON_ICON: Record<DailyReviewReconStatus, string> = { done: '✅', progressed: '🔨', open: '⏳' };
+
+/**
+ * LEO-232 — render the reconciliation card. Any candidateId the user already
+ * ticked "complete" on the morning todo card is force-set to `done` and cannot
+ * be re-judged by the LLM. `driftLines` re-uses the existing sync-drift section.
+ */
+export function renderDailyReviewReconciliationSummary(
+  recon: DailyReviewReconciliation,
+  completedIds: Set<string> = new Set(),
+  driftLines: string[] = [],
+): string {
+  const items = recon.reconciliation.map((item) =>
+    item.candidateId && completedIds.has(item.candidateId) ? { ...item, status: 'done' as const } : item,
+  );
+  const doneCount = items.filter((item) => item.status === 'done').length;
+  const lines = [`**✅ 完成 ${doneCount}/${items.length}**`, ''];
+  for (const item of items) {
+    const evidence = item.evidence ? `（${item.evidence}）` : '';
+    lines.push(`${RECON_ICON[item.status]} ${item.text}${evidence}`);
+  }
+  const openById = new Map(items.filter((item) => item.candidateId).map((item) => [item.candidateId, item]));
+  const carryTexts = recon.carryOver
+    .map((id) => openById.get(id))
+    .filter((item): item is DailyReviewReconItem => Boolean(item))
+    .map((item) => item.text);
+  const carryCount = carryTexts.length > 0 ? carryTexts.length : recon.carryOver.length;
+  if (carryCount > 0) {
+    const preview = carryTexts.slice(0, 3).join('、');
+    lines.push('', `> 明天继续 ${carryCount} 项${preview ? `：${preview}` : ''}`);
+  }
+  if (recon.note) lines.push('', `> ${recon.note}`);
+  if (driftLines.length > 0) lines.push('', ...driftLines);
+  return trimSummary(lines.join('\n'), MAX_SUMMARY_CHARS);
+}
+
+/** candidateIds the user ticked "complete" on the morning todo card, from injected evidence. */
+function completedCandidateIdsFromEvidence(evidence?: Evidence): Set<string> {
+  const source = evidence?.sources.todo_feedback;
+  if (!source || source.state !== 'available' || !isRecord(source.data) || !Array.isArray(source.data.entries)) return new Set();
+  return new Set(
+    source.data.entries
+      .filter((entry): entry is Record<string, unknown> => isRecord(entry))
+      .filter((entry) => entry.event === 'complete' && typeof entry.candidateId === 'string')
+      .map((entry) => String(entry.candidateId)),
+  );
+}
+
 function renderDailyPlanTodoSummary(plan: DailyPlanTodoPlan): string {
   const lines = ['**今日 todo：**', ...plan.todos.map((todo) => `${todo.rank}. ${todo.text}`)];
   if (plan.note) lines.push('', `> ${plan.note}`);
@@ -79,6 +200,18 @@ export function formatWorkflowSummaryForFeishu(workflow: WorkflowName, date: str
     const plan = parseDailyPlanTodoPlan(content);
     if (plan) return renderDailyPlanTodoSummary(plan);
     console.warn('[summary] daily_plan output was not LEO-209 todo JSON; falling back to legacy long-form extraction.');
+  }
+  if (workflow === 'daily_review') {
+    // LEO-232: reconcile against the morning todo. Falls back to the legacy
+    // grouped render when the output is not reconciliation JSON (parse failed)
+    // or when there was no daily_plan to reconcile (empty reconciliation).
+    const recon = parseDailyReviewReconciliation(content);
+    if (recon) {
+      const completedIds = completedCandidateIdsFromEvidence(evidence);
+      const driftLines = syncDriftSectionLines(date, evidence, config);
+      return renderDailyReviewReconciliationSummary(recon, completedIds, driftLines);
+    }
+    console.warn('[summary] daily_review output was not LEO-232 reconciliation JSON; falling back to legacy grouped render.');
   }
   const clean = normalize(content);
   const intro = introFor(workflow, clean);

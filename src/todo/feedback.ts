@@ -11,7 +11,7 @@ import { writeFileAtomic } from '../utils/atomic-write.js';
  * reweight. Appends are atomic (read-modify-writeFileAtomic) so a crash mid
  * write never corrupts the ledger.
  */
-export type TodoFeedbackEvent = 'present' | 'complete' | 'defer' | 'reorder';
+export type TodoFeedbackEvent = 'present' | 'complete' | 'defer' | 'reorder' | 'carry_over';
 
 export interface TodoFeedbackEntry {
   ts: string;
@@ -56,6 +56,60 @@ export function recordTodoPresented(
       ...(todo.source ? { source: todo.source } : {}),
     })),
   );
+}
+
+/**
+ * LEO-232 — persist the "carry to tomorrow" decision made when the user
+ * confirms the daily review. Each `carry_over` event ties a candidateId to the
+ * date it was still open, so the scorer can later derive how many consecutive
+ * days it has been carried. Idempotent per (date, candidateId): a re-click on
+ * the review card does not create a second same-day streak entry.
+ */
+export function recordCarryOver(config: AppConfig, date: string, candidateIds: string[]): void {
+  const unique = Array.from(new Set(candidateIds.map((id) => id.trim()).filter(Boolean)));
+  if (unique.length === 0) return;
+  const alreadyRecorded = new Set(
+    listTodoFeedback(config)
+      .filter((entry) => entry.event === 'carry_over' && entry.date === date)
+      .map((entry) => entry.candidateId),
+  );
+  const pending = unique.filter((id) => !alreadyRecorded.has(id));
+  if (pending.length === 0) return;
+  const ts = new Date().toISOString();
+  appendEntries(
+    config,
+    pending.map((candidateId) => ({ ts, date, event: 'carry_over' as const, candidateId, rank: 0 })),
+  );
+}
+
+/**
+ * LEO-232 — for each candidateId, the number of *consecutive* days it has been
+ * carried over, counting back from its most recent `carry_over` date. Feeds the
+ * scorer's `carryOverDays` signal. Returns an empty map when nothing has been
+ * carried, so the scorer's behaviour is unchanged for existing users.
+ */
+export function getCarryOverDaysById(config: AppConfig): Map<string, number> {
+  const byCandidate = new Map<string, Set<string>>();
+  for (const entry of listTodoFeedback(config)) {
+    if (entry.event !== 'carry_over' || !/^\d{4}-\d{2}-\d{2}$/.test(entry.date)) continue;
+    const dates = byCandidate.get(entry.candidateId) ?? new Set<string>();
+    dates.add(entry.date);
+    byCandidate.set(entry.candidateId, dates);
+  }
+  const out = new Map<string, number>();
+  const DAY = 24 * 60 * 60 * 1000;
+  for (const [candidateId, dateSet] of byCandidate) {
+    const dates = Array.from(dateSet).sort((a, b) => (a < b ? 1 : a > b ? -1 : 0)); // newest first
+    let streak = 1;
+    for (let index = 1; index < dates.length; index += 1) {
+      const expected = new Date(`${dates[index - 1]}T00:00:00Z`).getTime() - DAY;
+      const actual = new Date(`${dates[index]}T00:00:00Z`).getTime();
+      if (actual === expected) streak += 1;
+      else break;
+    }
+    out.set(candidateId, streak);
+  }
+  return out;
 }
 
 export function listTodoFeedback(config: AppConfig): TodoFeedbackEntry[] {
