@@ -40,8 +40,8 @@ import {
 } from '../progress/sync-drift.js';
 import { todayInTimezone } from '../utils/date.js';
 import { appendDailyMemory, appendFeedbackLog, readLatestWorkflowOutput, readWorkflowDetailCache } from '../storage/memory.js';
-import { extractDailyPlanTodos, formatLatestWorkflowDetails, formatWorkflowSummaryForFeishu } from '../workflows/summary.js';
-import { recordTodoFeedback, recordTodoPresented } from '../todo/feedback.js';
+import { extractDailyPlanTodos, formatLatestWorkflowDetails, formatWorkflowSummaryForFeishu, parseDailyReviewReconciliation, selectCarryOverCandidateIds } from '../workflows/summary.js';
+import { recordCarryOver, recordTodoFeedback, recordTodoPresented } from '../todo/feedback.js';
 import { markWorkflowRunFailed, markWorkflowRunSucceeded } from '../workflows/run-ledger.js';
 import { handlePendingBackgroundSuggestionReply } from '../service/background-suggestions.js';
 import { renderFeishuCalendarDraftCard, renderFeishuSkillCard, renderFeishuSkillWritebackPreviewCard, renderFeishuWorkflowCard } from '../connectors/feishu-sdk.js';
@@ -889,15 +889,25 @@ async function handleWorkflowCardCommand(input: {
   if (input.command.command === 'confirm_review') {
     const date = todayInTimezone(input.config);
     appendDailyMemory(input.config, 'daily_review', date, '用户确认今日复盘无异议。今天的完成项、暂缓项和后续动作可以按这版记录。');
-    await input.channel.send(input.event.chatId, { text: '收到，今日复盘已确认无异议。我会按这版记录今天的进展和未闭环事项。' }, { replyTo: input.event.messageId });
-    console.log(`[interaction] handled ${input.event.chatId}; card-command=confirm_review`);
+    const carried = persistDailyReviewCarryOver(input.config, date);
+    await input.channel.send(
+      input.event.chatId,
+      { text: carried > 0 ? `收到，今日复盘已确认无异议。${carried} 项未闭环任务会带入明天安排。` : '收到，今日复盘已确认无异议。我会按这版记录今天的进展和未闭环事项。' },
+      { replyTo: input.event.messageId },
+    );
+    console.log(`[interaction] handled ${input.event.chatId}; card-command=confirm_review; carry_over=${carried}`);
     return;
   }
   if (input.command.command === 'carry_open_review') {
     const date = todayInTimezone(input.config);
     appendDailyMemory(input.config, 'daily_review', date, '用户确认：明天继续未闭环任务。下一次今日安排需要优先带入今日复盘中的未闭环事项。');
-    await input.channel.send(input.event.chatId, { text: '收到，今日复盘里的未闭环任务会带入明天安排。' }, { replyTo: input.event.messageId });
-    console.log(`[interaction] handled ${input.event.chatId}; card-command=carry_open_review`);
+    const carried = persistDailyReviewCarryOver(input.config, date);
+    await input.channel.send(
+      input.event.chatId,
+      { text: carried > 0 ? `收到，今日复盘里的 ${carried} 项未闭环任务会带入明天安排。` : '收到，今日复盘里的未闭环任务会带入明天安排。' },
+      { replyTo: input.event.messageId },
+    );
+    console.log(`[interaction] handled ${input.event.chatId}; card-command=carry_open_review; carry_over=${carried}`);
     return;
   }
   if (input.command.command === 'revise_todo') {
@@ -1460,6 +1470,23 @@ async function handleTodoCardAction(input: {
     { replyTo: input.event.messageId },
   );
   console.log(`[interaction] handled ${input.event.chatId}; todo-action=${input.action.action}; rank=${input.action.rank}`);
+}
+
+/**
+ * LEO-232 — on daily-review confirmation, recover the reconciliation from the
+ * latest persisted review output and persist its `carry_over` candidateIds to
+ * the todo feedback ledger so the scorer can build a carry-over streak. No-op
+ * (returns 0) when the latest output is not today's reconciliation JSON.
+ */
+function persistDailyReviewCarryOver(config: AppConfig, date: string): number {
+  const latest = readLatestWorkflowOutput(config);
+  if (!latest || latest.workflow !== 'daily_review' || latest.date !== date) return 0;
+  const recon = parseDailyReviewReconciliation(latest.content);
+  if (!recon) return 0;
+  const carryIds = selectCarryOverCandidateIds(recon);
+  if (carryIds.length === 0) return 0;
+  recordCarryOver(config, date, carryIds);
+  return carryIds.length;
 }
 
 function parseCalendarCardAction(value: unknown): CalendarCardAction | null {

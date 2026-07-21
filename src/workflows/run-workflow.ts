@@ -2,12 +2,12 @@ import type { AppConfig, WorkflowName } from '../config/schema.js';
 import { runAgent } from '../agent/index.js';
 import { collectEvidence } from './evidence.js';
 import { todayInTimezone } from '../utils/date.js';
-import { appendDailyMemory, loadMemory, writeLatestWorkflowOutput, writeWorkflowDetailCache } from '../storage/memory.js';
+import { appendDailyMemory, loadMemory, readLatestWorkflowOutput, writeLatestWorkflowOutput, writeWorkflowDetailCache } from '../storage/memory.js';
 import { sendFeishuCard, sendFeishuMessage } from '../connectors/lark-cli.js';
 import { collectSyncDrift, filterUndecidedFindings, renderSyncDriftCard } from '../progress/sync-drift.js';
-import { buildWorkflowEvidenceTrace, extractDailyPlanTodos, formatWorkflowSummaryForFeishu } from './summary.js';
+import { buildWorkflowEvidenceTrace, extractDailyPlanTodos, formatWorkflowSummaryForFeishu, parseDailyPlanTodoPlan } from './summary.js';
 import { buildScoredTodos } from '../todo/scorer.js';
-import { recordTodoPresented } from '../todo/feedback.js';
+import { listTodoFeedback, recordTodoPresented } from '../todo/feedback.js';
 import {
   markWorkflowRunFailed,
   markWorkflowRunGenerated,
@@ -69,6 +69,24 @@ export async function runWorkflowDetailed(
       // ranked top-N (with breakdown) instead of an unscored blob.
       evidence.sources.todo_scored = { state: 'available', data: buildScoredTodos(config, evidence, date) };
     }
+    if (workflow === 'daily_review') {
+      // LEO-232: reconcile the review against the morning todo. Inject (1) today's
+      // daily_plan todos (candidateId/text/rank) and (2) today's todo-feedback
+      // (which items the user already ticked done / deferred), so the LLM can go
+      // line by line instead of writing a fresh long-form review. When no plan ran
+      // today, both are marked so the summary degrades to the legacy render.
+      const planTodos = loadTodayPlanTodos(config, date);
+      const feedbackToday = listTodoFeedback(config).filter(
+        (entry) => entry.date === date && (entry.event === 'complete' || entry.event === 'defer'),
+      );
+      evidence.sources.daily_plan_todos = planTodos
+        ? { state: 'available', data: { date, todos: planTodos } }
+        : { state: 'missing', detail: '今天没有运行今日安排（daily_plan），无法逐条对账。' };
+      evidence.sources.todo_feedback = {
+        state: feedbackToday.length > 0 ? 'available' : 'empty',
+        data: { date, entries: feedbackToday },
+      };
+    }
     const memory = loadMemory(config);
     const text = await runAgentWithNonEmptyOutput({ config, workflow, date, evidence, memory, runId: run.id });
     const evidenceTrace = buildWorkflowEvidenceTrace({ evidence, memory });
@@ -117,6 +135,18 @@ export async function runWorkflowDetailed(
   } finally {
     runManager.unregister(run.id);
   }
+}
+
+/**
+ * LEO-232 — recover today's daily_plan todos (with candidateId/text/rank) from
+ * the latest persisted workflow output. Returns null when the most recent output
+ * is not today's daily_plan or is not the LEO-209 todo JSON.
+ */
+function loadTodayPlanTodos(config: AppConfig, date: string): Array<{ rank: number; text: string; candidateId: string }> | null {
+  const latest = readLatestWorkflowOutput(config);
+  if (!latest || latest.workflow !== 'daily_plan' || latest.date !== date) return null;
+  const plan = parseDailyPlanTodoPlan(latest.content);
+  return plan && plan.todos.length > 0 ? plan.todos : null;
 }
 
 async function runAgentWithNonEmptyOutput(input: Parameters<typeof runAgent>[0]): Promise<string> {

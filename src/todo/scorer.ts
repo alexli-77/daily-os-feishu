@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { AppConfig } from '../config/schema.js';
 import type { Evidence, EvidenceSource } from '../workflows/types.js';
 import { DEFAULT_TOP_N, loadScorerWeights, type ScorerWeights } from './scorer-config.js';
+import { getCarryOverDaysById } from './feedback.js';
 
 /**
  * LEO-209 — programmatic todo scorer.
@@ -48,6 +49,13 @@ export interface ScoreAndRankOptions {
   weights?: ScorerWeights;
   topN?: number;
   now?: Date;
+  /**
+   * LEO-232 — consecutive carry-over days per candidateId, sourced from the todo
+   * feedback ledger. Overlaid onto candidates before scoring so that a task the
+   * user keeps deferring at daily-review time climbs the ranking. Injectable for
+   * tests; falls back to reading the ledger from disk in `buildScoredTodos`.
+   */
+  carryOverDaysById?: Map<string, number>;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -69,7 +77,17 @@ export function buildScoredTodos(
   const weights = options.weights ?? loadScorerWeights();
   const now = options.now ?? new Date(`${date}T00:00:00`);
   const candidates = normalizeCandidates({ config, evidence, date, now });
-  const top = scoreAndRank(candidates, { ...options, weights, now });
+  // LEO-232: overlay the carry-over streak (from the daily-review reconciliation
+  // ledger) so a task the user keeps deferring gains carryOverDays even when its
+  // source (e.g. Linear/vault) carries no creation timestamp.
+  const carryOverDaysById = options.carryOverDaysById ?? getCarryOverDaysById(config);
+  const enriched = carryOverDaysById.size
+    ? candidates.map((candidate) => {
+        const days = carryOverDaysById.get(candidate.id);
+        return days && days > (candidate.carryOverDays ?? 0) ? { ...candidate, carryOverDays: days } : candidate;
+      })
+    : candidates;
+  const top = scoreAndRank(enriched, { ...options, weights, now });
   return {
     generated_at: new Date().toISOString(),
     weights,
