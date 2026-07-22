@@ -175,6 +175,27 @@ test('anthropic provider: parses Messages API response and records usage', async
   }
 });
 
+test('anthropic provider: a max_tokens-truncated response throws instead of returning partial text', async () => {
+  const dir = makeTmpWorkdir();
+  const prev = process.cwd();
+  process.chdir(dir);
+  try {
+    stubFetch({
+      content: [{ type: 'text', text: '{ "todos": [ { "rank": 1, "text": "写决策文档", "candidateId": "LEO-9' }],
+      usage: { input_tokens: 1200, output_tokens: 8192 },
+      stop_reason: 'max_tokens',
+    });
+    const config = makeConfig();
+    await assert.rejects(
+      () => runAnthropicAgent(makeInput(config, 'run-truncated')),
+      /truncated the response at max_tokens/,
+    );
+  } finally {
+    process.chdir(prev);
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('anthropic provider: budget breaker blocks the call before fetch when a tier is exhausted', async () => {
   const dir = makeTmpWorkdir();
   const prev = process.cwd();

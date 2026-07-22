@@ -195,6 +195,54 @@ function extractJsonObject(content: string): string | null {
   return source.slice(start, end + 1);
 }
 
+/**
+ * True when content was meant to be a JSON object — it opens with `{` after an
+ * optional ```json fence. Unlike extractJsonObject this does not require a closing
+ * `}`, so it still catches output truncated mid-object at the token cap.
+ */
+function looksLikeJsonObject(content: string): boolean {
+  return content.trim().replace(/^```(?:json)?\s*/i, '').trimStart().startsWith('{');
+}
+
+/**
+ * True when content is any object carrying a `reconciliation` array (regardless of
+ * item count). Distinguishes the "empty morning plan" case — which
+ * `parseDailyReviewReconciliation` collapses to null — from unrelated JSON.
+ */
+function isDailyReviewReconciliationJson(content: string): boolean {
+  const json = extractJsonObject(content);
+  if (!json) return false;
+  try {
+    const parsed = JSON.parse(json);
+    return Boolean(parsed && typeof parsed === 'object' && Array.isArray((parsed as { reconciliation?: unknown }).reconciliation));
+  } catch {
+    return false;
+  }
+}
+
+/** No morning plan to reconcile: a clean card instead of leaking `{"reconciliation": []...}`. */
+function renderEmptyDailyReviewSummary(driftLines: string[] = []): string {
+  const lines = [
+    '老板，今天没有可对账的晨间安排（没跑今日安排，或今日安排为空），所以没有可逐条勾对的清单。',
+    '',
+    '如果今天有进展想记账，直接回复：daily-os 修改今日复盘：……',
+  ];
+  if (driftLines.length > 0) lines.push('', ...driftLines);
+  return trimSummary(lines.join('\n'), MAX_SUMMARY_CHARS);
+}
+
+/** JSON output that failed to parse (truncated/malformed): ask to regenerate, never leak raw JSON. */
+function renderJsonGenerationFailureSummary(workflow: WorkflowName, driftLines: string[] = []): string {
+  const label = workflow === 'daily_plan' ? '今日安排' : '今日复盘';
+  const lines = [
+    `老板，今天的${label}没能正常生成（内容可能被截断了）。`,
+    '',
+    '点「重排一次」我再整理一遍；如果反复失败，回复 daily-os details 我把原始内容发给你排查。',
+  ];
+  if (driftLines.length > 0) lines.push('', ...driftLines);
+  return trimSummary(lines.join('\n'), MAX_SUMMARY_CHARS);
+}
+
 export function formatWorkflowSummaryForFeishu(workflow: WorkflowName, date: string, content: string, evidence?: Evidence, config?: AppConfig): string {
   if (workflow === 'daily_plan') {
     const plan = parseDailyPlanTodoPlan(content);
@@ -202,16 +250,29 @@ export function formatWorkflowSummaryForFeishu(workflow: WorkflowName, date: str
     console.warn('[summary] daily_plan output was not LEO-209 todo JSON; falling back to legacy long-form extraction.');
   }
   if (workflow === 'daily_review') {
-    // LEO-232: reconcile against the morning todo. Falls back to the legacy
-    // grouped render when the output is not reconciliation JSON (parse failed)
-    // or when there was no daily_plan to reconcile (empty reconciliation).
+    // LEO-232: reconcile against the morning todo.
     const recon = parseDailyReviewReconciliation(content);
     if (recon) {
       const completedIds = completedCandidateIdsFromEvidence(evidence);
       const driftLines = syncDriftSectionLines(date, evidence, config);
       return renderDailyReviewReconciliationSummary(recon, completedIds, driftLines);
     }
+    // The prompt emits `{"reconciliation": [], "carry_over": []}` when there was no
+    // morning plan to reconcile. That is valid-but-empty JSON, not prose — the legacy
+    // grouped render would leak the raw JSON into the card, so render a clean
+    // "nothing to reconcile" message instead.
+    if (isDailyReviewReconciliationJson(content)) {
+      return renderEmptyDailyReviewSummary(syncDriftSectionLines(date, evidence, config));
+    }
     console.warn('[summary] daily_review output was not LEO-232 reconciliation JSON; falling back to legacy grouped render.');
+  }
+  // Guard: a JSON workflow output that failed structured parsing (truncated at the
+  // token cap, or otherwise malformed) must never reach the prose extractor below —
+  // it would dump raw JSON fragments into the card (the "莫名其妙的内容" symptom).
+  if ((workflow === 'daily_plan' || workflow === 'daily_review') && looksLikeJsonObject(content)) {
+    console.warn(`[summary] ${workflow} output looked like JSON but failed to parse; rendering a regenerate prompt instead of leaking raw JSON.`);
+    const driftLines = workflow === 'daily_review' ? syncDriftSectionLines(date, evidence, config) : [];
+    return renderJsonGenerationFailureSummary(workflow, driftLines);
   }
   const clean = normalize(content);
   const intro = introFor(workflow, clean);

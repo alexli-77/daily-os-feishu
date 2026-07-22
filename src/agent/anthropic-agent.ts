@@ -18,7 +18,10 @@ const ANTHROPIC_MESSAGES_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
 const DEFAULT_MODEL = 'claude-sonnet-5';
 const TIMEOUT_MS = 180000;
-const MAX_TOKENS = 4096;
+// Headroom over the small JSON outputs these workflows emit (a daily plan is 5-8
+// short todos). The old 4096 cap could truncate a plan/review mid-array, and the
+// caller then saw invalid JSON; see the stop_reason guard below.
+const MAX_TOKENS = 8192;
 
 interface AnthropicUsage {
   input_tokens?: number;
@@ -28,6 +31,7 @@ interface AnthropicUsage {
 interface AnthropicResponse {
   content?: Array<{ type?: string; text?: string }>;
   usage?: AnthropicUsage;
+  stop_reason?: string;
   error?: { type?: string; message?: string };
 }
 
@@ -91,6 +95,13 @@ export async function runAnthropicAgent(input: AgentInput): Promise<string> {
   if (!response.ok || payload.error) {
     const message = payload.error?.message || raw.slice(0, 500);
     throw new Error(`Anthropic API failed (status ${response.status}): ${message}`);
+  }
+
+  // The response was cut off at max_tokens: the text is truncated (e.g. a workflow's
+  // JSON stops mid-array). Fail loudly instead of returning half a document that the
+  // caller cannot parse — a retry/regenerate is the correct recovery.
+  if (payload.stop_reason === 'max_tokens') {
+    throw new Error(`Anthropic API truncated the response at max_tokens=${MAX_TOKENS}; output is incomplete.`);
   }
 
   const text = (payload.content ?? [])
