@@ -31,6 +31,9 @@ import type { NormalizedMessage } from '@larksuiteoapi/node-sdk';
 import { startUiServer } from '../src/ui/server.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-os-regression-'));
+// Keep the SQLite account/artifact store (LEO-212) in the temp dir so the inline
+// UI-server test never opens — or migrates — the real data/runtime store.
+process.env.DAILY_OS_DB_PATH = path.join(tmp, 'daily-os.db');
 
 try {
   testFeishuUserMessageFiltering();
@@ -96,6 +99,7 @@ try {
     'scripts/tests/okr-writeback-flow.test.ts',
     'scripts/tests/scheduler-port.test.ts',
     'scripts/tests/sync-drift.test.ts',
+    'scripts/tests/sqlite-store.test.ts',
   ]);
   console.log('Regression tests passed.');
 } finally {
@@ -105,12 +109,17 @@ try {
 function runIntegratedSuites(files: string[]): void {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const tsxBin = path.join(repoRoot, 'node_modules', '.bin', 'tsx');
+  // Each integrated suite isolates its own runtime (platform-ui via chdir,
+  // sqlite-store via its own DAILY_OS_DB_PATH), so strip this process's DB
+  // override rather than leaking it into every child.
+  const childEnv = { ...process.env };
+  delete childEnv.DAILY_OS_DB_PATH;
   for (const file of files) {
     console.log(`\n--- integrated suite: ${file} ---`);
     const result = spawnSync(tsxBin, [file], {
       cwd: repoRoot,
       stdio: 'inherit',
-      env: process.env,
+      env: childEnv,
     });
     if (result.error) throw result.error;
     assert.equal(result.status, 0, `integrated suite failed: ${file} (exit ${result.status})`);

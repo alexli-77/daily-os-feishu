@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { writeFileAtomic } from '../utils/atomic-write.js';
+import { dbFindArtifact, dbReadArtifacts, dbSearchArtifacts, dbUpsertArtifact, dbUpsertArtifacts } from './db.js';
 
 /**
  * Artifact index for the LEO-210 web console /artifacts page.
@@ -27,14 +27,9 @@ export interface ArtifactRecord {
   registered_at: string;
 }
 
-const INDEX_PATH = './data/runtime/artifacts-index.json';
 const DEFAULT_SCAN_DIRS = ['./data/outputs', './logs'];
 const MAX_SCAN_FILES = 2000;
 const PREVIEWABLE: ReadonlySet<ArtifactType> = new Set<ArtifactType>(['markdown', 'text', 'json', 'log']);
-
-function indexPath(): string {
-  return path.resolve(INDEX_PATH);
-}
 
 function repoRoot(): string {
   return process.cwd();
@@ -60,26 +55,15 @@ function artifactId(absolutePath: string): string {
 }
 
 export function readArtifactsIndex(): ArtifactRecord[] {
-  const file = indexPath();
-  if (!fs.existsSync(file)) return [];
-  try {
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as { artifacts?: unknown };
-    if (!parsed || !Array.isArray(parsed.artifacts)) return [];
-    return parsed.artifacts.filter(isArtifactRecord);
-  } catch {
-    return [];
-  }
+  return dbReadArtifacts();
 }
 
-function isArtifactRecord(value: unknown): value is ArtifactRecord {
-  if (!value || typeof value !== 'object') return false;
-  const record = value as Record<string, unknown>;
-  return typeof record.id === 'string' && typeof record.path === 'string' && typeof record.type === 'string';
-}
-
-function writeArtifactsIndex(records: ArtifactRecord[]): void {
-  const sorted = [...records].sort((a, b) => (a.mtime < b.mtime ? 1 : a.mtime > b.mtime ? -1 : 0));
-  writeFileAtomic(indexPath(), JSON.stringify({ updated_at: new Date().toISOString(), artifacts: sorted }, null, 2));
+/**
+ * Full-text search over the artifact index (name / rel_path / tags) via FTS5.
+ * Empty / blank query returns []. Powers the /artifacts console search box.
+ */
+export function searchArtifacts(query: string, limit = 50): ArtifactRecord[] {
+  return dbSearchArtifacts(query, limit);
 }
 
 export interface RegisterArtifactInput {
@@ -99,9 +83,8 @@ export function registerArtifact(input: RegisterArtifactInput): ArtifactRecord |
   }
   if (!stat.isFile()) return null;
 
-  const records = readArtifactsIndex();
   const id = artifactId(absolute);
-  const existing = records.find((record) => record.id === id);
+  const existing = dbFindArtifact(id);
   const record: ArtifactRecord = {
     id,
     path: absolute,
@@ -114,9 +97,7 @@ export function registerArtifact(input: RegisterArtifactInput): ArtifactRecord |
     mtime: stat.mtime.toISOString(),
     registered_at: existing?.registered_at ?? new Date().toISOString(),
   };
-  const next = records.filter((item) => item.id !== id);
-  next.push(record);
-  writeArtifactsIndex(next);
+  dbUpsertArtifact(record);
   return record;
 }
 
@@ -127,7 +108,7 @@ export interface ScanResult {
 }
 
 export function scanAndIndex(scanDirs: string[] = DEFAULT_SCAN_DIRS): ScanResult {
-  const records = readArtifactsIndex();
+  const records = dbReadArtifacts();
   const byId = new Map(records.map((record) => [record.id, record]));
   let added = 0;
   let updated = 0;
@@ -167,7 +148,7 @@ export function scanAndIndex(scanDirs: string[] = DEFAULT_SCAN_DIRS): ScanResult
   }
 
   const next = [...byId.values()];
-  writeArtifactsIndex(next);
+  dbUpsertArtifacts(next);
   return { added, updated, total: next.length };
 }
 
@@ -176,7 +157,7 @@ export function scanAndIndex(scanDirs: string[] = DEFAULT_SCAN_DIRS): ScanResult
  * index may be read back, which prevents path-traversal reads via a crafted id.
  */
 export function findArtifactById(id: string): ArtifactRecord | undefined {
-  return readArtifactsIndex().find((record) => record.id === id);
+  return dbFindArtifact(id);
 }
 
 function walkFiles(root: string, out: string[] = []): string[] {
