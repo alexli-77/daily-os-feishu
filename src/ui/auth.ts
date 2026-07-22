@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { writeFileAtomic } from '../utils/atomic-write.js';
+import { dbCountUsers, dbFindUser, dbInsertUser, dbLoadUsers, dbUpdateUserPassword } from '../storage/db.js';
 
 /**
  * Local login + role store for the LEO-210 web admin console.
@@ -40,16 +41,11 @@ export interface AuthInitResult {
 }
 
 export const SESSION_COOKIE = 'daily_os_session';
-const USERS_PATH = './data/runtime/users.json';
 const SESSIONS_PATH = './data/runtime/sessions.json';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const SCRYPT_KEYLEN = 64;
 
 let sessionCache: Map<string, SessionRecord> | null = null;
-
-function usersPath(): string {
-  return path.resolve(USERS_PATH);
-}
 
 function sessionsPath(): string {
   return path.resolve(SESSIONS_PATH);
@@ -83,42 +79,18 @@ export function verifyPassword(user: UserRecord, password: string): boolean {
   return crypto.timingSafeEqual(expected, derived);
 }
 
-// --- user store -------------------------------------------------------------
+// --- user store (SQLite via storage/db) -------------------------------------
 
 export function loadUsers(): UserRecord[] {
-  const file = usersPath();
-  if (!fs.existsSync(file)) return [];
-  try {
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as { users?: unknown };
-    if (!parsed || !Array.isArray(parsed.users)) return [];
-    return parsed.users.filter(isUserRecord);
-  } catch {
-    return [];
-  }
-}
-
-function isUserRecord(value: unknown): value is UserRecord {
-  if (!value || typeof value !== 'object') return false;
-  const record = value as Record<string, unknown>;
-  return typeof record.username === 'string' && isRole(record.role) && typeof record.salt === 'string' && typeof record.hash === 'string';
-}
-
-function saveUsers(users: UserRecord[]): void {
-  writeFileAtomic(usersPath(), JSON.stringify({ users }, null, 2));
-  try {
-    fs.chmodSync(usersPath(), 0o600);
-  } catch {
-    // owner-only is best-effort; never fail startup on chmod.
-  }
+  return dbLoadUsers();
 }
 
 export function findUser(username: string): UserRecord | undefined {
-  const target = username.trim().toLowerCase();
-  return loadUsers().find((user) => user.username.toLowerCase() === target);
+  return dbFindUser(username);
 }
 
 export function listUsers(): Array<{ username: string; role: Role; created_at: string }> {
-  return loadUsers().map((user) => ({ username: user.username, role: user.role, created_at: user.created_at }));
+  return dbLoadUsers().map((user) => ({ username: user.username, role: user.role, created_at: user.created_at }));
 }
 
 export function addUser(username: string, password: string, role: Role): UserRecord {
@@ -126,42 +98,34 @@ export function addUser(username: string, password: string, role: Role): UserRec
   if (!name) throw new Error('Username is required.');
   if (!/^[A-Za-z0-9_.-]{2,64}$/.test(name)) throw new Error('Username must be 2-64 chars of letters, digits, _ . -');
   if (password.length < 8) throw new Error('Password must be at least 8 characters.');
-  const users = loadUsers();
-  if (users.some((user) => user.username.toLowerCase() === name.toLowerCase())) {
-    throw new Error(`User already exists: ${name}`);
-  }
+  if (dbFindUser(name)) throw new Error(`User already exists: ${name}`);
   const { salt, hash } = hashPassword(password);
   const record: UserRecord = { username: name, role, salt, hash, created_at: nowIso(), updated_at: nowIso() };
-  users.push(record);
-  saveUsers(users);
+  dbInsertUser(record);
   return record;
 }
 
 export function setPassword(username: string, password: string): UserRecord {
   if (password.length < 8) throw new Error('Password must be at least 8 characters.');
-  const users = loadUsers();
-  const user = users.find((item) => item.username.toLowerCase() === username.trim().toLowerCase());
+  const user = dbFindUser(username);
   if (!user) throw new Error(`User not found: ${username}`);
   const { salt, hash } = hashPassword(password);
-  user.salt = salt;
-  user.hash = hash;
-  user.updated_at = nowIso();
-  saveUsers(users);
-  return user;
+  const updatedAt = nowIso();
+  dbUpdateUserPassword(user.username, salt, hash, updatedAt);
+  return { ...user, salt, hash, updated_at: updatedAt };
 }
 
 /**
- * On first ever start (no users file / empty) create an `admin` with a random
- * password so the console is never left wide open. The generated password is
- * returned so the caller can surface it once (console + ui.json).
+ * On first ever start (no users) create an `admin` with a random password so the
+ * console is never left wide open. The generated password is returned so the
+ * caller can surface it once (console + ui.json).
  */
 export function ensureAuthInitialized(): AuthInitResult {
-  const users = loadUsers();
-  if (users.length > 0) return { createdAdmin: false, adminUsername: 'admin' };
+  if (dbCountUsers() > 0) return { createdAdmin: false, adminUsername: 'admin' };
   const initialPassword = crypto.randomBytes(12).toString('base64url');
   const { salt, hash } = hashPassword(initialPassword);
   const admin: UserRecord = { username: 'admin', role: 'admin', salt, hash, created_at: nowIso(), updated_at: nowIso() };
-  saveUsers([admin]);
+  dbInsertUser(admin);
   return { createdAdmin: true, adminUsername: 'admin', initialPassword };
 }
 
