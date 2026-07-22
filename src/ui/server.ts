@@ -16,6 +16,7 @@ import { sendFeishuMessage } from '../connectors/lark-cli.js';
 import { getLaunchAgentStatus, installLaunchAgent, uninstallLaunchAgent } from '../service/launchd.js';
 import { runCommand } from '../utils/command.js';
 import { appendUiLog, clearUiLogs, readUiLogs } from '../storage/ui-log.js';
+import { appVersion } from '../utils/version.js';
 import { startDecisionOnboarding } from '../decision/onboarding.js';
 import { ensureDecisionPolicyFiles } from '../decision/policy.js';
 import { collectProgressCandidates, formatProgressCandidates } from '../progress/capture.js';
@@ -68,6 +69,7 @@ const ENV_KEYS = [...PLAIN_ENV_KEYS, ...SECRET_ENV_KEYS];
 // and it is written into ui.json (for mac-companion) and injected into the served HTML.
 let runtimeToken = '';
 const HTML_TOKEN_PLACEHOLDER = '__UI_TOKEN_PLACEHOLDER__';
+const HTML_VERSION_PLACEHOLDER = '__UI_VERSION_PLACEHOLDER__';
 const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
 
 function extractHostname(hostHeader: string | undefined): string {
@@ -1431,7 +1433,10 @@ function sendJson(response: http.ServerResponse, body: unknown, status = 200): v
 function renderHtml(): string {
   // Inject the current runtime token so any local page load (CLI open, mac-companion open,
   // manual navigation) can authenticate its /api calls without a query string.
-  return HTML.split(HTML_TOKEN_PLACEHOLDER).join(runtimeToken);
+  return HTML.split(HTML_TOKEN_PLACEHOLDER)
+    .join(runtimeToken)
+    .split(HTML_VERSION_PLACEHOLDER)
+    .join(appVersion());
 }
 
 function send(response: http.ServerResponse, status: number, body: string, contentType: string): void {
@@ -2007,6 +2012,8 @@ npm run service:install</code></pre>
       </section>
     </main>
 
+    <footer class="appfoot">Daily OS Feishu · v__UI_VERSION_PLACEHOLDER__</footer>
+
     <script>window.__UI_TOKEN__ = '__UI_TOKEN_PLACEHOLDER__';</script>
     <script src="/assets/app.js"></script>
   </body>
@@ -2098,6 +2105,7 @@ h1 { font-size: 1.25rem; font-weight: 700; }
 h2 { font-size: 1rem; }
 h3 { font-size: .95rem; }
 p, .hint { color: var(--muted); font-size: .85rem; }
+.appfoot { padding: 12px 20px; color: var(--muted); font-size: .78rem; text-align: center; }
 code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: .82em;

@@ -1,6 +1,6 @@
 {
   "name": "daily-os-feishu",
-  "version": "0.1.0-alpha.2",
+  "version": "0.2.0",
   "description": "Feishu-first local Daily OS agent for Mac.",
   "type": "module",
   "bin": {
@@ -31,9 +31,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "privacy:scan": "bash scripts/privacy-scan.sh",
     "regression:test": "tsx scripts/regression-tests.ts",
+    "license:check": "license-checker --production --excludePrivatePackages --onlyAllow \"MIT;ISC;Apache-2.0;BSD-2-Clause;BSD-3-Clause;0BSD;BSD;Unlicense;CC0-1.0;Python-2.0\"",
     "alpha:smoke": "bash scripts/alpha-smoke.sh",
     "alpha:smoke:ci": "DAILY_OS_SKIP_AGENT_SMOKE=1 bash scripts/alpha-smoke.sh",
-    "verify": "npm run typecheck && npm run build && npm run privacy:scan && npm run regression:test"
+    "verify": "npm run typecheck && npm run build && npm run privacy:scan && npm run license:check && npm run regression:test"
   },
   "keywords": [
     "daily-os",
@@ -59,6 +60,7 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.15.0",
+    "license-checker": "^25.0.1",
     "tsx": "^4.19.0",
     "typescript": "^5.8.0"
   }
