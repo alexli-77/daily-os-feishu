@@ -149,12 +149,51 @@ function loadTodayPlanTodos(config: AppConfig, date: string): Array<{ rank: numb
   return plan && plan.todos.length > 0 ? plan.todos : null;
 }
 
-async function runAgentWithNonEmptyOutput(input: Parameters<typeof runAgent>[0]): Promise<string> {
-  const attempts = 2;
+/**
+ * Run the agent, retrying when the output is unusable: empty, an error (e.g. a
+ * response truncated at the token cap, which the anthropic provider throws on), or
+ * — for daily_plan — output that fails the LEO-209 structured contract. This
+ * automates the manual "重排一次": the morning's first post must never persist or
+ * send an unparseable plan, which is exactly what left daily_review with nothing to
+ * reconcile that evening. Exposed with an injectable runner for tests.
+ */
+export async function runAgentWithNonEmptyOutput(
+  input: Parameters<typeof runAgent>[0],
+  runner: (input: Parameters<typeof runAgent>[0]) => Promise<string> = runAgent,
+): Promise<string> {
+  const attempts = 3;
+  let lastError: Error | null = null;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const text = (await runAgent(input)).trim();
-    if (text.length > 0) return text;
-    console.warn(`[workflow] ${input.workflow} returned empty output on attempt ${attempt}/${attempts}.`);
+    let text: string;
+    try {
+      text = (await runner(input)).trim();
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      console.warn(`[workflow] ${input.workflow} attempt ${attempt}/${attempts} errored: ${lastError.message}`);
+      continue;
+    }
+    if (text.length === 0) {
+      lastError = new Error(`${input.workflow} generated empty output`);
+      console.warn(`[workflow] ${input.workflow} returned empty output on attempt ${attempt}/${attempts}.`);
+      continue;
+    }
+    if (!hasValidStructuredOutput(input.workflow, text)) {
+      lastError = new Error(`${input.workflow} produced output that failed its structured contract`);
+      console.warn(`[workflow] ${input.workflow} produced unparseable structured output on attempt ${attempt}/${attempts}; retrying.`);
+      continue;
+    }
+    return text;
   }
-  throw new Error(`${input.workflow} generated empty output after ${attempts} attempts; refusing to save or send an empty workflow card.`);
+  throw lastError ?? new Error(`${input.workflow} produced no usable output after ${attempts} attempts; refusing to save or send it.`);
+}
+
+/**
+ * daily_plan carries a hard LEO-209 JSON contract; a parse failure there is the
+ * "garbage first post of the day" bug, so we revalidate and retry. daily_review may
+ * legitimately be empty (no morning plan) and weekly_review is free-form prose, so
+ * neither has a contract to revalidate here.
+ */
+function hasValidStructuredOutput(workflow: WorkflowName, text: string): boolean {
+  if (workflow === 'daily_plan') return parseDailyPlanTodoPlan(text) !== null;
+  return true;
 }

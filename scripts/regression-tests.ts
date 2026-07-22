@@ -93,6 +93,7 @@ try {
     'scripts/tests/okr.test.ts',
     'scripts/tests/todo-scorer.test.ts',
     'scripts/tests/daily-review-reconcile.test.ts',
+    'scripts/tests/daily-plan-retry.test.ts',
     'scripts/tests/platform-ui.test.ts',
     'scripts/tests/adversarial.test.ts',
     // LEO-109 / LEO-212 / LEO-120 feature suites (incl. adversarial cases).
@@ -1003,7 +1004,9 @@ async function testWorkflowRunLedgerRecordsSendFailure(): Promise<void> {
       "const fs = require('fs');",
       "const args = process.argv.slice(2);",
       "const outputPath = args[args.indexOf('--output-last-message') + 1];",
-      "fs.writeFileSync(outputPath, '老板，今天先处理 LEO-65。');",
+      // Valid LEO-209 todo JSON so the run reaches the send step (which then fails on
+      // the missing chat id); prose would be rejected by the daily_plan retry guard.
+      'fs.writeFileSync(outputPath, JSON.stringify({ todos: [{ rank: 1, text: "把 LEO-65 推进到可验收", candidateId: "linear:LEO-65" }] }));',
     ].join('\n'),
     'utf8',
   );
