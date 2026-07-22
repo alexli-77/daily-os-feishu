@@ -5,8 +5,9 @@
  * `tsx scripts/tests/daily-review-reconcile.test.ts`). Covers:
  *  - reconciliation JSON parse + render (done/N counting, ticked items forced to
  *    done via injected feedback);
- *  - parse failure -> legacy grouped render fallback (console.warn);
- *  - no daily_plan that day -> legacy fallback;
+ *  - parse failure (prose) -> legacy grouped render fallback (console.warn);
+ *  - no daily_plan that day -> clean empty-review card (no raw JSON leak);
+ *  - truncated/malformed JSON -> regenerate prompt (no raw JSON leak);
  *  - carry-over persistence + scorer carryOverDays streak computation;
  *  - the "confirm review" carry-over selection (open-only) that the card action
  *    persists to the ledger.
@@ -106,19 +107,41 @@ test('parse failure degrades to the legacy grouped render (console.warn)', () =>
   }
 });
 
-test('empty reconciliation (no plan that day) degrades to legacy render', () => {
-  // When no daily_plan ran, the prompt emits an empty reconciliation array.
-  assert.equal(parseDailyReviewReconciliation('{"reconciliation":[],"carry_over":[]}'), null, 'empty list parses to null');
+test('empty reconciliation (no plan that day) renders a clean card, never the raw JSON', () => {
+  // When no daily_plan ran, the prompt emits `{"reconciliation":[],"carry_over":[]}`.
+  // This must render a clean "nothing to reconcile" message — not leak the raw JSON
+  // into the card (the "莫名其妙的内容" regression).
+  const empty = '{"reconciliation":[],"carry_over":[]}';
+  assert.equal(parseDailyReviewReconciliation(empty), null, 'empty list parses to null');
+  const card = formatWorkflowSummaryForFeishu('daily_review', DATE, empty);
+  assert.doesNotMatch(card, /✅ 完成 \d+\/\d+/, 'no reconciliation header for an empty plan');
+  assert.doesNotMatch(card, /reconciliation|carry_over|[{}]/, 'raw JSON never leaks into the card');
+  assert.match(card, /没有可对账的晨间安排/, 'a clean no-plan message is shown instead');
+});
+
+test('daily_review JSON that fails to parse renders a regenerate prompt, not raw JSON', () => {
+  // A truncated / malformed reconciliation object must not reach the prose extractor.
+  const truncated = '```json\n{"reconciliation":[{"candidateId":"linear:LEO-9","text":"整理导师邮';
   const warnings: string[] = [];
   const originalWarn = console.warn;
   console.warn = (...args: unknown[]) => warnings.push(args.join(' '));
   try {
-    const card = formatWorkflowSummaryForFeishu('daily_review', DATE, '{"reconciliation":[],"carry_over":[]}');
-    assert.doesNotMatch(card, /✅ 完成 \d+\/\d+/);
-    assert.ok(warnings.some((w) => w.includes('falling back to legacy grouped render')));
+    const card = formatWorkflowSummaryForFeishu('daily_review', DATE, truncated);
+    assert.doesNotMatch(card, /reconciliation|candidateId|[{}]/, 'raw JSON never leaks into the card');
+    assert.match(card, /没能正常生成/, 'a regenerate prompt is shown');
+    assert.ok(warnings.some((w) => w.includes('looked like JSON but failed to parse')), 'a warning is logged');
   } finally {
     console.warn = originalWarn;
   }
+});
+
+test('daily_plan JSON truncated at the token cap renders a regenerate prompt, not raw JSON', () => {
+  // LEO-209 daily_plan output cut off mid-array (the "first post of the day" bug):
+  // must not be dumped through the prose extractor.
+  const truncated = '{ "todos": [ { "rank": 1, "text": "写决策文档", "candidateId": "LEO-97" }, { "rank": 2, "text": "系统过一遍 Agent loop、ReAc';
+  const card = formatWorkflowSummaryForFeishu('daily_plan', DATE, truncated);
+  assert.doesNotMatch(card, /candidateId|rank|[{}]/, 'raw JSON never leaks into the card');
+  assert.match(card, /没能正常生成/, 'a regenerate prompt is shown');
 });
 
 // --- confirm-review carry-over selection -----------------------------------
