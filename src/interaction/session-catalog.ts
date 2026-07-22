@@ -3,12 +3,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { AppConfig } from '../config/schema.js';
 
+/** Channel that owns a session. `feishu` is the historical default; `web` is the
+ *  LEO-236 console chat. The field keeps both channels in one shared store while
+ *  guaranteeing their scope ids never collide (see scopeIdFor + the web scopeKey). */
+export type SessionChannel = 'feishu' | 'web';
+
 export interface FeishuScopeDescriptor {
   scopeKey: string;
   chatId: string;
   chatType: 'p2p' | 'group';
   mode: 'p2p' | 'group' | 'topic';
   threadId?: string;
+  channel?: SessionChannel;
 }
 
 export interface FeishuSessionRecord {
@@ -17,6 +23,7 @@ export interface FeishuSessionRecord {
   chat_id: string;
   chat_type: 'p2p' | 'group';
   mode: 'p2p' | 'group' | 'topic';
+  channel: SessionChannel;
   thread_id?: string;
   codex_session_id?: string;
   workdir?: string;
@@ -64,6 +71,7 @@ export function ensureFeishuSession(
     chat_id: descriptor.chatId,
     chat_type: descriptor.chatType,
     mode: descriptor.mode,
+    channel: descriptor.channel ?? 'feishu',
     ...(descriptor.threadId ? { thread_id: descriptor.threadId } : {}),
     ...(options.codexSessionId ? { codex_session_id: options.codexSessionId } : {}),
     ...(nextWorkdir ? { workdir: nextWorkdir } : {}),
@@ -74,6 +82,25 @@ export function ensureFeishuSession(
   catalog.active[scopeId] = created;
   writeCatalog(config, catalog);
   return created;
+}
+
+/**
+ * Update an existing session by scope_id (used by the web console chat, which
+ * keys everything on the durable scope_id rather than the raw scope key). Bumps
+ * updated_at and, when provided, stores the resumable codex session id.
+ */
+export function updateSessionByScopeId(
+  config: AppConfig,
+  scopeId: string,
+  options: { codexSessionId?: string } = {},
+): FeishuSessionRecord | null {
+  const catalog = readCatalog(config);
+  const record = catalog.active[scopeId];
+  if (!record) return null;
+  record.updated_at = new Date().toISOString();
+  if (options.codexSessionId) record.codex_session_id = options.codexSessionId;
+  writeCatalog(config, catalog);
+  return record;
 }
 
 export function clearFeishuSession(config: AppConfig, scopeId: string, reason = 'manual_new'): boolean {
@@ -89,6 +116,14 @@ export function clearFeishuSession(config: AppConfig, scopeId: string, reason = 
 export function activeFeishuSession(config: AppConfig, scopeId: string): FeishuSessionRecord | null {
   const catalog = readCatalog(config);
   return catalog.active[scopeId] || null;
+}
+
+/** Active sessions, optionally filtered by channel, newest first. */
+export function listActiveSessions(config: AppConfig, channel?: SessionChannel): FeishuSessionRecord[] {
+  const catalog = readCatalog(config);
+  return Object.values(catalog.active)
+    .filter((record) => (channel ? record.channel === channel : true))
+    .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
 }
 
 export function feishuSessionCatalogPath(config: AppConfig): string {
@@ -130,7 +165,11 @@ function archiveRecord(catalog: FeishuSessionCatalog, record: FeishuSessionRecor
 }
 
 function filterRecords(value: Record<string, unknown>): Record<string, FeishuSessionRecord> {
-  return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, FeishuSessionRecord] => isSessionRecord(entry[1])));
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter((entry): entry is [string, FeishuSessionRecord] => isSessionRecord(entry[1]))
+      .map(([key, record]) => [key, { ...record, channel: record.channel ?? 'feishu' }]),
+  );
 }
 
 function isSessionRecord(value: unknown): value is FeishuSessionRecord {

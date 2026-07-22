@@ -19,7 +19,7 @@ export interface FeishuAgentBridgeContext {
   messageIds: string[];
   scopeId: string;
   scopeHash: string;
-  source: 'feishu';
+  source: 'feishu' | 'web';
 }
 
 export interface FeishuAgentModeInput {
