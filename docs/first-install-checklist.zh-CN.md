@@ -24,7 +24,10 @@ codex login status
 lark-cli --help
 ```
 
-创建本地配置：
+首次配置。在交互式终端里，`npm run setup` 会进入向导：设置控制台 admin 密码
+（scrypt 加盐哈希存入 SQLite，不落明文）、配置 LLM provider + API key
+（BYOK：`ANTHROPIC_API_KEY` 或 `OPENAI_API_KEY`）、并可选配置飞书。非交互终端
+（或加 `--no-wizard`）时只 seed 配置文件。
 
 ```bash
 npm run setup
@@ -42,6 +45,14 @@ npm run ui
 
 安装后台服务后，UI 默认可以从 `http://127.0.0.1:14573` 打开。如果这个端口被占用，
 运行 `npm run ui:open`，它会打开后台服务保存到 `data/runtime/ui.json` 的实际 URL。
+版本号显示在 UI 页脚和 `npm run doctor` 输出中。
+
+### Web chat 入口
+
+登录控制台后，进入 **Chat** 页可直接与助手对话（流式输出 + 停止生成）。它能触发
+plan/review/weekly、带 vault/OKR 证据问答、快捷捕获 todo——全程不需要飞书。首次
+验一遍完整对话：发消息 → 触发一次 plan → 看流式结果 → 勾一个 todo。飞书现在退为
+可选的移动通道，核心闭环不依赖它。
 
 在 Setup -> Codex 配置客户电脑上的 Codex：
 
@@ -114,9 +125,22 @@ git status --short
 - `dist/`
 - 飞书 chat ID、API token、私有 vault 路径、快照或 memory 文件
 
-## 6. Alpha 已知边界
+## 6. 备份 / 恢复
 
-- v0 只支持飞书作为 IM 输出。
-- v0 不要求远程 vault-gate。
+打包并恢复本地 `data/` + `memory-vault/`（Docker 形态还含 `config/`）卷：
+
+```bash
+./scripts/backup.sh
+./scripts/restore.sh backups/daily-os-backup-<时间戳>.tgz --force
+```
+
+先停服务，保证 SQLite 处于静止态。`restore.sh` 会把已有目录先移到
+`*.pre-restore-*` 再解包，所以恢复出错本身也可回退。
+
+## 7. 已知边界
+
+- Web chat 是控制台内的交互入口；飞书现在是可选移动通道，也是定时 workflow 的
+  唯一*推送*输出。
+- 不要求远程 vault-gate。
 - 当前 UI 是本地浏览器 dashboard，还不是已签名的 `.app` 或 DMG。
 - 飞书反馈命令通过轮询支持，还不是 webhook。

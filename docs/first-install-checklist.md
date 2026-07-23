@@ -26,7 +26,11 @@ codex login status
 lark-cli --help
 ```
 
-Then create local config:
+Then run first-run setup. In an interactive terminal `npm run setup` launches a
+wizard that sets the console admin password (scrypt-hashed into SQLite, never
+plaintext), configures an LLM provider + API key (BYOK: `ANTHROPIC_API_KEY` or
+`OPENAI_API_KEY`), and optionally configures Feishu. In a non-interactive shell,
+or with `--no-wizard`, it only seeds the config files.
 
 ```bash
 npm run setup
@@ -44,7 +48,16 @@ fields are saved locally and are not echoed back in the page.
 
 After installing the background service, the UI should be reachable at
 `http://127.0.0.1:14573`. If that port is occupied, run `npm run ui:open`; it
-opens the URL saved by the running service in `data/runtime/ui.json`.
+opens the URL saved by the running service in `data/runtime/ui.json`. The running
+version is shown in the UI footer and by `npm run doctor`.
+
+### Web chat entry
+
+After logging into the console, open the **Chat** page to talk to the assistant
+directly (streaming replies, stop generation). It can trigger plan/review/weekly,
+answer with vault/OKR evidence, and capture todos — all without Feishu. Verify a
+full turn once: send a message, trigger a plan, watch it stream, capture a todo.
+Feishu is now an optional mobile channel, not required for the core loop.
 
 Use Setup -> Codex to configure the customer's Codex installation:
 
@@ -122,9 +135,24 @@ Do not commit:
 - `dist/`
 - Feishu chat IDs, API tokens, private vault paths, snapshots, or memory files
 
-## 6. Known Alpha Limits
+## 6. Backup / Restore
 
-- Feishu is the only IM output in v0.
-- Remote vault-gate is intentionally not required in v0.
+Pack and restore the local `data/` + `memory-vault/` (and `config/` in the Docker
+shape) volumes:
+
+```bash
+./scripts/backup.sh
+./scripts/restore.sh backups/daily-os-backup-<timestamp>.tgz --force
+```
+
+Stop the service first so the SQLite store is quiescent. `restore.sh` moves any
+existing dir aside to `*.pre-restore-*` before extracting, so a bad restore is
+itself reversible.
+
+## 7. Known Limits
+
+- Web chat is the in-console interaction entry; Feishu is now an optional mobile
+  channel and the only *push* output for scheduled workflows.
+- Remote vault-gate is intentionally not required.
 - The current UI is a local browser dashboard, not a signed `.app` or DMG yet.
 - Feishu feedback commands are supported through polling, not webhooks.
