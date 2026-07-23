@@ -183,6 +183,93 @@ async function main(): Promise<void> {
       body: '{}',
     });
     check('admin via runtime token write -> 200', tokenWrite.status === 200, String(tokenWrite.status));
+
+    // --- Web console chat (LEO-236) ---------------------------------------
+    // Parse an SSE response body into decoded event objects.
+    const readSse = (text: string): Array<Record<string, unknown>> =>
+      text
+        .split('\n\n')
+        .map((chunk) =>
+          chunk
+            .split('\n')
+            .filter((line) => line.startsWith('data:'))
+            .map((line) => line.slice(5).trim())
+            .join(''),
+        )
+        .filter(Boolean)
+        .map((line) => {
+          try {
+            return JSON.parse(line) as Record<string, unknown>;
+          } catch {
+            return {};
+          }
+        });
+    const sendChat = async (cookie: string, session: string, text: string) => {
+      const res = await fetch(`${base}/api/chat/send`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ session, text }),
+      });
+      const body = await res.text();
+      return { status: res.status, events: res.status === 200 ? readSse(body) : [], body };
+    };
+
+    // Admin: create a session, run a command turn (no codex needed), verify it
+    // streams a reply, persists both messages, and lands a usage-ledger row.
+    const created = await fetch(`${base}/api/chat/session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: adminCookie },
+      body: '{}',
+    }).then((r) => r.json());
+    const sessionId = String((created as { session?: { id?: string } })?.session?.id || '');
+    check('chat: admin creates a session', created && (created as { ok?: boolean }).ok === true && sessionId.length > 0, sessionId);
+
+    const sessionsList = (await fetch(`${base}/api/chat/sessions`, { headers: { cookie: adminCookie } }).then((r) => r.json())) as {
+      sessions?: Array<{ id: string }>;
+    };
+    check('chat: session appears in list', Boolean(sessionsList.sessions?.some((s) => s.id === sessionId)));
+
+    const adminTurn = await sendChat(adminCookie, sessionId, 'daily-os status');
+    check('chat: command turn streams over SSE 200', adminTurn.status === 200, String(adminTurn.status));
+    const adminReply = adminTurn.events.find((e) => e.type === 'reply');
+    check('chat: command turn produced a reply', Boolean(adminReply) && String(adminReply?.content).includes('Daily OS'), JSON.stringify(adminReply || {}));
+    check('chat: turn signals done', adminTurn.events.some((e) => e.type === 'done'));
+
+    const messages = (await fetch(`${base}/api/chat/messages?session=${encodeURIComponent(sessionId)}`, {
+      headers: { cookie: adminCookie },
+    }).then((r) => r.json())) as { messages?: Array<{ role: string; content: string }> };
+    check(
+      'chat: user + assistant messages persisted',
+      Boolean(messages.messages && messages.messages.length === 2 && messages.messages[0].role === 'user' && messages.messages[1].role === 'assistant'),
+      JSON.stringify(messages.messages || []),
+    );
+
+    const ledger = fs.existsSync(path.resolve('data/runtime/usage-ledger.jsonl'))
+      ? fs.readFileSync(path.resolve('data/runtime/usage-ledger.jsonl'), 'utf8')
+      : '';
+    check('chat: every turn lands a usage-ledger row', ledger.includes('"provider":"web_chat"'), ledger.slice(0, 200));
+
+    // Channel separation: the shared session catalog tags this session channel=web.
+    const catalog = fs.existsSync(path.resolve('data/memory/feishu-session-catalog.json'))
+      ? fs.readFileSync(path.resolve('data/memory/feishu-session-catalog.json'), 'utf8')
+      : '';
+    check('chat: session stored with channel=web', catalog.includes('"channel": "web"'), catalog.slice(0, 200));
+
+    // Member: whitelisted command turn is allowed; free-form (over-privileged) is rejected.
+    const memberSession = String(
+      ((await fetch(`${base}/api/chat/session`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: memberCookie },
+        body: '{}',
+      }).then((r) => r.json())) as { session?: { id?: string } })?.session?.id || '',
+    );
+    check('chat: member can create a session', memberSession.length > 0, memberSession);
+
+    const memberCommand = await sendChat(memberCookie, memberSession, 'daily-os status');
+    check('chat: member whitelisted command -> 200', memberCommand.status === 200, String(memberCommand.status));
+
+    const memberFreeform = await sendChat(memberCookie, memberSession, '帮我随便聊聊今天的安排');
+    check('chat: member over-privileged free-form turn -> 403', memberFreeform.status === 403, `${memberFreeform.status} ${memberFreeform.body.slice(0, 120)}`);
   } finally {
     await controls.stop();
     process.chdir(originalCwd);

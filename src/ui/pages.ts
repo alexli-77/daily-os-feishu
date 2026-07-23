@@ -22,11 +22,12 @@ export interface PageContext {
   url: URL;
 }
 
-export const PLATFORM_PAGES = new Set(['/dashboard', '/today', '/schedules', '/runs', '/artifacts']);
+export const PLATFORM_PAGES = new Set(['/dashboard', '/today', '/chat', '/schedules', '/runs', '/artifacts']);
 
 const NAV: Array<{ href: string; label: string }> = [
   { href: '/dashboard', label: 'Dashboard' },
   { href: '/today', label: 'Today' },
+  { href: '/chat', label: 'Chat' },
   { href: '/schedules', label: 'Schedules' },
   { href: '/runs', label: 'Runs' },
   { href: '/artifacts', label: 'Artifacts' },
@@ -47,6 +48,8 @@ export function renderPlatformPage(pathname: string, ctx: PageContext): string {
       return layout('/dashboard', ctx, renderDashboard(ctx));
     case '/today':
       return layout('/today', ctx, renderToday(ctx));
+    case '/chat':
+      return layout('/chat', ctx, renderChat(ctx));
     case '/schedules':
       return layout('/schedules', ctx, renderSchedules(ctx));
     case '/runs':
@@ -281,6 +284,142 @@ function renderSignalColumn(ctx: PageContext): string {
       </div>
     </div>`;
 }
+
+// --- chat (LEO-236) ---------------------------------------------------------
+
+function renderChat(ctx: PageContext): string {
+  const agentEnabled = ctx.config.interaction.feishu.agent_mode.enabled;
+  const roleHint =
+    ctx.role === 'admin'
+      ? 'Admin: full command surface + free-form assistant.'
+      : 'Member: whitelisted commands only (plan / review / weekly / progress / todo).';
+  const agentHint = agentEnabled
+    ? ''
+    : '<p class="muted small">Free-form assistant (agent mode) is disabled in config; command shortcuts still work.</p>';
+  return `
+  <section class="chat-wrap" data-role="${escapeHtml(ctx.role)}">
+    <aside class="chat-sessions card">
+      <div class="card-head"><h2>Chats</h2><button type="button" id="chat-new">New</button></div>
+      <ul class="chat-session-list" id="chat-session-list"><li class="muted small">Loading…</li></ul>
+    </aside>
+    <div class="chat-main card">
+      <div class="chat-head">
+        <div><h2 id="chat-title">Console assistant</h2><p class="muted small">${escapeHtml(roleHint)}</p></div>
+      </div>
+      ${agentHint}
+      <div class="chat-stream" id="chat-stream"><p class="muted small">Start a new chat or pick one on the left.</p></div>
+      <form class="chat-composer" id="chat-composer">
+        <textarea id="chat-input" rows="2" placeholder="Ask, or run: plan / review / weekly / progress / 记到 todo：…" autocomplete="off"></textarea>
+        <div class="chat-composer-actions">
+          <button type="submit" id="chat-send">Send</button>
+          <button type="button" id="chat-stop" class="danger" hidden>Stop</button>
+        </div>
+      </form>
+    </div>
+  </section>
+  <script>${CHAT_JS}</script>`;
+}
+
+const CHAT_JS = String.raw`
+(function(){
+  var sessionId=null;
+  var sending=false;
+  var controller=null;
+  var list=document.getElementById('chat-session-list');
+  var stream=document.getElementById('chat-stream');
+  var input=document.getElementById('chat-input');
+  var form=document.getElementById('chat-composer');
+  var sendBtn=document.getElementById('chat-send');
+  var stopBtn=document.getElementById('chat-stop');
+  var newBtn=document.getElementById('chat-new');
+  function esc(s){var d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML;}
+  function api(url,opts){return fetch(url,Object.assign({credentials:'same-origin'},opts||{}));}
+  function bubble(role,text){
+    var el=document.createElement('div');
+    el.className='chat-msg role-'+role;
+    el.innerHTML='<span class="who">'+esc(role)+'</span><div class="body">'+esc(text)+'</div>';
+    stream.appendChild(el);stream.scrollTop=stream.scrollHeight;
+    return el.querySelector('.body');
+  }
+  function clearStream(){stream.innerHTML='';}
+  function loadSessions(){
+    return api('/api/chat/sessions').then(function(r){return r.json();}).then(function(d){
+      var items=(d&&d.sessions)||[];
+      if(!items.length){list.innerHTML='<li class="muted small">No chats yet.</li>';return;}
+      list.innerHTML=items.map(function(s){
+        return '<li class="chat-session'+(s.id===sessionId?' active':'')+'" data-id="'+esc(s.id)+'">'+
+          '<span class="s-title">'+esc(s.title)+'</span>'+
+          '<span class="muted small">'+esc(s.messages)+' msg</span></li>';
+      }).join('');
+    });
+  }
+  function openSession(id){
+    sessionId=id;
+    Array.prototype.forEach.call(list.querySelectorAll('.chat-session'),function(li){
+      li.classList.toggle('active',li.getAttribute('data-id')===id);
+    });
+    clearStream();
+    return api('/api/chat/messages?session='+encodeURIComponent(id)).then(function(r){return r.json();}).then(function(d){
+      var msgs=(d&&d.messages)||[];
+      if(!msgs.length){bubble('system','Empty chat. Say hello or run a command.');return;}
+      msgs.forEach(function(m){bubble(m.role,m.content);});
+    });
+  }
+  function setSending(on){
+    sending=on;sendBtn.disabled=on;input.disabled=on;stopBtn.hidden=!on;
+  }
+  function send(text){
+    if(!sessionId){return;}
+    bubble('user',text);
+    var target=bubble('assistant','');
+    var statusEl=document.createElement('div');statusEl.className='chat-status muted small';target.parentNode.appendChild(statusEl);
+    var acc='';
+    setSending(true);
+    controller=new AbortController();
+    api('/api/chat/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session:sessionId,text:text}),signal:controller.signal})
+      .then(function(res){
+        if(res.status===403){return res.json().then(function(d){target.textContent='拒绝：'+((d&&d.error)||'permission denied');throw 'handled';});}
+        if(!res.body){return res.text().then(function(t){target.textContent=t;});}
+        var reader=res.body.getReader();var dec=new TextDecoder();var buf='';
+        function pump(){return reader.read().then(function(res){
+          if(res.done){return;}
+          buf+=dec.decode(res.value,{stream:true});
+          var parts=buf.split('\n\n');buf=parts.pop();
+          parts.forEach(function(chunk){
+            var line=chunk.split('\n').filter(function(l){return l.indexOf('data:')===0;}).map(function(l){return l.slice(5);}).join('');
+            if(!line)return;var ev;try{ev=JSON.parse(line);}catch(e){return;}
+            if(ev.type==='status'){statusEl.textContent=ev.message;}
+            else if(ev.type==='reply'){acc+=(acc?'\n\n':'')+ev.content;target.textContent=acc;}
+            else if(ev.type==='denied'){acc=ev.message;target.textContent=ev.message;}
+            else if(ev.type==='error'){acc=ev.message;target.textContent='错误：'+ev.message;}
+            else if(ev.type==='stopped'){statusEl.textContent='已停止。';}
+            stream.scrollTop=stream.scrollHeight;
+          });
+          return pump();
+        });}
+        return pump();
+      })
+      .then(function(){statusEl.remove();})
+      .catch(function(e){if(e!=='handled'){if(controller&&controller.signal.aborted){statusEl.textContent='已停止。';}else{target.textContent='连接中断：'+String(e);}}})
+      .then(function(){setSending(false);controller=null;loadSessions();});
+  }
+  form.addEventListener('submit',function(ev){ev.preventDefault();if(sending)return;var t=input.value.trim();if(!t||!sessionId)return;input.value='';send(t);});
+  input.addEventListener('keydown',function(ev){if(ev.key==='Enter'&&!ev.shiftKey){ev.preventDefault();form.dispatchEvent(new Event('submit',{cancelable:true}));}});
+  stopBtn.addEventListener('click',function(){
+    if(controller)controller.abort();
+    if(sessionId)api('/api/chat/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session:sessionId})});
+  });
+  newBtn.addEventListener('click',function(){
+    api('/api/chat/session',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+      .then(function(r){return r.json();}).then(function(d){if(d&&d.session){return loadSessions().then(function(){return openSession(d.session.id);});}});
+  });
+  list.addEventListener('click',function(ev){var li=ev.target.closest('.chat-session');if(li)openSession(li.getAttribute('data-id'));});
+  loadSessions().then(function(){
+    var first=list.querySelector('.chat-session');
+    if(first){openSession(first.getAttribute('data-id'));}
+  });
+})();
+`;
 
 // --- schedules --------------------------------------------------------------
 
@@ -669,6 +808,27 @@ button.danger{background:var(--danger);border-color:var(--danger)}
 .login-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:26px;width:340px;display:flex;flex-direction:column;gap:12px}
 .login-card h1{font-size:18px;margin:0}
 .login-card label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted)}
+.chat-wrap{display:grid;grid-template-columns:240px 1fr;gap:16px;align-items:start}
+@media(max-width:800px){.chat-wrap{grid-template-columns:1fr}}
+.chat-sessions{max-height:70vh;overflow:auto}
+.chat-session-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.chat-session{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border-radius:8px;cursor:pointer;border:1px solid transparent}
+.chat-session:hover{background:var(--surface-2)}
+.chat-session.active{background:var(--surface-2);border-color:var(--border)}
+.s-title{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat-main{display:flex;flex-direction:column;min-height:60vh}
+.chat-head{display:flex;justify-content:space-between;align-items:flex-start}
+.chat-stream{flex:1;overflow:auto;display:flex;flex-direction:column;gap:12px;padding:8px 2px;max-height:60vh}
+.chat-msg{display:flex;flex-direction:column;gap:2px}
+.chat-msg .who{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+.chat-msg .body{white-space:pre-wrap;word-break:break-word;padding:8px 12px;border-radius:10px;background:var(--surface-2)}
+.chat-msg.role-user .body{background:#dcecf6;align-self:flex-start}
+.chat-msg.role-assistant .body{background:var(--surface-2)}
+.chat-msg.role-system .body{background:transparent;color:var(--muted);padding:2px 0}
+.chat-status{padding:2px 0}
+.chat-composer{display:flex;gap:8px;align-items:flex-end;margin-top:10px;border-top:1px solid var(--border);padding-top:10px}
+.chat-composer textarea{flex:1;font:inherit;padding:8px 10px;border:1px solid var(--border);border-radius:8px;resize:vertical;background:var(--surface)}
+.chat-composer-actions{display:flex;flex-direction:column;gap:6px}
 `;
 
 const CONSOLE_JS = `

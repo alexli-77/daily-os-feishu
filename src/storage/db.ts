@@ -58,6 +58,16 @@ CREATE TABLE IF NOT EXISTS artifacts (
   mtime         TEXT NOT NULL,
   registered_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id         TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  channel    TEXT NOT NULL,
+  role       TEXT NOT NULL,   -- user | assistant | system
+  content    TEXT NOT NULL,
+  run_id     TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS chat_messages_session ON chat_messages (session_id, created_at);
 CREATE VIRTUAL TABLE IF NOT EXISTS artifacts_fts USING fts5(
   id UNINDEXED, name, rel_path, tags, tokenize = 'unicode61'
 );
@@ -231,6 +241,62 @@ function toFtsQuery(input: string): string {
     .filter(Boolean);
   if (terms.length === 0) return '';
   return terms.map((term) => `"${term}"*`).join(' ');
+}
+
+// --- web chat messages (LEO-236) --------------------------------------------
+
+export interface ChatMessageRow {
+  id: string;
+  session_id: string;
+  channel: string;
+  role: string;
+  content: string;
+  run_id: string | null;
+  created_at: string;
+}
+
+export interface ChatSessionSummaryRow {
+  session_id: string;
+  channel: string;
+  messages: number;
+  last_at: string;
+  first_user_content: string | null;
+}
+
+export function dbInsertChatMessage(row: ChatMessageRow): void {
+  getDb()
+    .prepare(
+      'INSERT INTO chat_messages (id, session_id, channel, role, content, run_id, created_at) VALUES (@id, @session_id, @channel, @role, @content, @run_id, @created_at)',
+    )
+    .run(row);
+}
+
+export function dbListChatMessages(sessionId: string, limit = 500): ChatMessageRow[] {
+  return getDb()
+    .prepare(
+      'SELECT id, session_id, channel, role, content, run_id, created_at FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC LIMIT ?',
+    )
+    .all(sessionId, limit) as ChatMessageRow[];
+}
+
+/** One row per session for the channel, with message count and a title seed. */
+export function dbListChatSessions(channel: string, limit = 100): ChatSessionSummaryRow[] {
+  return getDb()
+    .prepare(
+      `SELECT m.session_id AS session_id,
+              m.channel AS channel,
+              COUNT(*) AS messages,
+              MAX(m.created_at) AS last_at,
+              (SELECT content FROM chat_messages u
+                 WHERE u.session_id = m.session_id AND u.role = 'user'
+                 ORDER BY u.created_at ASC, u.rowid ASC LIMIT 1) AS first_user_content
+         FROM chat_messages m
+        WHERE m.channel = ?
+        GROUP BY m.session_id
+        ORDER BY last_at DESC
+        LIMIT ?`,
+    )
+    .all(channel, limit) as ChatSessionSummaryRow[];
 }
 
 // --- one-time migration from the legacy JSON files --------------------------

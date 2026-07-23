@@ -16,6 +16,7 @@ import { sendFeishuMessage } from '../connectors/lark-cli.js';
 import { getLaunchAgentStatus, installLaunchAgent, uninstallLaunchAgent } from '../service/launchd.js';
 import { runCommand } from '../utils/command.js';
 import { appendUiLog, clearUiLogs, readUiLogs } from '../storage/ui-log.js';
+import { appVersion } from '../utils/version.js';
 import { startDecisionOnboarding } from '../decision/onboarding.js';
 import { ensureDecisionPolicyFiles } from '../decision/policy.js';
 import { collectProgressCandidates, formatProgressCandidates } from '../progress/capture.js';
@@ -44,6 +45,15 @@ import {
   type Role,
 } from './auth.js';
 import { PLATFORM_PAGES, renderLoginPage, renderPlatformPage, type PageContext } from './pages.js';
+import {
+  createWebChatSession,
+  isWebChatTurnAllowed,
+  listWebChatMessages,
+  listWebChatSessions,
+  runWebChatTurn,
+  stopWebChatSession,
+  type WebChatEvent,
+} from './chat.js';
 import { runManager } from '../service/run-manager.js';
 import { scanAndIndex } from '../storage/artifacts.js';
 import { listRecentWorkflowRuns, markWorkflowRunFailed } from '../workflows/run-ledger.js';
@@ -68,6 +78,7 @@ const ENV_KEYS = [...PLAIN_ENV_KEYS, ...SECRET_ENV_KEYS];
 // and it is written into ui.json (for mac-companion) and injected into the served HTML.
 let runtimeToken = '';
 const HTML_TOKEN_PLACEHOLDER = '__UI_TOKEN_PLACEHOLDER__';
+const HTML_VERSION_PLACEHOLDER = '__UI_VERSION_PLACEHOLDER__';
 const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
 
 function extractHostname(hostHeader: string | undefined): string {
@@ -330,6 +341,13 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
     if (request.method === 'POST' && url.pathname === '/api/artifacts/reindex') return sendJson(response, reindexArtifacts());
     if (request.method === 'POST' && url.pathname === '/api/admin/users') return sendJson(response, adminUsers(auth, await readJson(request)));
 
+    // Web console chat (LEO-236).
+    if (request.method === 'GET' && url.pathname === '/api/chat/sessions') return sendJson(response, chatSessions(options));
+    if (request.method === 'POST' && url.pathname === '/api/chat/session') return sendJson(response, chatCreateSession(options));
+    if (request.method === 'GET' && url.pathname === '/api/chat/messages') return sendJson(response, chatMessages(url));
+    if (request.method === 'POST' && url.pathname === '/api/chat/stop') return sendJson(response, await chatStop(await readJson(request)));
+    if (request.method === 'POST' && url.pathname === '/api/chat/send') return handleChatSend(request, response, options, auth);
+
     if (request.method === 'GET' && url.pathname === '/') return send(response, 200, renderHtml(), 'text/html; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/assets/app.css') return send(response, 200, CSS, 'text/css; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/assets/app.js') return send(response, 200, JS, 'application/javascript; charset=utf-8');
@@ -387,7 +405,15 @@ function isWriteRequest(method: string | undefined): boolean {
 }
 
 // Members may only trigger these write endpoints; everything else is admin-only.
-const MEMBER_WRITE_WHITELIST = new Set(['/api/today/todo-feedback']);
+// Chat send/session/stop are whitelisted so members can hold a conversation; the
+// per-turn access policy inside the chat controller still rejects over-privileged
+// (durable-write / free-form agent) turns for the member role.
+const MEMBER_WRITE_WHITELIST = new Set([
+  '/api/today/todo-feedback',
+  '/api/chat/session',
+  '/api/chat/send',
+  '/api/chat/stop',
+]);
 function isMemberWriteWhitelisted(pathname: string): boolean {
   return MEMBER_WRITE_WHITELIST.has(pathname);
 }
@@ -581,6 +607,85 @@ function adminUsers(auth: AuthContext, body: unknown): Record<string, unknown> {
     return { ok: false, error: `Unknown action: ${action}` };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+// --- web console chat (LEO-236) ---------------------------------------------
+
+function loadRuntimeConfig(options: UiServerOptions): AppConfig {
+  const env = readEnvFile(options.envPath);
+  applyEnv(env);
+  return loadConfig(options.configPath);
+}
+
+function chatSessions(options: UiServerOptions): Record<string, unknown> {
+  return { ok: true, sessions: listWebChatSessions(loadRuntimeConfig(options)) };
+}
+
+function chatCreateSession(options: UiServerOptions): Record<string, unknown> {
+  return { ok: true, session: createWebChatSession(loadRuntimeConfig(options)) };
+}
+
+function chatMessages(url: URL): Record<string, unknown> {
+  const sessionId = (url.searchParams.get('session') || '').trim();
+  if (!sessionId) return { ok: false, error: 'session is required' };
+  return { ok: true, messages: listWebChatMessages(sessionId) };
+}
+
+async function chatStop(body: unknown): Promise<Record<string, unknown>> {
+  const sessionId = String(readRecord(body).session || '').trim();
+  if (!sessionId) return { ok: false, error: 'session is required' };
+  return { ok: true, stopped: await stopWebChatSession(sessionId) };
+}
+
+/**
+ * Streams a chat turn to the browser over SSE. Members are pre-checked so an
+ * over-privileged (free-form / durable-write) turn is rejected with 403 before
+ * the stream opens; allowed turns run through the shared agent-mode + command
+ * backends and forward progress + reply events as they happen.
+ */
+async function handleChatSend(
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+  options: UiServerOptions,
+  auth: AuthContext,
+): Promise<void> {
+  const body = readRecord(await readJson(request));
+  const sessionId = String(body.session || '').trim();
+  const text = String(body.text || '');
+  if (!sessionId || !text.trim()) return sendJson(response, { ok: false, error: 'session and text are required' }, 400);
+
+  const config = loadRuntimeConfig(options);
+  const allowed = isWebChatTurnAllowed(config, auth.role, text);
+  if (!allowed.ok) return sendJson(response, { ok: false, error: `权限不足：${allowed.reason}` }, 403);
+
+  response.writeHead(200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-store',
+    connection: 'keep-alive',
+    'x-content-type-options': 'nosniff',
+  });
+  const write = (event: WebChatEvent): void => {
+    if (!response.writableEnded) response.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+  // Heartbeat comments keep intermediaries from closing an idle stream while a
+  // long codex turn is running.
+  const heartbeat = setInterval(() => {
+    if (!response.writableEnded) response.write(': ping\n\n');
+  }, 15_000);
+  // A client disconnect (navigation, or the Stop button aborting the fetch)
+  // terminates the in-flight run for this session.
+  request.on('close', () => {
+    void stopWebChatSession(sessionId);
+  });
+
+  try {
+    await runWebChatTurn({ config, sessionId, role: auth.role, text, onEvent: write });
+  } catch (error) {
+    write({ type: 'error', message: error instanceof Error ? error.message : String(error) });
+  } finally {
+    clearInterval(heartbeat);
+    if (!response.writableEnded) response.end();
   }
 }
 
@@ -1431,7 +1536,10 @@ function sendJson(response: http.ServerResponse, body: unknown, status = 200): v
 function renderHtml(): string {
   // Inject the current runtime token so any local page load (CLI open, mac-companion open,
   // manual navigation) can authenticate its /api calls without a query string.
-  return HTML.split(HTML_TOKEN_PLACEHOLDER).join(runtimeToken);
+  return HTML.split(HTML_TOKEN_PLACEHOLDER)
+    .join(runtimeToken)
+    .split(HTML_VERSION_PLACEHOLDER)
+    .join(appVersion());
 }
 
 function send(response: http.ServerResponse, status: number, body: string, contentType: string): void {
@@ -2007,6 +2115,8 @@ npm run service:install</code></pre>
       </section>
     </main>
 
+    <footer class="appfoot">Daily OS Feishu · v__UI_VERSION_PLACEHOLDER__</footer>
+
     <script>window.__UI_TOKEN__ = '__UI_TOKEN_PLACEHOLDER__';</script>
     <script src="/assets/app.js"></script>
   </body>
@@ -2098,6 +2208,7 @@ h1 { font-size: 1.25rem; font-weight: 700; }
 h2 { font-size: 1rem; }
 h3 { font-size: .95rem; }
 p, .hint { color: var(--muted); font-size: .85rem; }
+.appfoot { padding: 12px 20px; color: var(--muted); font-size: .78rem; text-align: center; }
 code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: .82em;

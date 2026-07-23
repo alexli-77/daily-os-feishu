@@ -102,3 +102,8 @@ rm -rf data.bad config.bad memory-vault.bad
 - **数据可回滚**：升级前的 `tar` 备份是唯一可信恢复点；scheduler 的 fired 状态
   （`data/memory/scheduler-state.json`）也在其中，恢复后当天不会重复触发。
 - **配置随卷走**：`config.yaml` 在挂载卷里，回滚数据时一并回到旧配置。
+
+> 备份/恢复已脚本化：`./scripts/backup.sh`（停服后跑，SQLite 走 `.backup` 一致性快照）
+> 与 `./scripts/restore.sh <archive> --force`（旧目录移到 `*.pre-restore-*`，可回退）。
+> 首次交付到干净 Linux 机器的整链验收,见
+> [first-customer-acceptance.md](first-customer-acceptance.md)（30 分钟跑通清单）。
