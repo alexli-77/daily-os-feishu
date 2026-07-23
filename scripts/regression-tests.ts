@@ -100,6 +100,8 @@ try {
     'scripts/tests/scheduler-port.test.ts',
     'scripts/tests/sync-drift.test.ts',
     'scripts/tests/sqlite-store.test.ts',
+    // LEO-235 first-customer delivery: onboarding wizard pure logic.
+    'scripts/tests/setup-wizard.test.ts',
   ]);
   console.log('Regression tests passed.');
 } finally {

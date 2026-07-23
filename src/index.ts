@@ -32,7 +32,7 @@ async function main(): Promise<void> {
   const { command, subcommand } = options;
 
   if (command === 'setup') {
-    setup();
+    await setup();
     return;
   }
   if (command === 'help' || command === '--help' || command === '-h') usage(0);
@@ -219,6 +219,7 @@ interface CliOptions {
   host: string;
   port: number;
   openUi: boolean;
+  noWizard: boolean;
 }
 
 function parseArgs(args: string[]): CliOptions {
@@ -229,6 +230,7 @@ function parseArgs(args: string[]): CliOptions {
   let host = process.env.DAILY_OS_UI_HOST || '127.0.0.1';
   let port = Number(process.env.DAILY_OS_UI_PORT || 14573);
   let openUi = true;
+  let noWizard = false;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -236,6 +238,8 @@ function parseArgs(args: string[]): CliOptions {
       send = false;
     } else if (arg === '--no-open') {
       openUi = false;
+    } else if (arg === '--no-wizard') {
+      noWizard = true;
     } else if (arg === '--host') {
       host = requireValue(args, ++index, '--host');
     } else if (arg.startsWith('--host=')) {
@@ -270,6 +274,7 @@ function parseArgs(args: string[]): CliOptions {
     host,
     port,
     openUi,
+    noWizard,
   };
 }
 
@@ -299,10 +304,16 @@ async function waitForShutdown(stop: () => Promise<void>): Promise<void> {
   await stop();
 }
 
-function setup(): void {
+async function setup(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   ensureLocalSetup(options.configPath, options.envPath);
-  console.log('已创建本地 .env、config/config.yaml 和 data 目录。请先编辑配置，再运行 doctor。');
+  const { isInteractive, runSetupWizard } = await import('./cli/setup-wizard.js');
+  if (options.noWizard || !isInteractive()) {
+    console.log('已创建本地 .env、config/config.yaml 和 data 目录。请先编辑配置，再运行 doctor。');
+    console.log('（在交互式终端里运行 `npm run setup` 可进入首次配置向导。）');
+    return;
+  }
+  await runSetupWizard({ configPath: options.configPath, envPath: options.envPath });
 }
 
 function ensureLocalSetup(configPath = 'config/config.yaml', envPath = '.env'): void {
@@ -326,7 +337,7 @@ function usage(code: number): never {
 
 Commands:
   start              Start UI, scheduler, and Feishu interaction if enabled
-  setup              Create local config files and data directories
+  setup              First-run wizard (admin password, LLM BYOK, optional Feishu). Seeds files only with --no-wizard or no TTY.
   doctor             Check local dependencies and required env vars
   collect            Print collected evidence as JSON
   chrome collect     Refresh local Chrome tab/status snapshots
@@ -351,6 +362,7 @@ Options:
   --host <host>      Host for the local UI, default 127.0.0.1
   --port <port>      Port for the local UI, default 14573
   --no-open          Start the local UI without opening a browser
+  --no-wizard        Run setup as file-seeding only, skipping the interactive wizard
   --no-send          Generate workflow output without sending to Feishu
 `);
   process.exit(code);

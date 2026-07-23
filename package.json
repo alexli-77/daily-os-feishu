@@ -30,6 +30,8 @@
     "mac:companion:run": "bash scripts/build-mac-companion.sh --run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "privacy:scan": "bash scripts/privacy-scan.sh",
+    "backup": "bash scripts/backup.sh",
+    "restore": "bash scripts/restore.sh",
     "regression:test": "tsx scripts/regression-tests.ts",
     "license:check": "license-checker --production --excludePrivatePackages --onlyAllow \"MIT;ISC;Apache-2.0;BSD-2-Clause;BSD-3-Clause;0BSD;BSD;Unlicense;CC0-1.0;Python-2.0\"",
     "alpha:smoke": "bash scripts/alpha-smoke.sh",
