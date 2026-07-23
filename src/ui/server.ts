@@ -1566,6 +1566,7 @@ const HTML = String.raw`<!doctype html>
         <p id="paths"></p>
       </div>
       <div class="top-status">
+        <a class="top-link" href="/dashboard">Console &amp; Chat →</a>
         <span class="save-status" aria-live="polite"></span>
         <div class="status" id="summary-status" title="Local setup checks">Loading</div>
       </div>
@@ -2162,6 +2163,17 @@ body {
   justify-content: flex-end;
   gap: .75rem;
 }
+
+.top-link {
+  font-weight: 600;
+  text-decoration: none;
+  color: var(--accent, #0a7);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: .35rem .7rem;
+  white-space: nowrap;
+}
+.top-link:hover { background: var(--surface-2, #f2f4f7); }
 
 .save-status {
   color: var(--muted);

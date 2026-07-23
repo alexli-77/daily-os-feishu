@@ -17,20 +17,29 @@ import { addUser, findUser, setPassword } from '../ui/auth.js';
  * into the embedded SQLite account store via src/ui/auth.ts (addUser/setPassword).
  */
 
-export type LlmProviderChoice = 'anthropic' | 'openai';
+export type LlmProviderChoice = 'claude' | 'codex' | 'anthropic' | 'openai';
 
-/** The .env variable that carries the BYOK API key for the chosen provider. */
-export function apiKeyEnvVar(provider: LlmProviderChoice): 'ANTHROPIC_API_KEY' | 'OPENAI_API_KEY' {
-  return provider === 'anthropic' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY';
+export function isLlmProvider(value: string): value is LlmProviderChoice {
+  return value === 'claude' || value === 'codex' || value === 'anthropic' || value === 'openai';
+}
+
+/**
+ * The .env variable that carries the BYOK API key for the chosen provider, or
+ * null for subscription-CLI providers (claude / codex) which need no API key.
+ */
+export function apiKeyEnvVar(provider: LlmProviderChoice): 'ANTHROPIC_API_KEY' | 'OPENAI_API_KEY' | null {
+  if (provider === 'anthropic') return 'ANTHROPIC_API_KEY';
+  if (provider === 'openai') return 'OPENAI_API_KEY';
+  return null;
 }
 
 /**
  * Sensible default model per provider.
- * - anthropic: `default` resolves to claude-sonnet-5 in the agent, so keep it symbolic.
+ * - claude / codex / anthropic: `default` resolves to the agent's built-in model, keep it symbolic.
  * - openai: the model string is sent verbatim to the API, so a concrete id is required.
  */
 export function defaultModelFor(provider: LlmProviderChoice): string {
-  return provider === 'anthropic' ? 'default' : 'gpt-4o';
+  return provider === 'openai' ? 'gpt-4o' : 'default';
 }
 
 /**
@@ -71,6 +80,19 @@ export function updateLlmInYaml(yamlText: string, provider: LlmProviderChoice, m
     throw new Error('The `llm:` block is missing a `provider:` or `model:` key.');
   }
   return lines.join('\n');
+}
+
+/** Read the current `llm.provider` value from the config, or null if absent. */
+export function currentLlmProvider(yamlText: string): string | null {
+  const lines = yamlText.split('\n');
+  const start = lines.findIndex((line) => /^llm:\s*$/.test(line));
+  if (start === -1) return null;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (/^\S/.test(lines[index])) break;
+    const match = lines[index].match(/^\s*provider:\s*(?:"([^"]*)"|'([^']*)'|(\S+))/);
+    if (match) return ((match[1] ?? match[2] ?? match[3]) || '').trim() || null;
+  }
+  return null;
 }
 
 /** Read `.env`-style key/value pairs, ignoring comments and blank lines. */
@@ -222,21 +244,45 @@ async function runAdminStep(prompter: Prompter): Promise<void> {
 }
 
 async function runLlmStep(prompter: Prompter, options: WizardOptions): Promise<void> {
-  console.log('2) LLM provider + API key (BYOK)');
-  const providerAnswer = (await prompter.ask('   选择 provider [anthropic/openai] (默认 anthropic): '))
+  console.log('2) LLM provider');
+  const configText = fs.readFileSync(options.configPath, 'utf8');
+  const current = currentLlmProvider(configText);
+  const answer = (await prompter.ask(`   选择 provider [claude/codex/anthropic/openai]（回车保留当前 ${current ?? '未设置'}）: `))
     .trim()
     .toLowerCase();
-  const provider: LlmProviderChoice = providerAnswer === 'openai' ? 'openai' : 'anthropic';
+
+  // Empty keeps the current provider untouched — never clobber a working
+  // subscription-CLI setup (claude/codex) just because the user pressed enter.
+  if (!answer) {
+    console.log(`   保留当前 provider${current ? `: ${current}` : '（配置未改）'}。`);
+    console.log('');
+    return;
+  }
+  if (!isLlmProvider(answer)) {
+    console.log(`   无法识别 "${answer}"，配置未改（当前 ${current ?? '未设置'}）。`);
+    console.log('');
+    return;
+  }
+  const provider = answer;
+
+  const defaultModel = defaultModelFor(provider);
+  const modelAnswer = (await prompter.ask(`   模型 (回车用默认 ${defaultModel}): `)).trim();
+  const model = modelAnswer || defaultModel;
+  fs.writeFileSync(options.configPath, updateLlmInYaml(configText, provider, model), 'utf8');
+
   const envKey = apiKeyEnvVar(provider);
+  if (!envKey) {
+    // claude / codex authenticate via their subscription CLI — no API key needed.
+    console.log(`   已写入 llm.provider=${provider}, llm.model=${model}（订阅 CLI，无需 API key）。`);
+    console.log('');
+    return;
+  }
 
   const envText = fs.existsSync(options.envPath) ? fs.readFileSync(options.envPath, 'utf8') : '';
-  const currentEnv = parseEnv(envText);
-  const hasKey = Boolean(currentEnv[envKey]);
-
-  let keyPatch: Record<string, string> = {};
+  const hasKey = Boolean(parseEnv(envText)[envKey]);
+  const keyPatch: Record<string, string> = {};
   if (hasKey) {
-    const replace = await askYesNo(prompter, `   ${envKey} 已配置，是否覆盖？`, false);
-    if (replace) {
+    if (await askYesNo(prompter, `   ${envKey} 已配置，是否覆盖？`, false)) {
       const key = (await prompter.ask(`   粘贴新的 ${envKey}: `)).trim();
       if (key) keyPatch[envKey] = key;
     }
@@ -244,13 +290,6 @@ async function runLlmStep(prompter: Prompter, options: WizardOptions): Promise<v
     const key = (await prompter.ask(`   粘贴 ${envKey} (回车跳过，可稍后填入 .env): `)).trim();
     if (key) keyPatch[envKey] = key;
   }
-
-  const defaultModel = defaultModelFor(provider);
-  const modelAnswer = (await prompter.ask(`   模型 (回车用默认 ${defaultModel}): `)).trim();
-  const model = modelAnswer || defaultModel;
-
-  const configText = fs.readFileSync(options.configPath, 'utf8');
-  fs.writeFileSync(options.configPath, updateLlmInYaml(configText, provider, model), 'utf8');
 
   if (Object.keys(keyPatch).length > 0) {
     fs.writeFileSync(options.envPath, upsertEnv(envText, keyPatch), 'utf8');

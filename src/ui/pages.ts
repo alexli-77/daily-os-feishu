@@ -110,7 +110,7 @@ export function renderLoginPage(error?: string): string {
     <label>Username<input name="username" autocomplete="username" autofocus required /></label>
     <label>Password<input name="password" type="password" autocomplete="current-password" required /></label>
     <button type="submit">Sign in</button>
-    <p class="muted small">First run prints a generated <code>admin</code> password to the console and data/runtime/ui.json.</p>
+    <p class="muted small">Lost the password? Run <code>npm run admin:reset-password</code> (or <code>daily-os admin reset-password</code>) to set a new one, then sign in.</p>
   </form>
   <script>${LOGIN_JS}</script>
 </body>

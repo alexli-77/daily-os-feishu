@@ -57,6 +57,11 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === 'admin') {
+    await adminCommand(subcommand);
+    return;
+  }
+
   loadDotEnv(options.envPath);
   const config = loadConfig(options.configPath);
 
@@ -150,6 +155,32 @@ async function main(): Promise<void> {
     default:
       usage(command === 'help' ? 0 : 1);
   }
+}
+
+/**
+ * `admin reset-password` — set (or create) the console admin account with a fresh
+ * generated password. Only touches the account store (SQLite), never config/.env,
+ * so it is safe to run without disturbing the LLM provider (unlike the setup
+ * wizard). Recovery path when the first-run admin password was lost. (LEO-242)
+ */
+async function adminCommand(subcommand: string | undefined): Promise<void> {
+  if (subcommand !== 'reset-password') usage(1);
+  const crypto = await import('node:crypto');
+  const { findUser, addUser, setPassword } = await import('./ui/auth.js');
+  const password = crypto.randomBytes(12).toString('base64url');
+  if (findUser('admin')) {
+    setPassword('admin', password);
+    console.log('Reset password for the existing admin account.');
+  } else {
+    addUser('admin', password, 'admin');
+    console.log('Created a new admin account.');
+  }
+  console.log('');
+  console.log('  username: admin');
+  console.log(`  password: ${password}`);
+  console.log('');
+  console.log('Sign in at the console /login and change it. This only updates the');
+  console.log('account store — config and .env (including your LLM provider) are untouched.');
 }
 
 async function openExistingUi(): Promise<void> {
@@ -355,6 +386,7 @@ Commands:
   feedback poll      Poll Feishu for daily-os commands and feedback
   interaction feishu Run the Feishu websocket interaction layer
   onboarding start   Create or reuse the Feishu decision calibration chat
+  admin reset-password  Set a new console admin password (account store only)
 
 Options:
   --config <path>    Use a config file other than config/config.yaml
