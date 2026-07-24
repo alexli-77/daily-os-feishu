@@ -348,7 +348,10 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
     if (request.method === 'POST' && url.pathname === '/api/chat/stop') return sendJson(response, await chatStop(await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/chat/send') return handleChatSend(request, response, options, auth);
 
-    if (request.method === 'GET' && url.pathname === '/') return send(response, 200, renderHtml(), 'text/html; charset=utf-8');
+    // Homepage is the platform dashboard (where Chat lives). The legacy ops
+    // console (setup / sources / checks) stays reachable at /console. (LEO-241)
+    if (request.method === 'GET' && url.pathname === '/') return redirect(response, '/dashboard');
+    if (request.method === 'GET' && url.pathname === '/console') return send(response, 200, renderHtml(), 'text/html; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/assets/app.css') return send(response, 200, CSS, 'text/css; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/assets/app.js') return send(response, 200, JS, 'application/javascript; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/api/state') return sendJson(response, await buildState(options));
@@ -1566,6 +1569,7 @@ const HTML = String.raw`<!doctype html>
         <p id="paths"></p>
       </div>
       <div class="top-status">
+        <a class="top-link" href="/dashboard">Console &amp; Chat →</a>
         <span class="save-status" aria-live="polite"></span>
         <div class="status" id="summary-status" title="Local setup checks">Loading</div>
       </div>
@@ -2162,6 +2166,17 @@ body {
   justify-content: flex-end;
   gap: .75rem;
 }
+
+.top-link {
+  font-weight: 600;
+  text-decoration: none;
+  color: var(--accent, #0a7);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: .35rem .7rem;
+  white-space: nowrap;
+}
+.top-link:hover { background: var(--surface-2, #f2f4f7); }
 
 .save-status {
   color: var(--muted);

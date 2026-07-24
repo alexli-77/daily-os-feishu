@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import {
   apiKeyEnvVar,
   buildFeishuEnvPatch,
+  currentLlmProvider,
   defaultModelFor,
+  isLlmProvider,
   parseEnv,
   updateLlmInYaml,
   upsertEnv,
@@ -14,6 +16,7 @@ import {
 
 try {
   testProviderMapping();
+  testCurrentLlmProvider();
   testUpdateLlmScopedToBlock();
   testUpdateLlmPreservesCommentsAndOtherKeys();
   testUpdateLlmThrowsWhenBlockMissing();
@@ -28,11 +31,29 @@ try {
 function testProviderMapping(): void {
   assert.equal(apiKeyEnvVar('anthropic'), 'ANTHROPIC_API_KEY');
   assert.equal(apiKeyEnvVar('openai'), 'OPENAI_API_KEY');
-  // anthropic keeps the symbolic 'default' (agent maps it to claude-sonnet-5);
+  // Subscription-CLI providers have no BYOK key (LEO-243).
+  assert.equal(apiKeyEnvVar('claude'), null);
+  assert.equal(apiKeyEnvVar('codex'), null);
+  // anthropic/claude/codex keep the symbolic 'default' (agent maps it);
   // openai needs a concrete id because the string is sent to the API verbatim.
   assert.equal(defaultModelFor('anthropic'), 'default');
+  assert.equal(defaultModelFor('claude'), 'default');
+  assert.equal(defaultModelFor('codex'), 'default');
   assert.notEqual(defaultModelFor('openai'), 'default');
   assert.ok(defaultModelFor('openai').length > 0);
+  // isLlmProvider gates free-form input before it can clobber config.
+  assert.ok(isLlmProvider('claude') && isLlmProvider('codex') && isLlmProvider('anthropic') && isLlmProvider('openai'));
+  assert.equal(isLlmProvider('gpt-4o'), false);
+  assert.equal(isLlmProvider(''), false);
+}
+
+function testCurrentLlmProvider(): void {
+  const yaml = ['assistant:', '  name: "x"', 'llm:', '  provider: "claude" # comment', '  model: "default"', 'billing:', '  per_task_usd: 2', ''].join('\n');
+  assert.equal(currentLlmProvider(yaml), 'claude');
+  // No llm block -> null (caller then leaves config untouched).
+  assert.equal(currentLlmProvider('output:\n  feishu:\n    enabled: true\n'), null);
+  // Unquoted value is read too.
+  assert.equal(currentLlmProvider('llm:\n  provider: openai\n  model: gpt-4o\n'), 'openai');
 }
 
 function testUpdateLlmScopedToBlock(): void {

@@ -26,6 +26,7 @@
     "interaction:feishu": "tsx src/index.ts interaction feishu",
     "service:install": "tsx src/index.ts service install",
     "service:uninstall": "tsx src/index.ts service uninstall",
+    "admin:reset-password": "tsx src/index.ts admin reset-password",
     "mac:companion:build": "bash scripts/build-mac-companion.sh",
     "mac:companion:run": "bash scripts/build-mac-companion.sh --run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
