@@ -31,6 +31,7 @@ const NAV: Array<{ href: string; label: string }> = [
   { href: '/schedules', label: 'Schedules' },
   { href: '/runs', label: 'Runs' },
   { href: '/artifacts', label: 'Artifacts' },
+  { href: '/console', label: 'Config' },
 ];
 
 export function escapeHtml(value: unknown): string {

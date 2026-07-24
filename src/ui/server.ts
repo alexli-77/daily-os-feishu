@@ -348,7 +348,10 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
     if (request.method === 'POST' && url.pathname === '/api/chat/stop') return sendJson(response, await chatStop(await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/chat/send') return handleChatSend(request, response, options, auth);
 
-    if (request.method === 'GET' && url.pathname === '/') return send(response, 200, renderHtml(), 'text/html; charset=utf-8');
+    // Homepage is the platform dashboard (where Chat lives). The legacy ops
+    // console (setup / sources / checks) stays reachable at /console. (LEO-241)
+    if (request.method === 'GET' && url.pathname === '/') return redirect(response, '/dashboard');
+    if (request.method === 'GET' && url.pathname === '/console') return send(response, 200, renderHtml(), 'text/html; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/assets/app.css') return send(response, 200, CSS, 'text/css; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/assets/app.js') return send(response, 200, JS, 'application/javascript; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/api/state') return sendJson(response, await buildState(options));
