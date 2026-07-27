@@ -112,6 +112,7 @@ export function renderLoginPage(error?: string): string {
     <label>Password<input name="password" type="password" autocomplete="current-password" required /></label>
     <button type="submit">Sign in</button>
     <p class="muted small">Lost the password? Run <code>npm run admin:reset-password</code> (or <code>daily-os admin reset-password</code>) to set a new one, then sign in.</p>
+    <p class="muted small"><a href="/console">← Open the config console without signing in</a></p>
   </form>
   <script>${LOGIN_JS}</script>
 </body>
