@@ -46,7 +46,7 @@ export type ParsedDailyOsCommand =
   | { type: 'remember'; text: string }
   | { type: 'feedback'; text: string }
   | { type: 'revision_request'; workflow: WorkflowName; text: string }
-  | { type: 'workflow'; workflow: WorkflowName };
+  | { type: 'workflow'; workflow: WorkflowName; text?: string };
 
 export interface DailyOsCommandContext {
   config: AppConfig;
@@ -137,6 +137,17 @@ export function parseDailyOsCommand(text: string, prefix: string): ParsedDailyOs
     return { type: 'reject_policy_candidate', id, reason };
   }
   if (['calibrate', 'decision calibrate', '校准', '决策校准', '开始校准'].includes(lower)) return { type: 'calibrate' };
+  // Workflow with trailing guidance: `plan : 今天优先做X` records the note as a
+  // revision hint and runs the workflow in one turn (works on every channel).
+  const workflowTextPatterns: Array<[RegExp, WorkflowName]> = [
+    [/^(?:plan|daily plan|日计划|今日计划)\s*[:：]\s*(.+)$/i, 'daily_plan'],
+    [/^(?:review|daily review|日复盘|今日复盘)\s*[:：]\s*(.+)$/i, 'daily_review'],
+    [/^(?:weekly|weekly review|周复盘)\s*[:：]\s*(.+)$/i, 'weekly_review'],
+  ];
+  for (const [pattern, workflow] of workflowTextPatterns) {
+    const body = normalized.match(pattern)?.[1]?.trim();
+    if (body) return { type: 'workflow', workflow, text: body };
+  }
   if (/^(rerun\s+)?(plan|daily plan)$/.test(lower) || ['日计划', '今日计划', '重跑今日计划'].includes(normalized)) {
     return { type: 'workflow', workflow: 'daily_plan' };
   }
@@ -331,7 +342,12 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
     }
     case 'workflow': {
       const date = todayInTimezone(context.config);
-      await context.reply(`Running ${command.workflow.replaceAll('_', ' ')}...`);
+      if (command.text) {
+        // Trailing guidance rides along as a revision note so the run sees it.
+        appendDailyMemory(context.config, command.workflow, date, formatWorkflowRevisionMemoryNote(command.text));
+        appendFeedbackLog(context.config, command.text, { message_id: context.messageId, source: context.source, workflow: command.workflow });
+      }
+      await context.reply(`Running ${command.workflow.replaceAll('_', ' ')}${command.text ? '（已带上你的补充说明）' : ''}...`);
       const sendViaConfiguredOutput = (context.sendWorkflowOutput ?? false) && !context.sendWorkflowCard;
       const result = context.runWorkflowForCommand
         ? {
