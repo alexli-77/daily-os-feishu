@@ -349,7 +349,8 @@ function renderChat(ctx: PageContext): string {
     </aside>
     <div class="chat-main card">
       <div class="chat-head">
-        <div><h2 id="chat-title">Console assistant</h2><p class="muted small">${escapeHtml(roleHint)}</p></div>
+        <div><h2 id="chat-title">Console assistant</h2><p class="muted small">${escapeHtml(roleHint)}</p>
+        <p class="muted small">快捷指令：<code>plan</code> 今日安排 · <code>review</code> 今日复盘 · <code>biweekly</code> 双周复盘（跑完后 <code>写回预览</code> → <code>确认写回</code> 写飞书周表，<code>okr writeback</code> → <code>确认写回 okr</code> 写本地 OKR）</p></div>
         <a class="top-link" href="/console#guide">使用指南</a>
       </div>
       ${agentHint}
