@@ -444,16 +444,20 @@ async function runWritebackCommand(
   }
 
   if (command.target === 'okr') {
-    const preview = buildOkrWritebackPreview({ config, draft: latest.output });
+    const preview = buildOkrWritebackPreview({ config, draft: latest.output, inputPackPath: latest.inputPackPath });
     if (!preview.hasProgress) {
       await context.reply(`这份草稿里没有可写回的 KR 进度${preview.reason ? `：${preview.reason}` : '。'}`);
       return;
     }
+    const flaggedSection = preview.flaggedLines.length
+      ? ['', '⚠️ 需人工确认（不会写回，可在 OKR 编辑器手动修改）：', ...preview.flaggedLines.map((line) => `- ${line}`)]
+      : [];
     if (!command.confirm) {
       await context.reply(
         [
           `本地 OKR 写回预览（草稿 ${latest.mode}）：`,
-          ...preview.incrementLines.map((line) => `- ${line}`),
+          ...(preview.incrementLines.length ? preview.incrementLines.map((line) => `- ${line}`) : ['（没有通过校验的增量）']),
+          ...flaggedSection,
           ...(preview.skipped.length ? ['', '跳过：', ...preview.skipped.map((item) => `- ${item.krId}：${item.reason}`)] : []),
           '',
           '确认无误后发送 `确认写回 okr` 才会修改本地 OKR 文件。',
@@ -461,13 +465,21 @@ async function runWritebackCommand(
       );
       return;
     }
-    const { outcome, incrementLines } = executeConfirmedOkrWriteback({ config, draft: latest.output, date: todayInTimezone(config) });
+    const { outcome, incrementLines, flaggedLines } = executeConfirmedOkrWriteback({
+      config,
+      draft: latest.output,
+      date: todayInTimezone(config),
+      inputPackPath: latest.inputPackPath,
+    });
     const failedLines = outcome.results.filter((entry) => !entry.ok).map((entry) => `- ${entry.krId}：${entry.reason || '写回失败'}`);
     await context.reply(
       [
         `已写回本地 OKR：成功 ${outcome.succeeded} 条，失败 ${outcome.failed} 条。`,
         outcome.historyAppended ? `滚动历史新增 ${outcome.historyAppended} 行。` : '',
         incrementLines.length ? ['', '进度增量：', ...incrementLines.map((line) => `- ${line}`)].join('\n') : '',
+        flaggedLines.length
+          ? ['', '⚠️ 以下 KR 未写回（需人工确认，可在 OKR 编辑器手动修改）：', ...flaggedLines.map((line) => `- ${line}`)].join('\n')
+          : '',
         failedLines.length ? ['', '失败明细：', ...failedLines].join('\n') : '',
       ]
         .filter(Boolean)

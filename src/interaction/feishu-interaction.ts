@@ -1259,7 +1259,12 @@ async function handleSkillCardAction(input: {
     }
     try {
       const date = todayInTimezone(input.config);
-      const { outcome, incrementLines } = executeConfirmedOkrWriteback({ config: input.config, draft: run.output, date });
+      const { outcome, incrementLines, flaggedLines } = executeConfirmedOkrWriteback({
+        config: input.config,
+        draft: run.output,
+        date,
+        inputPackPath: run.inputPackPath,
+      });
       const failedLines = outcome.results.filter((entry) => !entry.ok).map((entry) => `- ${entry.krId}：${entry.reason || '写回失败'}`);
       await input.channel.send(
         input.event.chatId,
@@ -1268,6 +1273,7 @@ async function handleSkillCardAction(input: {
             `已写回本地 OKR：成功 ${outcome.succeeded} 条，失败 ${outcome.failed} 条。`,
             outcome.historyAppended ? `滚动历史新增 ${outcome.historyAppended} 行。` : '',
             incrementLines.length ? ['', '进度增量：', ...incrementLines.map((line) => `- ${line}`)].join('\n') : '',
+            flaggedLines.length ? ['', '⚠️ 以下 KR 未写回（证据未通过校验，需人工确认）：', ...flaggedLines.map((line) => `- ${line}`)].join('\n') : '',
             failedLines.length ? ['', '失败明细：', ...failedLines].join('\n') : '',
           ]
             .filter(Boolean)
@@ -1599,7 +1605,7 @@ async function sendSkillCardOutput(config: AppConfig, text: string, result: Skil
 async function maybeSendOkrWritebackCard(config: AppConfig, result: SkillRunResult, source: string): Promise<void> {
   if (result.mode !== 'biweekly') return;
   try {
-    const preview = buildOkrWritebackPreview({ config, draft: result.output });
+    const preview = buildOkrWritebackPreview({ config, draft: result.output, inputPackPath: result.inputPackPath });
     if (!preview.hasProgress) return;
     await sendFeishuCard(
       config,
@@ -1609,9 +1615,9 @@ async function maybeSendOkrWritebackCard(config: AppConfig, result: SkillRunResu
         ...(result.runId ? { runId: result.runId } : {}),
         preview,
       }),
-      preview.incrementLines.join('\n'),
+      [...preview.incrementLines, ...preview.flaggedLines.map((line) => `⚠️ ${line}`)].join('\n'),
     );
-    console.log(`[interaction] sent okr-writeback-card source=${source}; skill=${result.skillId}; krs=${preview.matched.length}`);
+    console.log(`[interaction] sent okr-writeback-card source=${source}; skill=${result.skillId}; krs=${preview.matched.length}; flagged=${preview.flagged.length}`);
   } catch (error) {
     console.warn(`[interaction] okr-writeback-card skipped: ${error instanceof Error ? error.message : String(error)}`);
   }
