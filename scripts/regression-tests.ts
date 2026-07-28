@@ -108,6 +108,8 @@ try {
     'scripts/tests/writeback-command.test.ts',
     // LEO-248 write-back guardrails: evidence back-check + big-jump gating.
     'scripts/tests/okr-writeback-guardrails.test.ts',
+    // Web-chat bare keywords / aliases incl. trailing text (regressed once).
+    'scripts/tests/keyword-commands.test.ts',
   ]);
   console.log('Regression tests passed.');
 } finally {

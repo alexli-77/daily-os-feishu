@@ -156,9 +156,20 @@ const COMMAND_ALIASES = new Map<string, string>([
 
 export function autoPrefixCommand(text: string, prefix: string): string {
   const trimmed = text.trim();
-  const alias = COMMAND_ALIASES.get(trimmed.toLowerCase());
-  if (alias) return `${prefix} ${alias}`;
+  const exactAlias = COMMAND_ALIASES.get(trimmed.toLowerCase());
+  if (exactAlias) return `${prefix} ${exactAlias}`;
   if (BARE_COMMAND_KEYWORDS.has(trimmed.toLowerCase())) return `${prefix} ${trimmed}`;
+  // Keyword with trailing text after a colon: `biweekly : 7.27 做了X` /
+  // `plan：今天优先Y`. The head must still be an exact keyword/alias, so
+  // free-form sentences are never hijacked.
+  const colon = trimmed.match(/^([^:：]+?)\s*[:：]\s*([\s\S]+)$/);
+  if (colon) {
+    const head = colon[1].trim().toLowerCase();
+    const rest = colon[2].trim();
+    const headAlias = COMMAND_ALIASES.get(head);
+    if (headAlias) return `${prefix} ${headAlias} : ${rest}`;
+    if (BARE_COMMAND_KEYWORDS.has(head)) return `${prefix} ${colon[1].trim()} : ${rest}`;
+  }
   return trimmed;
 }
 
