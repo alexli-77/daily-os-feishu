@@ -231,9 +231,14 @@ function overdueDays(dueDate: string, today: string): number {
  * carries its priority / due / state line. Degrades to the plain list when no
  * Linear evidence is available.
  */
-function renderDailyPlanTodoSummary(plan: DailyPlanTodoPlan, date?: string, evidence?: Evidence): string {
+function renderDailyPlanTodoSummary(plan: DailyPlanTodoPlan, date?: string, evidence?: Evidence, config?: AppConfig): string {
   const index = linearIssueIndex(evidence);
   const today = date || '';
+  const workspace = config?.sources.linear.workspace || '';
+  // Feishu card markdown supports **bold** and [links](url) — issue ids become
+  // clickable Linear links when a workspace slug is configured.
+  const issueRef = (identifier: string): string =>
+    workspace ? `[${identifier}](https://linear.app/${encodeURIComponent(workspace)}/issue/${identifier})` : identifier;
   const lines: string[] = [];
 
   if (today && index.size > 0) {
@@ -246,21 +251,21 @@ function renderDailyPlanTodoSummary(plan: DailyPlanTodoPlan, date?: string, evid
       urgent.forEach((issue, i) => {
         const days = overdueDays(issue.dueDate, today);
         const dueNote = days > 0 ? `已逾期 ${days} 天` : '今天截止';
-        lines.push(`${i + 1}. ${issue.title}（${issue.identifier}）`);
-        lines.push(`   截止 ${issue.dueDate}（${dueNote}）· ${priorityLabel(issue.priority)} · ${issue.stateName || '未完成'}`);
+        lines.push(`**${i + 1}. ${issue.title}**（${issueRef(issue.identifier)}）`);
+        lines.push(`　　截止 ${issue.dueDate}（**${dueNote}**）· ${priorityLabel(issue.priority)} · ${issue.stateName || '未完成'}`);
       });
-      lines.push('');
+      lines.push('', '---', '');
     }
   }
 
   lines.push('🟡 **今日待办**');
   for (const todo of plan.todos) {
-    lines.push(`${todo.rank}. ${todo.text}`);
+    lines.push(`**${todo.rank}. ${todo.text}**`);
     const issueId = todo.candidateId.startsWith('linear:') ? todo.candidateId.slice('linear:'.length) : '';
     const issue = issueId ? index.get(issueId) : undefined;
     if (issue) {
-      const due = issue.dueDate ? (today && issue.dueDate <= today ? `截止 ${issue.dueDate} 已逾期` : `截止 ${issue.dueDate}`) : '无截止';
-      lines.push(`   ${priorityLabel(issue.priority)} · ${issue.identifier} · ${due} · ${issue.stateName || '未完成'}`);
+      const due = issue.dueDate ? (today && issue.dueDate <= today ? `截止 ${issue.dueDate} **已逾期**` : `截止 ${issue.dueDate}`) : '无截止';
+      lines.push(`　　${priorityLabel(issue.priority)} · ${issueRef(issue.identifier)} · ${due} · ${issue.stateName || '未完成'}`);
     }
   }
   if (plan.note) lines.push('', `> ${plan.note}`);
@@ -328,7 +333,7 @@ function renderJsonGenerationFailureSummary(workflow: WorkflowName, driftLines: 
 export function formatWorkflowSummaryForFeishu(workflow: WorkflowName, date: string, content: string, evidence?: Evidence, config?: AppConfig): string {
   if (workflow === 'daily_plan') {
     const plan = parseDailyPlanTodoPlan(content);
-    if (plan) return renderDailyPlanTodoSummary(plan, date, evidence);
+    if (plan) return renderDailyPlanTodoSummary(plan, date, evidence, config);
     console.warn('[summary] daily_plan output was not LEO-209 todo JSON; falling back to legacy long-form extraction.');
   }
   if (workflow === 'daily_review') {
