@@ -350,7 +350,13 @@ function renderChat(ctx: PageContext): string {
     <div class="chat-main card">
       <div class="chat-head">
         <div><h2 id="chat-title">Console assistant</h2><p class="muted small">${escapeHtml(roleHint)}</p>
-        <p class="muted small">快捷指令：<code>plan</code> 今日安排 · <code>review</code> 今日复盘 · <code>biweekly</code> 双周复盘（跑完后 <code>写回预览</code> → <code>确认写回</code> 写飞书周表，<code>okr writeback</code> → <code>确认写回 okr</code> 写本地 OKR）</p></div>
+        <ul class="muted small chat-hint-list">
+          <li><code>plan</code> — 生成今日安排（可追加说明：<code>plan：今天优先做X</code>）</li>
+          <li><code>review</code> — 生成今日复盘 · <code>weekly</code> — 周复盘</li>
+          <li><code>biweekly</code> — 双周复盘（可追加：<code>biweekly：本期上下文</code>）</li>
+          <li>复盘后写回飞书周表：<code>写回预览</code> 先看内容 → <code>确认写回</code> 才写入</li>
+          <li>复盘后写回本地 OKR 进度：<code>okr writeback</code> 先看增量 → <code>确认写回 okr</code> 才写入</li>
+        </ul></div>
         <a class="top-link" href="/console#guide">使用指南</a>
       </div>
       ${agentHint}
@@ -848,6 +854,7 @@ button.danger{background:var(--danger);border-color:var(--danger)}
 .plan-rank{display:inline-block;min-width:18px;font-weight:600;color:var(--muted)}
 .plan-actions{justify-content:flex-end}
 .plan-toolbar{display:flex;justify-content:flex-end;margin-bottom:8px}
+.chat-hint-list{margin:6px 0 0;padding-left:16px;display:flex;flex-direction:column;gap:2px}
 .top-link{font-weight:600;text-decoration:none;color:var(--accent,#0a7);border:1px solid var(--border);border-radius:6px;padding:4px 10px;white-space:nowrap;font-size:13px}
 .top-link:hover{background:var(--surface-2)}
 .tag-link{text-decoration:none}
