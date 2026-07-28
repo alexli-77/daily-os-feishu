@@ -20,6 +20,8 @@ import { appVersion } from '../utils/version.js';
 import { startDecisionOnboarding } from '../decision/onboarding.js';
 import { ensureDecisionPolicyFiles } from '../decision/policy.js';
 import { readOkrEditorState, writeOkrFile } from '../okr/editor.js';
+import { normalizeOkrMarkdown } from '../okr/normalize.js';
+import type { OkrLevel } from '../okr/editor.js';
 import { collectProgressCandidates, formatProgressCandidates } from '../progress/capture.js';
 import { analyzeChatContext, formatChatContextAnalysis } from '../chat/context-analysis.js';
 import { readBackgroundSuggestionsState } from '../service/background-suggestions.js';
@@ -365,6 +367,7 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
     if (request.method === 'POST' && url.pathname === '/api/todo-inbox') return sendJson(response, await updateTodoInbox(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/decision-policy') return sendJson(response, await saveDecisionPolicy(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/okr') return sendJson(response, await saveOkr(options, await readJson(request)));
+    if (request.method === 'POST' && url.pathname === '/api/okr/format') return sendJson(response, formatOkr(await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/config') return sendJson(response, await saveConfig(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/env') return sendJson(response, await saveEnv(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/action') return sendJson(response, await runAction(options, await readJson(request)));
@@ -817,6 +820,13 @@ async function saveOkr(options: UiServerOptions, body: unknown): Promise<Record<
   const markdown = String(request.markdown ?? '');
   const result = writeOkrFile(config, level, markdown);
   return { ok: true, text: `Saved OKR: ${result.path}`, state: await buildState(options) };
+}
+
+function formatOkr(body: unknown): Record<string, unknown> {
+  const request = readRecord(body);
+  const level = String(request.level ?? '') as OkrLevel;
+  const markdown = String(request.markdown ?? '');
+  return { ok: true, formatted: normalizeOkrMarkdown(markdown, level) };
 }
 
 function isTodoInboxType(value: string): value is 'todo' | 'reminder' | 'time_boundary' | 'note' {
@@ -1802,6 +1812,7 @@ npm run service:install</code></pre>
               <div>
                 <h2>OKR</h2>
                 <p class="hint">编辑 5年 / 年度 / 本季 三层 OKR。Today 页与日计划从这里读取；填上真值后 Today 的 North Star 就不再是 "not found"。保存只写本地 markdown 文件。</p>
+                <p class="hint">不用手写表格：每个目标写一行（可带 P0/P1），KR 用 <code>-</code> 或 <code>*</code> 开头列在下面，点「整理格式」自动转成标准结构，检查后再 Save。</p>
                 <p class="hint" id="okr-dir"></p>
               </div>
               <div class="panel-actions">
@@ -1812,19 +1823,19 @@ npm run service:install</code></pre>
               <section class="decision-editor">
                 <div><h3>5年 North Star · north-star-okr.md</h3><p class="hint" id="okr-path-north-star"></p></div>
                 <textarea id="okr-md-north-star" spellcheck="false" placeholder="## Objective N1: 你的 5 年目标"></textarea>
-                <div class="panel-actions"><button type="button" data-action="okr_save_north-star">Save North Star</button></div>
+                <div class="panel-actions"><button type="button" class="secondary" data-action="okr_format_north-star">整理格式</button><button type="button" data-action="okr_save_north-star">Save North Star</button></div>
                 <p class="hint" id="okr-status-north-star"></p>
               </section>
               <section class="decision-editor">
                 <div><h3>年度 Annual · annual-okr.md</h3><p class="hint" id="okr-path-annual"></p></div>
                 <textarea id="okr-md-annual" spellcheck="false" placeholder="## Objective A1: 你的年度目标"></textarea>
-                <div class="panel-actions"><button type="button" data-action="okr_save_annual">Save Annual</button></div>
+                <div class="panel-actions"><button type="button" class="secondary" data-action="okr_format_annual">整理格式</button><button type="button" data-action="okr_save_annual">Save Annual</button></div>
                 <p class="hint" id="okr-status-annual"></p>
               </section>
               <section class="decision-editor">
                 <div><h3>本季 Current · current-okr.md</h3><p class="hint" id="okr-path-current"></p></div>
                 <textarea id="okr-md-current" spellcheck="false" placeholder="## Objective O1: 本季目标"></textarea>
-                <div class="panel-actions"><button type="button" data-action="okr_save_current">Save Current</button></div>
+                <div class="panel-actions"><button type="button" class="secondary" data-action="okr_format_current">整理格式</button><button type="button" data-action="okr_save_current">Save Current</button></div>
                 <p class="hint" id="okr-status-current"></p>
               </section>
             </div>
@@ -3182,6 +3193,16 @@ async function saveOkrFromPage(level) {
   showToast('OKR saved', 'success');
 }
 
+async function formatOkrFromPage(level) {
+  const markdown = value('okr-md-' + level);
+  const status = $('okr-status-' + level);
+  if (status) status.textContent = 'Formatting...';
+  const result = await post('/api/okr/format', { level: level, markdown: markdown });
+  if (result.formatted != null) set('okr-md-' + level, result.formatted);
+  if (status) status.textContent = '已整理为标准格式，请检查后点 Save 保存。';
+  showToast('OKR formatted', 'success');
+}
+
 function renderDecisionPolicy(policy) {
   if (!policy) return;
   set('decision-policy-md', policy.policyMd || '');
@@ -3461,6 +3482,18 @@ async function runAction(action) {
       const status = $('okr-status-' + level);
       if (status) status.textContent = message;
       showToast('OKR save failed: ' + message, 'error', false);
+    }
+    return;
+  }
+  if (action === 'okr_format_north-star' || action === 'okr_format_annual' || action === 'okr_format_current') {
+    const level = action.slice('okr_format_'.length);
+    try {
+      await formatOkrFromPage(level);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const status = $('okr-status-' + level);
+      if (status) status.textContent = message;
+      showToast('OKR format failed: ' + message, 'error', false);
     }
     return;
   }

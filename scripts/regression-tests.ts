@@ -102,6 +102,8 @@ try {
     'scripts/tests/sqlite-store.test.ts',
     // LEO-235 first-customer delivery: onboarding wizard pure logic.
     'scripts/tests/setup-wizard.test.ts',
+    // LEO-205 OKR editor: free-form -> loader-format normalizer.
+    'scripts/tests/okr-normalize.test.ts',
   ]);
   console.log('Regression tests passed.');
 } finally {
