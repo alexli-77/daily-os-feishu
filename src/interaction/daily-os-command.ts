@@ -439,7 +439,7 @@ async function runWritebackCommand(
     (command.target === 'okr' ? readLatestSkillRun(config, WRITEBACK_SKILL_ID, 'biweekly') : null) ||
     readLatestSkillRun(config, WRITEBACK_SKILL_ID);
   if (!latest) {
-    await context.reply('找不到可写回的复盘草稿。请先运行 `skills run weekly-review biweekly`。');
+    await context.reply(`找不到可写回的复盘草稿。请先运行 \`${context.prefix} skills run weekly-review biweekly\`。`);
     return;
   }
 
@@ -460,7 +460,7 @@ async function runWritebackCommand(
           ...flaggedSection,
           ...(preview.skipped.length ? ['', '跳过：', ...preview.skipped.map((item) => `- ${item.krId}：${item.reason}`)] : []),
           '',
-          '确认无误后发送 `确认写回 okr` 才会修改本地 OKR 文件。',
+          `确认无误后发送 \`${context.prefix} 确认写回 okr\` 才会修改本地 OKR 文件。`,
         ].join('\n'),
       );
       return;
@@ -506,7 +506,7 @@ async function runWritebackCommand(
         '待写入条目：',
         ...preview.items.map((item) => `- ${item.isMit ? '**MIT** ' : ''}${item.text} → ${item.targetRowLabel}`),
         '',
-        '确认无误后发送 `确认写回` 才会修改飞书文档。',
+        `确认无误后发送 \`${context.prefix} 确认写回\` 才会修改飞书文档。`,
       ].join('\n'),
     );
     return;
