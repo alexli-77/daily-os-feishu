@@ -19,6 +19,7 @@ import { appendUiLog, clearUiLogs, readUiLogs } from '../storage/ui-log.js';
 import { appVersion } from '../utils/version.js';
 import { startDecisionOnboarding } from '../decision/onboarding.js';
 import { ensureDecisionPolicyFiles } from '../decision/policy.js';
+import { readOkrEditorState, writeOkrFile } from '../okr/editor.js';
 import { collectProgressCandidates, formatProgressCandidates } from '../progress/capture.js';
 import { analyzeChatContext, formatChatContextAnalysis } from '../chat/context-analysis.js';
 import { readBackgroundSuggestionsState } from '../service/background-suggestions.js';
@@ -363,6 +364,7 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
     if (request.method === 'POST' && url.pathname === '/api/capture') return sendJson(response, await captureTodo(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/todo-inbox') return sendJson(response, await updateTodoInbox(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/decision-policy') return sendJson(response, await saveDecisionPolicy(options, await readJson(request)));
+    if (request.method === 'POST' && url.pathname === '/api/okr') return sendJson(response, await saveOkr(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/config') return sendJson(response, await saveConfig(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/env') return sendJson(response, await saveEnv(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/action') return sendJson(response, await runAction(options, await readJson(request)));
@@ -747,6 +749,7 @@ async function buildState(options: UiServerOptions): Promise<Record<string, unkn
     service: await getLaunchAgentStatus(),
     backgroundSuggestions: readBackgroundSuggestionsState(config),
     decisionPolicy: readDecisionPolicyState(config),
+    okr: readOkrEditorState(config),
     todoInbox: {
       enabled: config.todo_inbox.enabled,
       open: openTodoInboxItems(config),
@@ -803,6 +806,17 @@ async function saveDecisionPolicy(options: UiServerOptions, body: unknown): Prom
   fs.mkdirSync(path.dirname(files.notesPath), { recursive: true });
   fs.writeFileSync(files.notesPath, markdown, 'utf8');
   return { ok: true, text: `Saved decision policy notes: ${files.notesPath}`, state: await buildState(options) };
+}
+
+async function saveOkr(options: UiServerOptions, body: unknown): Promise<Record<string, unknown>> {
+  const request = readRecord(body);
+  const env = readEnvFile(options.envPath);
+  applyEnv(env);
+  const config = loadConfig(options.configPath);
+  const level = String(request.level ?? '');
+  const markdown = String(request.markdown ?? '');
+  const result = writeOkrFile(config, level, markdown);
+  return { ok: true, text: `Saved OKR: ${result.path}`, state: await buildState(options) };
 }
 
 function isTodoInboxType(value: string): value is 'todo' | 'reminder' | 'time_boundary' | 'note' {
@@ -1582,6 +1596,7 @@ const HTML = String.raw`<!doctype html>
         <button class="nav-button" data-section="guide">Guide</button>
         <button class="nav-button" data-section="todo">Todo Inbox</button>
         <button class="nav-button" data-section="decision">Decision Policy</button>
+        <button class="nav-button" data-section="okr">OKR</button>
         <button class="nav-button" data-section="setup">Setup</button>
         <button class="nav-button" data-section="sources">Sources</button>
         <button class="nav-button" data-section="workflows">Workflows</button>
@@ -1678,7 +1693,7 @@ const HTML = String.raw`<!doctype html>
                   <thead><tr><th>步骤</th><th>指令 / 位置</th><th>说明</th></tr></thead>
                   <tbody>
                     <tr><td>前置</td><td><code>memory-vault/10_OKR/*.md</code></td><td>north-star / annual / current 三层 OKR 需填真值；仍是占位 TODO 时 Today 页显示「not found」，也无法写回 KR。目前只能改文件，没有 UI 编辑器。</td></tr>
-                    <tr><td>触发</td><td><code>skills run weekly-review biweekly</code>（中文 <code>运行技能 weekly-review biweekly</code>）</td><td>在 Chat 或 Feishu 里发。也支持 <code>weekly</code> / <code>quarterly</code> 模式。</td></tr>
+                    <tr><td>触发</td><td><code>daily-os skills run weekly-review biweekly</code>（中文 <code>daily-os 运行技能 weekly-review biweekly</code>）</td><td>在 Chat 或 Feishu 里发。<strong>必须带 <code>daily-os</code> 前缀</strong>，否则会被当成自由对话。也支持 <code>weekly</code> / <code>quarterly</code> 模式。</td></tr>
                     <tr><td>看草稿</td><td>Chat / Feishu 卡片</td><td>草稿含「计划 vs 执行」复盘、下期安排，以及结构化的 KR 进度块。</td></tr>
                     <tr><td>确认写回</td><td>点卡片「确认写回 OKR」</td><td>确认后才更新对应 KR 的 Current / Progress；未确认不改任何文件。</td></tr>
                   </tbody>
@@ -1778,6 +1793,39 @@ npm run service:install</code></pre>
                   </div>
                 </div>
                 <div class="todo-list" id="todo-list"></div>
+              </section>
+            </div>
+          </section>
+
+          <section class="panel" id="section-okr">
+            <div class="panel-head">
+              <div>
+                <h2>OKR</h2>
+                <p class="hint">编辑 5年 / 年度 / 本季 三层 OKR。Today 页与日计划从这里读取；填上真值后 Today 的 North Star 就不再是 "not found"。保存只写本地 markdown 文件。</p>
+                <p class="hint" id="okr-dir"></p>
+              </div>
+              <div class="panel-actions">
+                <button type="button" class="secondary compact" data-action="okr_reload">Refresh</button>
+              </div>
+            </div>
+            <div class="decision-page">
+              <section class="decision-editor">
+                <div><h3>5年 North Star · north-star-okr.md</h3><p class="hint" id="okr-path-north-star"></p></div>
+                <textarea id="okr-md-north-star" spellcheck="false" placeholder="## Objective N1: 你的 5 年目标"></textarea>
+                <div class="panel-actions"><button type="button" data-action="okr_save_north-star">Save North Star</button></div>
+                <p class="hint" id="okr-status-north-star"></p>
+              </section>
+              <section class="decision-editor">
+                <div><h3>年度 Annual · annual-okr.md</h3><p class="hint" id="okr-path-annual"></p></div>
+                <textarea id="okr-md-annual" spellcheck="false" placeholder="## Objective A1: 你的年度目标"></textarea>
+                <div class="panel-actions"><button type="button" data-action="okr_save_annual">Save Annual</button></div>
+                <p class="hint" id="okr-status-annual"></p>
+              </section>
+              <section class="decision-editor">
+                <div><h3>本季 Current · current-okr.md</h3><p class="hint" id="okr-path-current"></p></div>
+                <textarea id="okr-md-current" spellcheck="false" placeholder="## Objective O1: 本季目标"></textarea>
+                <div class="panel-actions"><button type="button" data-action="okr_save_current">Save Current</button></div>
+                <p class="hint" id="okr-status-current"></p>
               </section>
             </div>
           </section>
@@ -2939,6 +2987,7 @@ function render() {
   }
   renderTodoInbox(openTodos);
   renderDecisionPolicy(state.decisionPolicy);
+  renderOkr(state.okr);
   set('env-CODEX_BIN', state.env.CODEX_BIN || 'codex');
   set('env-CODEX_HOME', state.env.CODEX_HOME || '');
   set('env-CLAUDE_BIN', state.env.CLAUDE_BIN || 'claude');
@@ -3109,6 +3158,28 @@ function renderTodoInbox(openTodos) {
       '</div>' +
     '</article>';
   }).join('');
+}
+
+function renderOkr(okr) {
+  if (!okr || !okr.files) return;
+  okr.files.forEach((file) => {
+    set('okr-md-' + file.level, file.markdown || '');
+    const pathEl = $('okr-path-' + file.level);
+    if (pathEl) pathEl.textContent = file.path || '';
+  });
+  const dirEl = $('okr-dir');
+  if (dirEl) dirEl.textContent = okr.dir ? 'OKR dir: ' + okr.dir : '';
+}
+
+async function saveOkrFromPage(level) {
+  const markdown = value('okr-md-' + level);
+  const status = $('okr-status-' + level);
+  if (status) status.textContent = 'Saving...';
+  const result = await post('/api/okr', { level: level, markdown: markdown });
+  if (result.state) state = result.state;
+  render();
+  if (status) status.textContent = result.text || 'Saved';
+  showToast('OKR saved', 'success');
 }
 
 function renderDecisionPolicy(policy) {
@@ -3373,6 +3444,23 @@ async function runAction(action) {
       const status = $('decision-policy-status');
       if (status) status.textContent = message;
       showToast('Decision policy save failed: ' + message, 'error', false);
+    }
+    return;
+  }
+  if (action === 'okr_reload') {
+    await loadState();
+    showToast('OKR reloaded', 'success');
+    return;
+  }
+  if (action === 'okr_save_north-star' || action === 'okr_save_annual' || action === 'okr_save_current') {
+    const level = action.slice('okr_save_'.length);
+    try {
+      await saveOkrFromPage(level);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const status = $('okr-status-' + level);
+      if (status) status.textContent = message;
+      showToast('OKR save failed: ' + message, 'error', false);
     }
     return;
   }
