@@ -123,13 +123,43 @@ export function deleteWebChatSession(config: AppConfig, sessionId: string): bool
  * Used by the HTTP layer to reject over-privileged turns with a clean 403 before
  * opening the SSE stream. Commands enforce their own control inside the run.
  */
+/**
+ * Bare keywords a web-chat user can type without the `daily-os` prefix — the
+ * console auto-completes them into full commands (typing "plan" should just
+ * work). Exact match only, so free-form sentences never get hijacked.
+ */
+const BARE_COMMAND_KEYWORDS = new Set([
+  'plan',
+  'review',
+  'weekly',
+  'progress',
+  'status',
+  'details',
+  'help',
+  '计划',
+  '复盘',
+  '周报',
+  '写回',
+  '写回预览',
+  '确认写回',
+  '确认写回 okr',
+  'okr writeback',
+  'okr 写回',
+]);
+
+export function autoPrefixCommand(text: string, prefix: string): string {
+  const trimmed = text.trim();
+  if (BARE_COMMAND_KEYWORDS.has(trimmed.toLowerCase())) return `${prefix} ${trimmed}`;
+  return trimmed;
+}
+
 export function isWebChatTurnAllowed(
   config: AppConfig,
   role: Role,
   text: string,
 ): { ok: true } | { ok: false; reason: string } {
   const access = mapWebRoleToAccess(role);
-  const command = parseDailyOsCommand(text, config.interaction.feishu.command_prefix);
+  const command = parseDailyOsCommand(autoPrefixCommand(text, config.interaction.feishu.command_prefix), config.interaction.feishu.command_prefix);
   if (command.type !== 'ignore') return { ok: true }; // command control enforced in handleDailyOsCommand
   const control = decideFeishuControl(config, access, {
     effect: agentModeControlEffect(config),
@@ -192,11 +222,13 @@ export async function runWebChatTurn(input: RunWebChatTurnInput): Promise<void> 
   // is recorded separately by that call under its own runId.
   recordUsage(runId, 'web_chat', config.llm.model || 'unknown', 0, 0, 0);
 
-  const command = parseDailyOsCommand(trimmed, config.interaction.feishu.command_prefix);
+  // Bare keywords ("plan") auto-complete into full commands ("daily-os plan").
+  const effective = autoPrefixCommand(trimmed, config.interaction.feishu.command_prefix);
+  const command = parseDailyOsCommand(effective, config.interaction.feishu.command_prefix);
 
   try {
     if (command.type !== 'ignore') {
-      await runCommandTurn({ config, session, access, sessionId, text: trimmed, runId, onEvent });
+      await runCommandTurn({ config, session, access, sessionId, text: effective, runId, onEvent });
     } else {
       await runAgentTurn({ config, session, access, sessionId, text: trimmed, runId, onEvent });
     }

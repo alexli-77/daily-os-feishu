@@ -13,6 +13,8 @@ import { runWorkflow } from '../workflows/run-workflow.js';
 import { todayInTimezone } from '../utils/date.js';
 import { pollFeishuFeedback } from '../feedback/feishu-feedback.js';
 import { sendFeishuMessage } from '../connectors/lark-cli.js';
+import { readLatestWorkflowOutput } from '../storage/memory.js';
+import { extractDailyPlanTodos, formatWorkflowSummaryForFeishu } from '../workflows/summary.js';
 import { getLaunchAgentStatus, installLaunchAgent, uninstallLaunchAgent } from '../service/launchd.js';
 import { runCommand } from '../utils/command.js';
 import { appendUiLog, clearUiLogs, readUiLogs } from '../storage/ui-log.js';
@@ -339,6 +341,7 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
 
     // Console API routes (auth + member gate already enforced above).
     if (request.method === 'POST' && url.pathname === '/api/today/todo-feedback') return sendJson(response, await todoFeedback(options, await readJson(request)));
+    if (request.method === 'POST' && url.pathname === '/api/today/resend') return sendJson(response, await resendLatestWorkflow(options));
     if (request.method === 'POST' && url.pathname === '/api/runs/cancel') return sendJson(response, await cancelRun(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/runs/rerun') return sendJson(response, await rerunWorkflow(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/schedules/backfill') return sendJson(response, await backfillSchedule(options, await readJson(request)));
@@ -525,6 +528,30 @@ function handleLogout(_request: http.IncomingMessage, response: http.ServerRespo
     'set-cookie': clearCookieHeader(),
   });
   response.end(JSON.stringify({ ok: true }));
+}
+
+/**
+ * Manually push the latest workflow output (plan/review) to the configured IM —
+ * the escape hatch when the automatic send failed or the run was send-less.
+ */
+async function resendLatestWorkflow(options: UiServerOptions): Promise<Record<string, unknown>> {
+  const env = readEnvFile(options.envPath);
+  applyEnv(env);
+  const config = loadConfig(options.configPath);
+  const latest = readLatestWorkflowOutput(config);
+  if (!latest) return { ok: false, error: '没有可发送的 workflow 产物。' };
+  if (!config.output.feishu.enabled) return { ok: false, error: 'output.feishu.enabled=false；未配置 IM 输出。' };
+  const todos = latest.workflow === 'daily_plan' ? extractDailyPlanTodos(latest.content) : [];
+  try {
+    await sendFeishuMessage(config, formatWorkflowSummaryForFeishu(latest.workflow, latest.date, latest.content, undefined, config), {
+      workflow: latest.workflow,
+      date: latest.date,
+      ...(todos.length ? { todos } : {}),
+    });
+  } catch (error) {
+    return { ok: false, error: `发送失败：${error instanceof Error ? error.message : String(error)}` };
+  }
+  return { ok: true, text: `已发送 ${latest.workflow}（${latest.date}）到飞书。` };
 }
 
 async function todoFeedback(options: UiServerOptions, body: unknown): Promise<Record<string, unknown>> {
@@ -2962,6 +2989,14 @@ document.querySelectorAll('.nav-button').forEach((button) => {
     if (button.dataset.section === 'logs') void loadLogs();
   });
 });
+
+// Deep-link a section via hash, e.g. /console#guide from the chat page.
+(() => {
+  const section = (location.hash || '').replace('#', '');
+  if (!section) return;
+  const target = document.querySelector('.nav-button[data-section="' + section + '"]');
+  if (target) target.click();
+})();
 
 document.querySelectorAll('[data-action]').forEach((button) => {
   button.addEventListener('click', () => runAction(button.dataset.action));
