@@ -4,6 +4,9 @@ import type { AppConfig } from '../config/schema.js';
 import type { Role } from './auth.js';
 import { listRecentWorkflowRuns, type WorkflowRunRecord } from '../workflows/run-ledger.js';
 import { openTodoInboxItems } from '../todo/inbox.js';
+import { readLatestWorkflowOutput } from '../storage/memory.js';
+import { extractDailyPlanTodos } from '../workflows/summary.js';
+import { todayInTimezone } from '../utils/date.js';
 import { readOkrSnapshot, type OkrObjective } from './okr-lite.js';
 import { readArtifactsIndex, findArtifactById, isPreviewableType, type ArtifactRecord } from '../storage/artifacts.js';
 import { runManager } from '../service/run-manager.js';
@@ -210,14 +213,14 @@ function renderToday(ctx: PageContext): string {
   </section>`;
 
   const okrChain = renderOkrColumn(okr?.current.objectives ?? []);
-  const todoCol = renderTodoColumn(ctx);
-  const signalCol = renderSignalColumn(ctx);
+  const planCol = renderPlanColumn(ctx);
+  const myTodoCol = renderMyTodoColumn(ctx);
 
   return `${northBar}
   <div class="three-col">
     <section class="card col"><h2>OKR chain</h2>${okrChain}</section>
-    <section class="card col"><h2>Today's todo</h2>${todoCol}</section>
-    <section class="card col"><h2>Signals</h2>${signalCol}</section>
+    <section class="card col"><h2>Today's plan</h2>${planCol}</section>
+    <section class="card col"><h2>My todos</h2>${myTodoCol}</section>
   </div>`;
 }
 
@@ -241,11 +244,44 @@ function renderOkrColumn(objectives: OkrObjective[]): string {
     .join('');
 }
 
-function renderTodoColumn(ctx: PageContext): string {
+/** Today's plan — the todos the daily_plan workflow generated (read-only view). */
+function renderPlanColumn(ctx: PageContext): string {
+  const { config } = ctx;
+  const latest = safe(() => readLatestWorkflowOutput(config), null);
+  if (!latest || latest.workflow !== 'daily_plan') {
+    return '<p class="muted">还没有今日 plan。在 Chat 里发 <code>daily-os plan</code>，或等定时任务生成。</p>';
+  }
+  const todos = safe(() => extractDailyPlanTodos(latest.content), []);
+  if (todos.length === 0) {
+    return '<p class="muted">最近一次 plan 没有解析出待办条目。</p>';
+  }
+  const today = safe(() => todayInTimezone(config), '');
+  const staleNote =
+    latest.date && today && latest.date !== today
+      ? `<p class="muted small">来自 ${escapeHtml(latest.date)} 的 plan（今天还没跑）。</p>`
+      : '';
+  const rows = todos
+    .map(
+      (todo) => `<li class="todo-item">
+        <div class="todo-text"><span class="plan-rank">${todo.rank}</span> ${escapeHtml(todo.text)}</div>
+        ${todo.candidateId ? `<div class="todo-meta"><span class="tag">${escapeHtml(todo.candidateId.replace(/^linear:/, ''))}</span></div>` : ''}
+      </li>`,
+    )
+    .join('');
+  return `${staleNote}<ul class="todo-list">${rows}</ul>`;
+}
+
+/** My todos — the user's own quick captures, with add / done / defer / delete. */
+function renderMyTodoColumn(ctx: PageContext): string {
   const { config } = ctx;
   const open = safe(() => openTodoInboxItems(config), []);
   const feedback = readTodoFeedback();
-  if (open.length === 0) return '<p class="muted">Todo inbox is empty.</p>';
+  const captureForm = `
+    <form class="inline-form todo-capture" data-post="/api/capture">
+      <input name="text" placeholder="记一条 todo…" autocomplete="off" required />
+      <button type="submit">Add</button>
+    </form>`;
+  if (open.length === 0) return `${captureForm}<p class="muted">还没有记录。</p>`;
   const rows = open
     .map((item) => {
       const fb = feedback.get(item.id);
@@ -256,35 +292,12 @@ function renderTodoColumn(ctx: PageContext): string {
         <div class="todo-actions">
           <button type="button" data-post="/api/today/todo-feedback" data-payload='${payload({ id: item.id, action: 'check' })}'>Done</button>
           <button type="button" class="secondary" data-post="/api/today/todo-feedback" data-payload='${payload({ id: item.id, action: 'defer' })}'>Defer</button>
+          <button type="button" class="secondary" data-post="/api/todo-inbox" data-payload='${payload({ id: item.id, status: 'deleted' })}'>Delete</button>
         </div>
       </li>`;
     })
     .join('');
-  return `<ul class="todo-list">${rows}</ul>`;
-}
-
-function renderSignalColumn(ctx: PageContext): string {
-  const { config } = ctx;
-  const runs = safe(() => listRecentWorkflowRuns(config, 20), []);
-  const failures = runs.filter((run) => run.status === 'failed');
-  const open = safe(() => openTodoInboxItems(config), []);
-  const stale = open.filter((item) => ageDays(item.created_at) >= 3);
-
-  const failureHtml = failures.length
-    ? `<ul class="signal-list">${failures
-        .slice(0, 6)
-        .map((run) => `<li class="signal error"><span>${escapeHtml(run.workflow)}</span><span class="muted small">${escapeHtml(shortTime(run.started_at))}</span></li>`)
-        .join('')}</ul>`
-    : '<p class="muted small">No recent workflow failures.</p>';
-
-  return `
-    <div class="signal-block"><h3>Recent failures (${failures.length})</h3>${failureHtml}</div>
-    <div class="signal-block"><h3>Todo pressure</h3>
-      <div class="stat-row">
-        <div class="stat"><span class="stat-num">${open.length}</span><span class="stat-label">open</span></div>
-        <div class="stat"><span class="stat-num">${stale.length}</span><span class="stat-label">3d+ stale</span></div>
-      </div>
-    </div>`;
+  return `${captureForm}<ul class="todo-list">${rows}</ul>`;
 }
 
 // --- chat (LEO-236) ---------------------------------------------------------
@@ -721,11 +734,6 @@ function shortTime(iso: string): string {
   return typeof iso === 'string' ? iso.slice(0, 16).replace('T', ' ') : '';
 }
 
-function ageDays(iso: string): number {
-  const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return 0;
-  return (Date.now() - t) / (24 * 60 * 60 * 1000);
-}
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -805,6 +813,9 @@ button.danger{background:var(--danger);border-color:var(--danger)}
 .bar>span{display:block;height:100%;background:var(--accent)}
 .todo-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
 .todo-item{border:1px solid var(--border);border-radius:10px;padding:10px}
+.plan-rank{display:inline-block;min-width:18px;font-weight:600;color:var(--muted)}
+.todo-capture{display:flex;gap:8px;margin-bottom:10px}
+.todo-capture input{flex:1;min-width:0}
 .todo-item.state-checked{opacity:.6}
 .todo-meta{display:flex;gap:8px;align-items:center;margin:6px 0}
 .todo-actions{display:flex;gap:8px}
