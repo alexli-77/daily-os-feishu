@@ -147,8 +147,17 @@ const BARE_COMMAND_KEYWORDS = new Set([
   'okr 写回',
 ]);
 
+/** Short aliases that expand into full command bodies (still prefixed). */
+const COMMAND_ALIASES = new Map<string, string>([
+  ['biweekly', 'skills run weekly-review biweekly'],
+  ['双周复盘', 'skills run weekly-review biweekly'],
+  ['quarterly', 'skills run weekly-review quarterly'],
+]);
+
 export function autoPrefixCommand(text: string, prefix: string): string {
   const trimmed = text.trim();
+  const alias = COMMAND_ALIASES.get(trimmed.toLowerCase());
+  if (alias) return `${prefix} ${alias}`;
   if (BARE_COMMAND_KEYWORDS.has(trimmed.toLowerCase())) return `${prefix} ${trimmed}`;
   return trimmed;
 }

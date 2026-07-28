@@ -179,8 +179,90 @@ function completedCandidateIdsFromEvidence(evidence?: Evidence): Set<string> {
   );
 }
 
-function renderDailyPlanTodoSummary(plan: DailyPlanTodoPlan): string {
-  const lines = ['**今日 todo：**', ...plan.todos.map((todo) => `${todo.rank}. ${todo.text}`)];
+interface LinearIssueBrief {
+  identifier: string;
+  title: string;
+  priority: number;
+  dueDate: string;
+  stateName: string;
+  stateType: string;
+}
+
+/** Index the linear evidence items by identifier for the plan briefing. */
+function linearIssueIndex(evidence?: Evidence): Map<string, LinearIssueBrief> {
+  const index = new Map<string, LinearIssueBrief>();
+  const data = evidence?.sources?.linear?.data as { items?: unknown[] } | undefined;
+  for (const raw of data?.items ?? []) {
+    if (!raw || typeof raw !== 'object') continue;
+    const item = raw as Record<string, unknown>;
+    if (typeof item.identifier !== 'string') continue;
+    const state = (item.state ?? {}) as Record<string, unknown>;
+    index.set(item.identifier, {
+      identifier: item.identifier,
+      title: typeof item.title === 'string' ? item.title : '',
+      priority: typeof item.priority === 'number' ? item.priority : 0,
+      dueDate: typeof item.dueDate === 'string' ? item.dueDate : '',
+      stateName: typeof state.name === 'string' ? state.name : '',
+      stateType: typeof state.type === 'string' ? state.type : '',
+    });
+  }
+  return index;
+}
+
+/** Linear priority number -> the P-label used in the briefing (1=Urgent -> P0). */
+function priorityLabel(priority: number): string {
+  if (priority === 1) return 'P0';
+  if (priority === 2) return 'P1';
+  if (priority === 3) return 'P2';
+  if (priority === 4) return 'P3';
+  return '—';
+}
+
+function overdueDays(dueDate: string, today: string): number {
+  const due = Date.parse(dueDate);
+  const now = Date.parse(today);
+  if (!Number.isFinite(due) || !Number.isFinite(now)) return 0;
+  return Math.floor((now - due) / (24 * 60 * 60 * 1000));
+}
+
+/**
+ * Two-part daily briefing: 🔴 overdue / due Linear issues that need immediate
+ * follow-up, then 🟡 today's ranked todos — each todo linked to a Linear issue
+ * carries its priority / due / state line. Degrades to the plain list when no
+ * Linear evidence is available.
+ */
+function renderDailyPlanTodoSummary(plan: DailyPlanTodoPlan, date?: string, evidence?: Evidence): string {
+  const index = linearIssueIndex(evidence);
+  const today = date || '';
+  const lines: string[] = [];
+
+  if (today && index.size > 0) {
+    const urgent = [...index.values()]
+      .filter((issue) => issue.dueDate && issue.dueDate <= today && issue.stateType !== 'completed' && issue.stateType !== 'canceled')
+      .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+      .slice(0, 5);
+    if (urgent.length > 0) {
+      lines.push('🔴 **需要立即跟进**');
+      urgent.forEach((issue, i) => {
+        const days = overdueDays(issue.dueDate, today);
+        const dueNote = days > 0 ? `已逾期 ${days} 天` : '今天截止';
+        lines.push(`${i + 1}. ${issue.title}（${issue.identifier}）`);
+        lines.push(`   截止 ${issue.dueDate}（${dueNote}）· ${priorityLabel(issue.priority)} · ${issue.stateName || '未完成'}`);
+      });
+      lines.push('');
+    }
+  }
+
+  lines.push('🟡 **今日待办**');
+  for (const todo of plan.todos) {
+    lines.push(`${todo.rank}. ${todo.text}`);
+    const issueId = todo.candidateId.startsWith('linear:') ? todo.candidateId.slice('linear:'.length) : '';
+    const issue = issueId ? index.get(issueId) : undefined;
+    if (issue) {
+      const due = issue.dueDate ? (today && issue.dueDate <= today ? `截止 ${issue.dueDate} 已逾期` : `截止 ${issue.dueDate}`) : '无截止';
+      lines.push(`   ${priorityLabel(issue.priority)} · ${issue.identifier} · ${due} · ${issue.stateName || '未完成'}`);
+    }
+  }
   if (plan.note) lines.push('', `> ${plan.note}`);
   lines.push('', '完成一条就点它下面的「✅ 完成」按钮；想调整点「我要调整」。');
   return trimSummary(lines.join('\n'), MAX_SUMMARY_CHARS);
@@ -246,7 +328,7 @@ function renderJsonGenerationFailureSummary(workflow: WorkflowName, driftLines: 
 export function formatWorkflowSummaryForFeishu(workflow: WorkflowName, date: string, content: string, evidence?: Evidence, config?: AppConfig): string {
   if (workflow === 'daily_plan') {
     const plan = parseDailyPlanTodoPlan(content);
-    if (plan) return renderDailyPlanTodoSummary(plan);
+    if (plan) return renderDailyPlanTodoSummary(plan, date, evidence);
     console.warn('[summary] daily_plan output was not LEO-209 todo JSON; falling back to legacy long-form extraction.');
   }
   if (workflow === 'daily_review') {
