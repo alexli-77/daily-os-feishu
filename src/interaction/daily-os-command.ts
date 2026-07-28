@@ -17,8 +17,10 @@ import { todayInTimezone } from '../utils/date.js';
 import { analyzeChatContext, formatChatContextAnalysis, type ChatAnalysisMode } from '../chat/context-analysis.js';
 import { formatRecentWorkflowRuns, listRecentWorkflowRuns } from '../workflows/run-ledger.js';
 import { markWorkflowRunFailed, markWorkflowRunSucceeded } from '../workflows/run-ledger.js';
-import { formatSkillList, runConfiguredSkill } from '../skills/runner.js';
+import { formatSkillList, readLatestSkillRun, runConfiguredSkill } from '../skills/runner.js';
 import type { SkillRunResult } from '../skills/runner.js';
+import { executeLifeReviewOsWriteback, prepareLifeReviewOsWriteback } from '../skills/life-review-os.js';
+import { buildOkrWritebackPreview, executeConfirmedOkrWriteback } from './okr-writeback-card.js';
 import { formatWorkflowRevisionMemoryNote } from './workflow-revision.js';
 import { handleTodoInboxCommand, parseTodoInboxCommand, type TodoInboxCommand } from '../todo/inbox.js';
 import { formatCalendarDraftForFeishu, runCalendarDraft, type CalendarDraftPeriod, type CalendarDraftResult } from '../calendar/bridge.js';
@@ -38,6 +40,7 @@ export type ParsedDailyOsCommand =
   | { type: 'calibrate' }
   | { type: 'skill_list' }
   | { type: 'skill_run'; skillId: string; mode?: string; text?: string }
+  | { type: 'writeback'; target: 'feishu' | 'okr'; confirm: boolean }
   | { type: 'calendar_draft'; period: CalendarDraftPeriod }
   | { type: 'todo_inbox'; command: TodoInboxCommand }
   | { type: 'remember'; text: string }
@@ -117,6 +120,8 @@ export function parseDailyOsCommand(text: string, prefix: string): ParsedDailyOs
   if (chatCommand) {
     return chatCommand;
   }
+  const writebackCommand = parseWritebackCommand(normalized);
+  if (writebackCommand) return writebackCommand;
   const skillCommand = parseSkillCommand(normalized);
   if (skillCommand) return skillCommand;
   const calendarCommand = parseCalendarCommand(normalized);
@@ -161,6 +166,9 @@ export function dailyOsStatusText(prefix: string, config?: AppConfig): string {
     `- ${prefix} chat [todo|review]`,
     `- ${prefix} skill list`,
     `- ${prefix} skill run <id>: <text>`,
+    `- ${prefix} writeback / 写回预览（预览最近一次复盘写回 Feishu Weekly）`,
+    `- ${prefix} 确认写回（确认后才修改飞书文档）`,
+    `- ${prefix} okr writeback / 确认写回 okr（本地 OKR 进度）`,
     `- ${prefix} 记到 todo：<text>`,
     `- ${prefix} 修改 todo：把“旧事项”改成“新事项”`,
     `- ${prefix} 完成 todo：<text>`,
@@ -238,6 +246,10 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
       } else {
         await context.reply(text);
       }
+      return;
+    }
+    case 'writeback': {
+      await runWritebackCommand(context, command);
       return;
     }
     case 'calendar_draft': {
@@ -399,6 +411,120 @@ function parseChatAnalysisCommand(text: string): ParsedDailyOsCommand | null {
   return { type: 'chat_analysis', ...(match[1] ? { mode: normalizeChatAnalysisMode(match[1]) } : {}) };
 }
 
+/**
+ * Write-back commands (LEO-247). The confirm cards only exist in Feishu, so web
+ * chat could run a biweekly review but never write it back. These text commands
+ * expose the same two-step flow (preview -> confirm) on every channel.
+ *
+ * Recognized (space-insensitive): `writeback` / `writeback preview` /
+ * `writeback confirm`, `okr writeback [confirm]`, and the Chinese
+ * `写回[预览]` / `确认写回` / `okr写回` / `确认写回okr`.
+ * Anything mentioning okr targets the local OKR files; otherwise the Feishu doc.
+ */
+const WRITEBACK_SKILL_ID = 'weekly-review';
+
+/**
+ * Two-step write-back over the most recent stored review draft, mirroring what
+ * the Feishu confirm cards do — preview first, and only write on an explicit
+ * confirm. Works on any channel because the underlying APIs are channel-neutral.
+ */
+async function runWritebackCommand(
+  context: DailyOsCommandContext,
+  command: { target: 'feishu' | 'okr'; confirm: boolean },
+): Promise<void> {
+  const config = context.config;
+  // The local-OKR increment only exists in biweekly drafts; the doc write-back
+  // accepts whatever the latest review run was.
+  const latest =
+    (command.target === 'okr' ? readLatestSkillRun(config, WRITEBACK_SKILL_ID, 'biweekly') : null) ||
+    readLatestSkillRun(config, WRITEBACK_SKILL_ID);
+  if (!latest) {
+    await context.reply('找不到可写回的复盘草稿。请先运行 `skills run weekly-review biweekly`。');
+    return;
+  }
+
+  if (command.target === 'okr') {
+    const preview = buildOkrWritebackPreview({ config, draft: latest.output });
+    if (!preview.hasProgress) {
+      await context.reply(`这份草稿里没有可写回的 KR 进度${preview.reason ? `：${preview.reason}` : '。'}`);
+      return;
+    }
+    if (!command.confirm) {
+      await context.reply(
+        [
+          `本地 OKR 写回预览（草稿 ${latest.mode}）：`,
+          ...preview.incrementLines.map((line) => `- ${line}`),
+          ...(preview.skipped.length ? ['', '跳过：', ...preview.skipped.map((item) => `- ${item.krId}：${item.reason}`)] : []),
+          '',
+          '确认无误后发送 `确认写回 okr` 才会修改本地 OKR 文件。',
+        ].join('\n'),
+      );
+      return;
+    }
+    const { outcome, incrementLines } = executeConfirmedOkrWriteback({ config, draft: latest.output, date: todayInTimezone(config) });
+    const failedLines = outcome.results.filter((entry) => !entry.ok).map((entry) => `- ${entry.krId}：${entry.reason || '写回失败'}`);
+    await context.reply(
+      [
+        `已写回本地 OKR：成功 ${outcome.succeeded} 条，失败 ${outcome.failed} 条。`,
+        outcome.historyAppended ? `滚动历史新增 ${outcome.historyAppended} 行。` : '',
+        incrementLines.length ? ['', '进度增量：', ...incrementLines.map((line) => `- ${line}`)].join('\n') : '',
+        failedLines.length ? ['', '失败明细：', ...failedLines].join('\n') : '',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    );
+    return;
+  }
+
+  if (!command.confirm) {
+    const preview = await prepareLifeReviewOsWriteback({
+      config,
+      skillId: WRITEBACK_SKILL_ID,
+      mode: latest.mode,
+      ...(latest.runId ? { runId: latest.runId } : {}),
+    });
+    await context.reply(
+      [
+        'Feishu Weekly 写回预览：',
+        `- 目标文档：${preview.target.docLabel}`,
+        `- 周列：${preview.target.weekLabel}`,
+        `- 任务区：${preview.target.taskHeader}`,
+        `- 方式：${preview.target.action === 'insert_columns' ? '插入新列' : '写入已有空列'}`,
+        '',
+        '待写入条目：',
+        ...preview.items.map((item) => `- ${item.isMit ? '**MIT** ' : ''}${item.text} → ${item.targetRowLabel}`),
+        '',
+        '确认无误后发送 `确认写回` 才会修改飞书文档。',
+      ].join('\n'),
+    );
+    return;
+  }
+  const result = await executeLifeReviewOsWriteback(config, WRITEBACK_SKILL_ID, latest.runId);
+  await context.reply(
+    [
+      result.alreadyWritten ? '该草稿此前已写回，未重复写入。' : '已写回 Feishu Weekly。',
+      `- 任务区：${result.taskHeader}`,
+      `- 写入 ${result.itemCount} 条${result.skippedCount ? `，跳过 ${result.skippedCount} 条` : ''}`,
+      result.insertedColumns ? '- 已插入新列' : '',
+    ]
+      .filter(Boolean)
+      .join('\n'),
+  );
+}
+
+function parseWritebackCommand(text: string): ParsedDailyOsCommand | null {
+  const compact = text.replace(/\s+/g, '').toLowerCase();
+  if (!/(writeback|写回)/.test(compact)) return null;
+  // Only accept the known shapes, so a sentence merely containing "写回" falls
+  // through to the agent instead of triggering a document write.
+  const recognized =
+    /^(okr)?writeback(preview|confirm)?(okr)?$/.test(compact) || /^(okr)?(确认)?写回(预览)?(okr)?$/.test(compact);
+  if (!recognized) return null;
+  const confirm = /(confirm|确认)/.test(compact);
+  // Default (no explicit verb) is the read-only preview.
+  return { type: 'writeback', target: compact.includes('okr') ? 'okr' : 'feishu', confirm };
+}
+
 function parseSkillCommand(text: string): ParsedDailyOsCommand | null {
   const normalized = text.replace(/\s+/g, ' ').trim();
   const lower = normalized.toLowerCase();
@@ -474,6 +600,9 @@ function commandEffect(command: ParsedDailyOsCommand): FeishuControlEffect {
     case 'skill_run':
     case 'calendar_draft':
       return 'workflow_trigger';
+    // Preview is read-only; confirming actually writes a doc / the OKR files.
+    case 'writeback':
+      return command.confirm ? 'memory_write' : 'read';
     case 'todo_inbox':
       return 'memory_write';
     case 'workflow':
