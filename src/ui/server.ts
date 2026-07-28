@@ -14,7 +14,7 @@ import { todayInTimezone } from '../utils/date.js';
 import { pollFeishuFeedback } from '../feedback/feishu-feedback.js';
 import { sendFeishuMessage } from '../connectors/lark-cli.js';
 import { readLatestWorkflowOutput } from '../storage/memory.js';
-import { extractDailyPlanTodos, formatWorkflowSummaryForFeishu } from '../workflows/summary.js';
+import { buildDailyPlanTable, extractDailyPlanTodos, formatWorkflowSummaryForFeishu } from '../workflows/summary.js';
 import { getLaunchAgentStatus, installLaunchAgent, uninstallLaunchAgent } from '../service/launchd.js';
 import { runCommand } from '../utils/command.js';
 import { appendUiLog, clearUiLogs, readUiLogs } from '../storage/ui-log.js';
@@ -547,11 +547,13 @@ async function resendLatestWorkflow(options: UiServerOptions): Promise<Record<st
   // to the plain list). Best-effort: a failed collection falls back to no
   // evidence rather than blocking the resend.
   const evidence = await collectEvidence(config, latest.date).catch(() => undefined);
+  const planTable = latest.workflow === 'daily_plan' ? buildDailyPlanTable(latest.content, latest.date, evidence, config) : null;
   try {
     await sendFeishuMessage(config, formatWorkflowSummaryForFeishu(latest.workflow, latest.date, latest.content, evidence, config), {
       workflow: latest.workflow,
       date: latest.date,
       ...(todos.length ? { todos } : {}),
+      ...(planTable ? { planTable } : {}),
     });
   } catch (error) {
     return { ok: false, error: `发送失败：${error instanceof Error ? error.message : String(error)}` };
