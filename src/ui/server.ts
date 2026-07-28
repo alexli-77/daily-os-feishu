@@ -32,6 +32,7 @@ import {
   parseTodoInboxCommand,
   updateTodoInboxItemById,
 } from '../todo/inbox.js';
+import { recordTodoFeedback } from '../todo/feedback.js';
 import { formatCalendarDraftForFeishu, runCalendarDraft, testCalendarBridge } from '../calendar/bridge.js';
 import {
   SESSION_COOKIE,
@@ -337,7 +338,7 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
     }
 
     // Console API routes (auth + member gate already enforced above).
-    if (request.method === 'POST' && url.pathname === '/api/today/todo-feedback') return sendJson(response, await todoFeedback(await readJson(request)));
+    if (request.method === 'POST' && url.pathname === '/api/today/todo-feedback') return sendJson(response, await todoFeedback(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/runs/cancel') return sendJson(response, await cancelRun(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/runs/rerun') return sendJson(response, await rerunWorkflow(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/schedules/backfill') return sendJson(response, await backfillSchedule(options, await readJson(request)));
@@ -526,8 +527,34 @@ function handleLogout(_request: http.IncomingMessage, response: http.ServerRespo
   response.end(JSON.stringify({ ok: true }));
 }
 
-async function todoFeedback(body: unknown): Promise<Record<string, unknown>> {
+async function todoFeedback(options: UiServerOptions, body: unknown): Promise<Record<string, unknown>> {
   const request = readRecord(body);
+
+  // Plan-card feedback (Today's plan): keyed by the daily_plan candidateId and
+  // recorded in the structured ledger the evening daily_review reconciles.
+  const candidateId = String(request.candidateId || '').trim();
+  if (candidateId) {
+    const event = String(request.event || '').trim();
+    if (event !== 'complete' && event !== 'defer' && event !== 'update') {
+      return { ok: false, error: 'event must be complete, defer or update.' };
+    }
+    const note = typeof request.note === 'string' ? request.note.trim() : '';
+    const rank = Number(request.rank) || 0;
+    const env = readEnvFile(options.envPath);
+    applyEnv(env);
+    const config = loadConfig(options.configPath);
+    recordTodoFeedback(config, {
+      date: todayInTimezone(config),
+      event,
+      candidateId,
+      rank,
+      source: 'console-today',
+      ...(note ? { note } : {}),
+    });
+    return { ok: true, candidateId, event, text: event === 'complete' ? '已标记完成' : event === 'defer' ? '已延期' : '已记录更新' };
+  }
+
+  // Legacy inbox feedback (My todos): simple {id, action} display state.
   const id = String(request.id || '').trim();
   const action = String(request.action || '').trim();
   if (!id) return { ok: false, error: 'Todo id is required.' };
@@ -563,8 +590,14 @@ async function rerunWorkflow(options: UiServerOptions, body: unknown): Promise<R
   const env = readEnvFile(options.envPath);
   applyEnv(env);
   const config = loadConfig(options.configPath);
-  const text = await runWorkflow(config, workflow, { send: false, trigger: 'ui', source: 'console-rerun' });
-  return { ok: true, workflow, chars: text.length };
+  // Fire-and-forget: the run registers with runManager immediately (visible
+  // under "In flight" on reload) and the response returns right away instead
+  // of blocking the button for the whole workflow. Mirrors the scheduler's IM
+  // behavior (send: true) so a console-triggered run also notifies Feishu.
+  void runWorkflow(config, workflow, { send: true, trigger: 'ui', source: 'console-rerun' }).catch((error) => {
+    console.warn(`[console-rerun] ${workflow} failed: ${error instanceof Error ? error.message : String(error)}`);
+  });
+  return { ok: true, workflow, started: true, text: `已启动 ${workflow}，见 In flight;完成后会同步发送 IM。` };
 }
 
 async function backfillSchedule(options: UiServerOptions, body: unknown): Promise<Record<string, unknown>> {

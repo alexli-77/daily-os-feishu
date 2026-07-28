@@ -234,7 +234,10 @@ async function runCommandTurn(ctx: TurnContext): Promise<void> {
     text: ctx.text,
     source: `web-chat:${ctx.sessionId}`,
     prefix: ctx.config.interaction.feishu.command_prefix,
-    sendWorkflowOutput: false,
+    // Keep channels in sync: a workflow triggered from web chat also pushes
+    // its summary to the configured IM, same as a scheduler run (send degrades
+    // gracefully when Feishu output is not configured).
+    sendWorkflowOutput: true,
     accessDecision: ctx.access,
     sessionScopeId: ctx.sessionId,
     stopAgentRun: async () => stopWebChatSession(ctx.sessionId),
