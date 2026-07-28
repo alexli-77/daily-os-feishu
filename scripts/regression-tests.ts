@@ -104,6 +104,8 @@ try {
     'scripts/tests/setup-wizard.test.ts',
     // LEO-205 OKR editor: free-form -> loader-format normalizer.
     'scripts/tests/okr-normalize.test.ts',
+    // LEO-247 channel-neutral write-back commands (preview / confirm).
+    'scripts/tests/writeback-command.test.ts',
   ]);
   console.log('Regression tests passed.');
 } finally {
