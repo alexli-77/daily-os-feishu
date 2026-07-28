@@ -351,9 +351,18 @@ const CHAT_JS = String.raw`
       list.innerHTML=items.map(function(s){
         return '<li class="chat-session'+(s.id===sessionId?' active':'')+'" data-id="'+esc(s.id)+'">'+
           '<span class="s-title">'+esc(s.title)+'</span>'+
-          '<span class="muted small">'+esc(s.messages)+' msg</span></li>';
+          '<span class="muted small">'+esc(s.messages)+' msg</span>'+
+          '<button type="button" class="chat-session-delete" data-del="'+esc(s.id)+'" title="Delete chat">×</button></li>';
       }).join('');
     });
+  }
+  function deleteSession(id){
+    if(!window.confirm('删除这个会话？'))return;
+    api('/api/chat/session/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session:id})})
+      .then(function(){
+        if(id===sessionId){sessionId=null;stream.innerHTML='<p class="muted small">Start a new chat or pick one on the left.</p>';}
+        return loadSessions();
+      });
   }
   function openSession(id){
     sessionId=id;
@@ -415,7 +424,11 @@ const CHAT_JS = String.raw`
     api('/api/chat/session',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
       .then(function(r){return r.json();}).then(function(d){if(d&&d.session){return loadSessions().then(function(){return openSession(d.session.id);});}});
   });
-  list.addEventListener('click',function(ev){var li=ev.target.closest('.chat-session');if(li)openSession(li.getAttribute('data-id'));});
+  list.addEventListener('click',function(ev){
+    var del=ev.target.closest('.chat-session-delete');
+    if(del){ev.stopPropagation();deleteSession(del.getAttribute('data-del'));return;}
+    var li=ev.target.closest('.chat-session');if(li)openSession(li.getAttribute('data-id'));
+  });
   loadSessions().then(function(){
     var first=list.querySelector('.chat-session');
     if(first){openSession(first.getAttribute('data-id'));}
@@ -814,8 +827,11 @@ button.danger{background:var(--danger);border-color:var(--danger)}
 @media(max-width:800px){.chat-wrap{grid-template-columns:1fr}}
 .chat-sessions{max-height:70vh;overflow:auto}
 .chat-session-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
-.chat-session{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border-radius:8px;cursor:pointer;border:1px solid transparent}
+.chat-session{position:relative;display:flex;flex-direction:column;gap:2px;padding:8px 26px 8px 10px;border-radius:8px;cursor:pointer;border:1px solid transparent}
 .chat-session:hover{background:var(--surface-2)}
+.chat-session-delete{position:absolute;top:6px;right:6px;border:none;background:none;color:var(--muted);font-size:14px;line-height:1;padding:2px 4px;border-radius:4px;cursor:pointer;visibility:hidden}
+.chat-session:hover .chat-session-delete{visibility:visible}
+.chat-session-delete:hover{background:var(--border);color:var(--text)}
 .chat-session.active{background:var(--surface-2);border-color:var(--border)}
 .s-title{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chat-main{display:flex;flex-direction:column;min-height:60vh}

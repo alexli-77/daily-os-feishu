@@ -50,6 +50,7 @@ import {
 import { PLATFORM_PAGES, renderLoginPage, renderPlatformPage, type PageContext } from './pages.js';
 import {
   createWebChatSession,
+  deleteWebChatSession,
   isWebChatTurnAllowed,
   listWebChatMessages,
   listWebChatSessions,
@@ -349,6 +350,7 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
     if (request.method === 'POST' && url.pathname === '/api/chat/session') return sendJson(response, chatCreateSession(options));
     if (request.method === 'GET' && url.pathname === '/api/chat/messages') return sendJson(response, chatMessages(url));
     if (request.method === 'POST' && url.pathname === '/api/chat/stop') return sendJson(response, await chatStop(await readJson(request)));
+    if (request.method === 'POST' && url.pathname === '/api/chat/session/delete') return sendJson(response, await chatDeleteSession(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/chat/send') return handleChatSend(request, response, options, auth);
 
     // Homepage is the platform dashboard (where Chat lives). The legacy ops
@@ -419,6 +421,7 @@ function isWriteRequest(method: string | undefined): boolean {
 const MEMBER_WRITE_WHITELIST = new Set([
   '/api/today/todo-feedback',
   '/api/chat/session',
+  '/api/chat/session/delete',
   '/api/chat/send',
   '/api/chat/stop',
 ]);
@@ -644,6 +647,17 @@ async function chatStop(body: unknown): Promise<Record<string, unknown>> {
   const sessionId = String(readRecord(body).session || '').trim();
   if (!sessionId) return { ok: false, error: 'session is required' };
   return { ok: true, stopped: await stopWebChatSession(sessionId) };
+}
+
+async function chatDeleteSession(options: UiServerOptions, body: unknown): Promise<Record<string, unknown>> {
+  const sessionId = String(readRecord(body).session || '').trim();
+  if (!sessionId) return { ok: false, error: 'session is required' };
+  // Stop any in-flight run first so an orphaned stream cannot keep writing.
+  await stopWebChatSession(sessionId);
+  const env = readEnvFile(options.envPath);
+  applyEnv(env);
+  const config = loadConfig(options.configPath);
+  return { ok: true, deleted: deleteWebChatSession(config, sessionId) };
 }
 
 /**
