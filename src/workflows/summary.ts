@@ -225,6 +225,68 @@ function overdueDays(dueDate: string, today: string): number {
   return Math.floor((now - due) / (24 * 60 * 60 * 1000));
 }
 
+/** One row of the daily-plan table card (Feishu card 2.0 table component). */
+export interface DailyPlanTableRow {
+  priority: string;
+  priorityColor: string;
+  taskMd: string;
+  due: string;
+  status: string;
+  statusColor: string;
+}
+
+export interface DailyPlanTableModel {
+  /** 🔴 follow-up section as card markdown ('' when nothing is overdue). */
+  followupMd: string;
+  rows: DailyPlanTableRow[];
+}
+
+const STATE_COLOR: Record<string, string> = { started: 'blue', unstarted: 'grey', backlog: 'grey', triage: 'purple' };
+
+/**
+ * Structured model for the daily-plan table card: the 🔴 follow-up markdown and
+ * one table row per ranked todo (priority/status as colored option tags, task
+ * cell as lark_md with a clickable Linear link). Null when the content is not
+ * the LEO-209 todo JSON — callers then fall back to the markdown-only card.
+ */
+export function buildDailyPlanTable(content: string, date: string, evidence?: Evidence, config?: AppConfig): DailyPlanTableModel | null {
+  const plan = parseDailyPlanTodoPlan(content);
+  if (!plan) return null;
+  const index = linearIssueIndex(evidence);
+  const workspace = config?.sources.linear.workspace || '';
+  const link = (identifier: string): string =>
+    workspace ? `[${identifier}](https://linear.app/${encodeURIComponent(workspace)}/issue/${identifier})` : identifier;
+
+  const followupLines: string[] = [];
+  const urgent = [...index.values()]
+    .filter((issue) => issue.dueDate && issue.dueDate <= date && issue.stateType !== 'completed' && issue.stateType !== 'canceled')
+    .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+    .slice(0, 5);
+  if (urgent.length > 0) {
+    followupLines.push('🔴 **需要立即跟进**');
+    urgent.forEach((issue, i) => {
+      const days = overdueDays(issue.dueDate, date);
+      followupLines.push(`**${i + 1}. ${issue.title}**（${link(issue.identifier)}）`);
+      followupLines.push(`　　截止 ${issue.dueDate}（**${days > 0 ? `已逾期 ${days} 天` : '今天截止'}**）· ${priorityLabel(issue.priority)} · ${issue.stateName || '未完成'}`);
+    });
+  }
+
+  const rows = plan.todos.map((todo): DailyPlanTableRow => {
+    const issueId = todo.candidateId.startsWith('linear:') ? todo.candidateId.slice('linear:'.length) : '';
+    const issue = issueId ? index.get(issueId) : undefined;
+    const priority = issue ? priorityLabel(issue.priority) : '—';
+    return {
+      priority,
+      priorityColor: priority === 'P0' ? 'red' : priority === 'P1' ? 'orange' : 'grey',
+      taskMd: `${todo.rank}. ${todo.text}${issue ? ` ${link(issue.identifier)}` : ''}`,
+      due: issue?.dueDate ? (issue.dueDate <= date ? `${issue.dueDate.slice(5)} 已逾期` : issue.dueDate.slice(5)) : '无截止',
+      status: issue?.stateName || '未关联',
+      statusColor: issue ? STATE_COLOR[issue.stateType] || 'grey' : 'grey',
+    };
+  });
+  return { followupMd: followupLines.join('\n'), rows };
+}
+
 /**
  * Two-part daily briefing: 🔴 overdue / due Linear issues that need immediate
  * follow-up, then 🟡 today's ranked todos — each todo linked to a Linear issue

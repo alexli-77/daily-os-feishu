@@ -5,7 +5,7 @@ import { todayInTimezone } from '../utils/date.js';
 import { appendDailyMemory, loadMemory, readLatestWorkflowOutput, writeLatestWorkflowOutput, writeWorkflowDetailCache } from '../storage/memory.js';
 import { sendFeishuCard, sendFeishuMessage } from '../connectors/lark-cli.js';
 import { collectSyncDrift, filterUndecidedFindings, renderSyncDriftCard } from '../progress/sync-drift.js';
-import { buildWorkflowEvidenceTrace, extractDailyPlanTodos, formatWorkflowSummaryForFeishu, parseDailyPlanTodoPlan } from './summary.js';
+import { buildDailyPlanTable, buildWorkflowEvidenceTrace, extractDailyPlanTodos, formatWorkflowSummaryForFeishu, parseDailyPlanTodoPlan } from './summary.js';
 import { buildScoredTodos } from '../todo/scorer.js';
 import { listTodoFeedback, recordTodoPresented } from '../todo/feedback.js';
 import {
@@ -98,11 +98,13 @@ export async function runWorkflowDetailed(
     if (sendEnabled) {
       try {
         const todos = workflow === 'daily_plan' ? extractDailyPlanTodos(text) : [];
+        const planTable = workflow === 'daily_plan' ? buildDailyPlanTable(text, date, evidence, config) : null;
         await sendFeishuMessage(config, formatWorkflowSummaryForFeishu(workflow, date, text, evidence, config), {
           workflow,
           date,
           detailId: detail.id,
           ...(todos.length ? { todos } : {}),
+          ...(planTable ? { planTable } : {}),
         });
         if (todos.length) {
           recordTodoPresented(config, date, todos.map((todo) => ({ candidateId: todo.candidateId, rank: todo.rank })));

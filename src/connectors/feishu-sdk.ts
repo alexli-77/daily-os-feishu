@@ -1,7 +1,7 @@
 import { AppType, Client, Domain, LoggerLevel } from '@larksuiteoapi/node-sdk';
 import type { WorkflowName } from '../config/schema.js';
 import type { CalendarDraftPeriod } from '../calendar/bridge.js';
-import type { DailyPlanTodo } from '../workflows/summary.js';
+import type { DailyPlanTableModel, DailyPlanTodo } from '../workflows/summary.js';
 
 export type FeishuSdkSendMode = 'markdown' | 'text';
 
@@ -11,6 +11,8 @@ export interface FeishuSdkMessageOptions {
   detailId?: string;
   /** Ranked daily todos (LEO-209) rendered as per-item completion buttons. */
   todos?: DailyPlanTodo[];
+  /** When present, daily_plan renders as a card 2.0 table instead of markdown. */
+  planTable?: DailyPlanTableModel;
 }
 
 /** Cap on per-todo completion buttons so the card stays compact. */
@@ -143,12 +145,70 @@ function createFeishuClient(): Client {
 
 function sdkMessagePayload(text: string, mode: FeishuSdkSendMode, options?: FeishuSdkMessageOptions): { msgType: string; content: string } {
   if (mode === 'text') return textPayload(text);
-  const card = renderFeishuWorkflowCard(text, options);
+  const card =
+    options?.workflow === 'daily_plan' && options.planTable?.rows.length
+      ? renderFeishuPlanTableCard(options.planTable, options)
+      : renderFeishuWorkflowCard(text, options);
   const content = JSON.stringify(card);
   // Feishu card bodies are stricter than text messages. When a workflow is
   // unexpectedly large, prefer delivering the message over failing the run.
   if (Buffer.byteLength(content, 'utf8') > 25_000) return textPayload(text);
   return { msgType: 'interactive', content };
+}
+
+/**
+ * Card 2.0 daily-plan briefing: 🔴 follow-up markdown + a real table
+ * (priority/status as colored tags, task cell with a clickable Linear link) +
+ * the same action buttons as the classic card. Schema 2.0 buttons carry the
+ * identical `value` payload inside `behaviors`, so the existing card-action
+ * handler keeps working unchanged.
+ */
+export function renderFeishuPlanTableCard(table: DailyPlanTableModel, options?: FeishuSdkMessageOptions): object {
+  const buttons = workflowActions('daily_plan', options).map((action) => {
+    const legacy = action as { text?: object; type?: string; value?: Record<string, string> };
+    return {
+      tag: 'button',
+      text: legacy.text,
+      type: legacy.type,
+      behaviors: [{ type: 'callback', value: legacy.value || {} }],
+    };
+  });
+  return {
+    schema: '2.0',
+    header: {
+      template: 'blue',
+      title: { tag: 'plain_text', content: cardTitle('daily_plan') },
+    },
+    body: {
+      elements: [
+        ...(table.followupMd ? [{ tag: 'markdown', content: table.followupMd }, { tag: 'hr' }] : []),
+        { tag: 'markdown', content: '🟡 **今日待办**' },
+        {
+          tag: 'table',
+          page_size: Math.min(Math.max(table.rows.length, 1), 10),
+          row_height: 'low',
+          header_style: { bold: true, background_style: 'grey' },
+          // Note: Feishu rejects arbitrary pixel widths (76px/104px failed with
+          // ErrCode 200912); stick to these validated values.
+          columns: [
+            { name: 'priority', display_name: '优先级', data_type: 'options', width: '80px' },
+            { name: 'task', display_name: '任务', data_type: 'lark_md', width: 'auto' },
+            { name: 'due', display_name: '截止', data_type: 'text', width: '110px' },
+            { name: 'status', display_name: '状态', data_type: 'options', width: '90px' },
+          ],
+          rows: table.rows.map((row) => ({
+            priority: [{ text: row.priority, color: row.priorityColor }],
+            task: row.taskMd,
+            due: row.due,
+            status: [{ text: row.status, color: row.statusColor }],
+          })),
+        },
+        { tag: 'hr' },
+        ...buttons,
+        { tag: 'markdown', content: '<font color="grey">完成一条点「✅ 完成」；想调整点「我要调整」。</font>' },
+      ],
+    },
+  };
 }
 
 export function renderFeishuWorkflowCard(text: string, options?: FeishuSdkMessageOptions): object {
