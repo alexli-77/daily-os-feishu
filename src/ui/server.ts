@@ -420,6 +420,8 @@ function isWriteRequest(method: string | undefined): boolean {
 // (durable-write / free-form agent) turns for the member role.
 const MEMBER_WRITE_WHITELIST = new Set([
   '/api/today/todo-feedback',
+  '/api/capture',
+  '/api/todo-inbox',
   '/api/chat/session',
   '/api/chat/session/delete',
   '/api/chat/send',
