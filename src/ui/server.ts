@@ -542,8 +542,13 @@ async function resendLatestWorkflow(options: UiServerOptions): Promise<Record<st
   if (!latest) return { ok: false, error: '没有可发送的 workflow 产物。' };
   if (!config.output.feishu.enabled) return { ok: false, error: 'output.feishu.enabled=false；未配置 IM 输出。' };
   const todos = latest.workflow === 'daily_plan' ? extractDailyPlanTodos(latest.content) : [];
+  // Re-collect evidence so the resent card renders identically to a direct run
+  // (the two-part briefing needs the Linear items; without evidence it degraded
+  // to the plain list). Best-effort: a failed collection falls back to no
+  // evidence rather than blocking the resend.
+  const evidence = await collectEvidence(config, latest.date).catch(() => undefined);
   try {
-    await sendFeishuMessage(config, formatWorkflowSummaryForFeishu(latest.workflow, latest.date, latest.content, undefined, config), {
+    await sendFeishuMessage(config, formatWorkflowSummaryForFeishu(latest.workflow, latest.date, latest.content, evidence, config), {
       workflow: latest.workflow,
       date: latest.date,
       ...(todos.length ? { todos } : {}),
