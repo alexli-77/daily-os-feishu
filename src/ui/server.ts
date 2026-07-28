@@ -1671,6 +1671,20 @@ const HTML = String.raw`<!doctype html>
                 </table>
               </section>
 
+              <section aria-labelledby="guide-biweekly-title">
+                <h3 id="guide-biweekly-title">双周复盘 · OKR 写回</h3>
+                <p class="hint">对比计划与执行、生成下期计划，并把 KR 进度写回本地 OKR。跑的是 Life Review OS skill 的 biweekly 模式（LEO-109）。</p>
+                <table class="guide-table">
+                  <thead><tr><th>步骤</th><th>指令 / 位置</th><th>说明</th></tr></thead>
+                  <tbody>
+                    <tr><td>前置</td><td><code>memory-vault/10_OKR/*.md</code></td><td>north-star / annual / current 三层 OKR 需填真值；仍是占位 TODO 时 Today 页显示「not found」，也无法写回 KR。目前只能改文件，没有 UI 编辑器。</td></tr>
+                    <tr><td>触发</td><td><code>skills run weekly-review biweekly</code>（中文 <code>运行技能 weekly-review biweekly</code>）</td><td>在 Chat 或 Feishu 里发。也支持 <code>weekly</code> / <code>quarterly</code> 模式。</td></tr>
+                    <tr><td>看草稿</td><td>Chat / Feishu 卡片</td><td>草稿含「计划 vs 执行」复盘、下期安排，以及结构化的 KR 进度块。</td></tr>
+                    <tr><td>确认写回</td><td>点卡片「确认写回 OKR」</td><td>确认后才更新对应 KR 的 Current / Progress；未确认不改任何文件。</td></tr>
+                  </tbody>
+                </table>
+              </section>
+
               <section aria-labelledby="guide-dashboard-title">
                 <h3 id="guide-dashboard-title">Dashboard 页面</h3>
                 <table class="guide-table">
