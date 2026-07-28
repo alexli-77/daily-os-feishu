@@ -208,6 +208,12 @@ async function buildSkillInputPack(
       // first ~20k chars of this pack, so the krId source must survive truncation.
       '## Local OKR Chain',
       '本地 10_OKR 的 north-star / annual / current 三层解析结果（krId 权威来源）。biweekly 的 kr_progress 块里的 krId 必须来自此处（形如 O1-KR2）；无法从证据确认进度的 KR 不要写进 kr_progress。',
+      '',
+      '进度评分标准（里程碑档位制，LEO-248）：',
+      '- progress 只允许 0% / 25% / 50% / 75% / 100% 五档，对照该 KR 的 Target 判断处于哪个里程碑；禁止自由填写其他百分比。',
+      '- 每次复盘最多上调一档；要跨档（如 0%→100%）必须有能逐字定位的完成证据，否则保持原档。',
+      '- evidence 字段必须逐字引用本 input pack 中真实存在的一行原文（会被程序反查校验，查不到该 KR 不会写回）；严禁改写、拼接或把别处条目的 ✅ 归到当前 KR 上。',
+      '- 100% 仅在 Current 达到 Target 且有明确完成证据时使用。',
       okrChainSummary || '(no local OKR chain found)',
       '',
       '## Latest Workflow',

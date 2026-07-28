@@ -106,6 +106,8 @@ try {
     'scripts/tests/okr-normalize.test.ts',
     // LEO-247 channel-neutral write-back commands (preview / confirm).
     'scripts/tests/writeback-command.test.ts',
+    // LEO-248 write-back guardrails: evidence back-check + big-jump gating.
+    'scripts/tests/okr-writeback-guardrails.test.ts',
   ]);
   console.log('Regression tests passed.');
 } finally {

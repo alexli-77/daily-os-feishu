@@ -1,5 +1,7 @@
+import fs from 'node:fs';
 import type { AppConfig } from '../config/schema.js';
 import { loadOkrFromDir } from '../okr/loader.js';
+import { assessKrProposals, renderFlaggedLines, type FlaggedKr } from '../okr/writeback-guardrails.js';
 import {
   applyBiweeklyWriteback,
   defaultOkrHistoryPath,
@@ -25,17 +27,27 @@ export interface OkrWritebackPreview {
   hasProgress: boolean;
   incrementLines: string[];
   matched: MatchedKr[];
+  /** Guardrail-flagged proposals (LEO-248): never written back, need a human. */
+  flagged: FlaggedKr[];
+  flaggedLines: string[];
   skipped: Array<{ krId: string; reason: string }>;
   obstacles: string[];
   nextPriorities: string[];
   reason?: string;
 }
 
-export function buildOkrWritebackPreview(input: { config: AppConfig; draft: string }): OkrWritebackPreview {
+export function buildOkrWritebackPreview(input: {
+  config: AppConfig;
+  draft: string;
+  /** Path to the skill input pack; used to verify evidence claims (LEO-248). */
+  inputPackPath?: string;
+}): OkrWritebackPreview {
   const empty: OkrWritebackPreview = {
     hasProgress: false,
     incrementLines: [],
     matched: [],
+    flagged: [],
+    flaggedLines: [],
     skipped: [],
     obstacles: [],
     nextPriorities: [],
@@ -47,30 +59,51 @@ export function buildOkrWritebackPreview(input: { config: AppConfig; draft: stri
   const okrDir = resolveOkrDir(input.config.memory.repository_path);
   const model = loadOkrFromDir(okrDir);
   const { matched, skipped } = matchBiweeklyProgress(model, parse.contract);
+  const packText = readPackText(input.inputPackPath);
+  const { accepted, flagged } = assessKrProposals(matched, packText);
   return {
-    hasProgress: matched.length > 0,
-    incrementLines: renderKrIncrements(matched),
-    matched,
+    // hasProgress also true when everything is flagged, so the confirm surface
+    // still shows the "需人工确认" list instead of pretending there is nothing.
+    hasProgress: accepted.length > 0 || flagged.length > 0,
+    incrementLines: renderKrIncrements(accepted),
+    matched: accepted,
+    flagged,
+    flaggedLines: renderFlaggedLines(flagged),
     skipped,
     obstacles: parse.contract.obstacles,
     nextPriorities: parse.contract.next_priorities,
   };
 }
 
+function readPackText(inputPackPath?: string): string | null {
+  if (!inputPackPath) return null;
+  try {
+    return fs.readFileSync(inputPackPath, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
 export function executeConfirmedOkrWriteback(input: {
   config: AppConfig;
   draft: string;
   date: string;
-}): { outcome: WritebackOutcome; incrementLines: string[] } {
-  const preview = buildOkrWritebackPreview({ config: input.config, draft: input.draft });
+  inputPackPath?: string;
+}): { outcome: WritebackOutcome; incrementLines: string[]; flaggedLines: string[] } {
+  const preview = buildOkrWritebackPreview({
+    config: input.config,
+    draft: input.draft,
+    ...(input.inputPackPath ? { inputPackPath: input.inputPackPath } : {}),
+  });
   const okrDir = resolveOkrDir(input.config.memory.repository_path);
+  // preview.matched is guardrail-accepted only; flagged KRs are never applied.
   const outcome = applyBiweeklyWriteback({
     okrDir,
     historyPath: defaultOkrHistoryPath(),
     matched: preview.matched,
     date: input.date,
   });
-  return { outcome, incrementLines: preview.incrementLines };
+  return { outcome, incrementLines: preview.incrementLines, flaggedLines: preview.flaggedLines };
 }
 
 /**
@@ -88,6 +121,9 @@ export function renderOkrWritebackCard(options: {
   const incrementBlock = preview.incrementLines.length
     ? preview.incrementLines.map((line) => `- ${line}`).join('\n')
     : '（没有可写回的 KR 进度）';
+  const flaggedBlock = preview.flaggedLines.length
+    ? ['', '**⚠️ 需人工确认（本次不会写回）**', ...preview.flaggedLines.map((line) => `- ${line}`)].join('\n')
+    : '';
   const skippedBlock = preview.skipped.length
     ? ['', '**已跳过（未匹配到本地 OKR）**', ...preview.skipped.map((entry) => `- ${entry.krId}：${entry.reason}`)].join('\n')
     : '';
@@ -111,6 +147,7 @@ export function renderOkrWritebackCard(options: {
           '',
           '**KR 进度增量**',
           incrementBlock,
+          flaggedBlock,
           skippedBlock,
           obstacleBlock,
           priorityBlock,
