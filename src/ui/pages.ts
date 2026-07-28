@@ -7,6 +7,7 @@ import { openTodoInboxItems } from '../todo/inbox.js';
 import { readLatestWorkflowOutput } from '../storage/memory.js';
 import { extractDailyPlanTodos } from '../workflows/summary.js';
 import { todayInTimezone } from '../utils/date.js';
+import { listTodoFeedback } from '../todo/feedback.js';
 import { readOkrSnapshot, type OkrObjective } from './okr-lite.js';
 import { readArtifactsIndex, findArtifactById, isPreviewableType, type ArtifactRecord } from '../storage/artifacts.js';
 import { runManager } from '../service/run-manager.js';
@@ -260,13 +261,41 @@ function renderPlanColumn(ctx: PageContext): string {
     latest.date && today && latest.date !== today
       ? `<p class="muted small">来自 ${escapeHtml(latest.date)} 的 plan（今天还没跑）。</p>`
       : '';
+  // Latest feedback per candidateId for today, so the card reflects what the
+  // user already ticked (the evening daily_review reconciles the same ledger).
+  const feedbackState = new Map<string, string>();
+  for (const entry of safe(() => listTodoFeedback(config), [])) {
+    if (entry.date !== today) continue;
+    if (entry.event === 'complete' || entry.event === 'defer' || entry.event === 'update') {
+      feedbackState.set(entry.candidateId, entry.event);
+    }
+  }
+  const workspace = config.sources.linear.workspace;
   const rows = todos
-    .map(
-      (todo) => `<li class="todo-item">
+    .map((todo) => {
+      const state = todo.candidateId ? feedbackState.get(todo.candidateId) : undefined;
+      const stateLabel = state === 'complete' ? 'done' : state === 'defer' ? 'deferred' : state === 'update' ? 'updated' : '';
+      const issueId = todo.candidateId.startsWith('linear:') ? todo.candidateId.slice('linear:'.length) : '';
+      const tag = issueId
+        ? workspace
+          ? `<a class="tag tag-link" href="https://linear.app/${encodeURIComponent(workspace)}/issue/${encodeURIComponent(issueId)}" target="_blank" rel="noopener">${escapeHtml(issueId)}</a>`
+          : `<span class="tag">${escapeHtml(issueId)}</span>`
+        : todo.candidateId
+          ? `<span class="tag">${escapeHtml(todo.candidateId)}</span>`
+          : '';
+      const actions = todo.candidateId
+        ? `<div class="todo-actions plan-actions">
+            <button type="button" class="secondary" data-post="/api/today/todo-feedback" data-note-prompt="记录一条更新（可留空）" data-payload='${payload({ candidateId: todo.candidateId, rank: todo.rank, event: 'update' })}'>更新</button>
+            <button type="button" class="secondary" data-post="/api/today/todo-feedback" data-payload='${payload({ candidateId: todo.candidateId, rank: todo.rank, event: 'defer' })}'>延期</button>
+            <button type="button" data-post="/api/today/todo-feedback" data-payload='${payload({ candidateId: todo.candidateId, rank: todo.rank, event: 'complete' })}'>完成</button>
+          </div>`
+        : '';
+      return `<li class="todo-item${state === 'complete' ? ' state-checked' : ''}">
         <div class="todo-text"><span class="plan-rank">${todo.rank}</span> ${escapeHtml(todo.text)}</div>
-        ${todo.candidateId ? `<div class="todo-meta"><span class="tag">${escapeHtml(todo.candidateId.replace(/^linear:/, ''))}</span></div>` : ''}
-      </li>`,
-    )
+        <div class="todo-meta">${tag}${stateLabel ? `<span class="muted small">${stateLabel}</span>` : ''}</div>
+        ${actions}
+      </li>`;
+    })
     .join('');
   return `${staleNote}<ul class="todo-list">${rows}</ul>`;
 }
@@ -814,6 +843,9 @@ button.danger{background:var(--danger);border-color:var(--danger)}
 .todo-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
 .todo-item{border:1px solid var(--border);border-radius:10px;padding:10px}
 .plan-rank{display:inline-block;min-width:18px;font-weight:600;color:var(--muted)}
+.plan-actions{justify-content:flex-end}
+.tag-link{text-decoration:none}
+.tag-link:hover{text-decoration:underline}
 .todo-capture{display:flex;gap:8px;margin-bottom:10px}
 .todo-capture input{flex:1;min-width:0}
 .todo-item.state-checked{opacity:.6}
@@ -872,11 +904,17 @@ const CONSOLE_JS = `
     var url=btn.getAttribute('data-post');
     var payload=btn.getAttribute('data-payload');
     var body=payload?payload:'{}';
+    var notePrompt=btn.getAttribute('data-note-prompt');
+    if(notePrompt){
+      var note=window.prompt(notePrompt,'');
+      if(note===null)return;
+      try{var obj=JSON.parse(body);if(note.trim())obj.note=note.trim();body=JSON.stringify(obj);}catch(e){}
+    }
     btn.disabled=true;
     fetch(url,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:body})
       .then(function(r){return r.json().catch(function(){return{ok:r.ok};}).then(function(d){return{status:r.status,data:d};});})
       .then(function(res){
-        if(res.status>=200&&res.status<300&&res.data&&res.data.ok!==false){toast('Done');setTimeout(function(){location.reload();},500);}
+        if(res.status>=200&&res.status<300&&res.data&&res.data.ok!==false){toast((res.data&&res.data.text)||'Done');setTimeout(function(){location.reload();},600);}
         else{btn.disabled=false;toast((res.data&&res.data.error)||('Failed ('+res.status+')'));}
       })
       .catch(function(e){btn.disabled=false;toast(String(e));});

@@ -508,6 +508,9 @@ export const AppConfigSchema = z.object({
       per_repo_limit: z.number().int().positive().max(100).default(20),
     }),
     linear: enabled.extend({
+      // Workspace slug for building https://linear.app/<workspace>/issue/<id>
+      // links in the console; empty disables linkification.
+      workspace: z.string().default(''),
       query: z.string().default("assignee = me and state.type != 'completed'"),
       projects_allowlist: z.array(z.string()).default([]),
       projects_blocklist: z.array(z.string()).default([]),

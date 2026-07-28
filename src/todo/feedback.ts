@@ -11,7 +11,7 @@ import { writeFileAtomic } from '../utils/atomic-write.js';
  * reweight. Appends are atomic (read-modify-writeFileAtomic) so a crash mid
  * write never corrupts the ledger.
  */
-export type TodoFeedbackEvent = 'present' | 'complete' | 'defer' | 'reorder' | 'carry_over';
+export type TodoFeedbackEvent = 'present' | 'complete' | 'defer' | 'reorder' | 'carry_over' | 'update';
 
 export interface TodoFeedbackEntry {
   ts: string;
