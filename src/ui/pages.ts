@@ -271,6 +271,7 @@ function renderPlanColumn(ctx: PageContext): string {
     }
   }
   const workspace = config.sources.linear.workspace;
+  const resendRow = `<div class="plan-toolbar"><button type="button" class="secondary compact" data-post="/api/today/resend">发飞书</button></div>`;
   const rows = todos
     .map((todo) => {
       const state = todo.candidateId ? feedbackState.get(todo.candidateId) : undefined;
@@ -297,7 +298,7 @@ function renderPlanColumn(ctx: PageContext): string {
       </li>`;
     })
     .join('');
-  return `${staleNote}<ul class="todo-list">${rows}</ul>`;
+  return `${resendRow}${staleNote}<ul class="todo-list">${rows}</ul>`;
 }
 
 /** My todos — the user's own quick captures, with add / done / defer / delete. */
@@ -349,11 +350,12 @@ function renderChat(ctx: PageContext): string {
     <div class="chat-main card">
       <div class="chat-head">
         <div><h2 id="chat-title">Console assistant</h2><p class="muted small">${escapeHtml(roleHint)}</p></div>
+        <a class="top-link" href="/console#guide">使用指南</a>
       </div>
       ${agentHint}
       <div class="chat-stream" id="chat-stream"><p class="muted small">Start a new chat or pick one on the left.</p></div>
       <form class="chat-composer" id="chat-composer">
-        <textarea id="chat-input" rows="2" placeholder="Ask, or run: plan / review / weekly / progress / 记到 todo：…" autocomplete="off"></textarea>
+        <textarea id="chat-input" rows="2" placeholder="直接发关键词：plan / review / weekly / progress / status，或 daily-os 记到 todo：…" autocomplete="off"></textarea>
         <div class="chat-composer-actions">
           <button type="submit" id="chat-send">Send</button>
           <button type="button" id="chat-stop" class="danger" hidden>Stop</button>
@@ -844,6 +846,9 @@ button.danger{background:var(--danger);border-color:var(--danger)}
 .todo-item{border:1px solid var(--border);border-radius:10px;padding:10px}
 .plan-rank{display:inline-block;min-width:18px;font-weight:600;color:var(--muted)}
 .plan-actions{justify-content:flex-end}
+.plan-toolbar{display:flex;justify-content:flex-end;margin-bottom:8px}
+.top-link{font-weight:600;text-decoration:none;color:var(--accent,#0a7);border:1px solid var(--border);border-radius:6px;padding:4px 10px;white-space:nowrap;font-size:13px}
+.top-link:hover{background:var(--surface-2)}
 .tag-link{text-decoration:none}
 .tag-link:hover{text-decoration:underline}
 .todo-capture{display:flex;gap:8px;margin-bottom:10px}
