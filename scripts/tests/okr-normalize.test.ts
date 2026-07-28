@@ -6,6 +6,7 @@ import { normalizeOkrMarkdown } from '../../src/okr/normalize.js';
 
 try {
   testFreeformToStructure();
+  testBracketPriority();
   testLevelPrefix();
   testUnlabeledAndLabeledKrsRenumber();
   testAlreadyStructuredIsUnchanged();
@@ -33,6 +34,17 @@ function testFreeformToStructure(): void {
   assert.match(out, /^\| A1-KR2 \| 拿到 offer \|/m, 'second KR row');
   assert.match(out, /^## Objective A2: 家庭：多联系父母$/m, 'second objective');
   assert.match(out, /^\| A2-KR1 \| 每周视频一次 \|/m, 'unlabeled bullet becomes KR1');
+}
+
+function testBracketPriority(): void {
+  // 5-year OKR was written with square-bracket priority: "[P0] O1 工作：…".
+  // Both the bracket and the O-enumerator must be stripped from the title.
+  const input = ['[P0] O1 工作：技术专家', '- 建立职业主路径', '【P1】O2 金钱：理财', '- 建立理财系统'].join('\n');
+  const out = normalizeOkrMarkdown(input, 'north-star');
+  assert.match(out, /^## Objective N1: 工作：技术专家$/m, 'no stray "] O1" left in title');
+  assert.match(out, /^Priority: P0$/m);
+  assert.match(out, /^## Objective N2: 金钱：理财$/m, 'full-width brackets handled too');
+  assert.doesNotMatch(out, /\]/, 'no stray bracket anywhere');
 }
 
 function testLevelPrefix(): void {

@@ -45,9 +45,9 @@ function parseFreeform(body: string): FreeObjective[] {
       if (kr) current.krs.push(kr);
       continue;
     }
-    // Otherwise: a new objective line. Tolerate "P0", "`P0`" and "P0O3"
-    // (priority stuck to an O-enumerator with no space).
-    let title = line.replace(/`/g, ' ').trim();
+    // Otherwise: a new objective line. Tolerate "P0", "`P0`", "[P0]" and "P0O3"
+    // (priority in back-ticks or brackets, possibly stuck to an O-enumerator).
+    let title = line.replace(/[`[\]【】]/g, ' ').trim();
     const priorityMatch = title.match(/(?:^|[^A-Za-z0-9])(P[0-4])(?![0-9])/i);
     const priority = priorityMatch ? priorityMatch[1].toUpperCase() : undefined;
     title = title.replace(/(?:^|[^A-Za-z0-9])P[0-4](?![0-9])/gi, ' ');
