@@ -342,6 +342,7 @@ function renderChat(ctx: PageContext): string {
     ? ''
     : '<p class="muted small">Free-form assistant (agent mode) is disabled in config; command shortcuts still work.</p>';
   return `
+  <script>window.__LINEAR_WS__=${JSON.stringify(ctx.config.sources.linear.workspace)};</script>
   <section class="chat-wrap" data-role="${escapeHtml(ctx.role)}">
     <aside class="chat-sessions card">
       <div class="card-head"><h2>Chats</h2><button type="button" id="chat-new">New</button></div>
@@ -386,11 +387,18 @@ const CHAT_JS = String.raw`
   var stopBtn=document.getElementById('chat-stop');
   var newBtn=document.getElementById('chat-new');
   function esc(s){var d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML;}
+  var LINEAR_WS=window.__LINEAR_WS__||'';
+  function linkify(html){
+    if(!LINEAR_WS)return html;
+    return html.replace(/\b([A-Z][A-Z0-9]{1,9}-\d+)\b/g,function(m,id){
+      return '<a href="https://linear.app/'+encodeURIComponent(LINEAR_WS)+'/issue/'+id+'" target="_blank" rel="noopener">'+id+'</a>';
+    });
+  }
   function api(url,opts){return fetch(url,Object.assign({credentials:'same-origin'},opts||{}));}
   function bubble(role,text){
     var el=document.createElement('div');
     el.className='chat-msg role-'+role;
-    el.innerHTML='<span class="who">'+esc(role)+'</span><div class="body">'+esc(text)+'</div>';
+    el.innerHTML='<span class="who">'+esc(role)+'</span><div class="body">'+linkify(esc(text))+'</div>';
     stream.appendChild(el);stream.scrollTop=stream.scrollHeight;
     return el.querySelector('.body');
   }
@@ -451,7 +459,7 @@ const CHAT_JS = String.raw`
             var line=chunk.split('\n').filter(function(l){return l.indexOf('data:')===0;}).map(function(l){return l.slice(5);}).join('');
             if(!line)return;var ev;try{ev=JSON.parse(line);}catch(e){return;}
             if(ev.type==='status'){statusEl.textContent=ev.message;}
-            else if(ev.type==='reply'){acc+=(acc?'\n\n':'')+ev.content;target.textContent=acc;}
+            else if(ev.type==='reply'){acc+=(acc?'\n\n':'')+ev.content;target.innerHTML=linkify(esc(acc));}
             else if(ev.type==='denied'){acc=ev.message;target.textContent=ev.message;}
             else if(ev.type==='error'){acc=ev.message;target.textContent='错误：'+ev.message;}
             else if(ev.type==='stopped'){statusEl.textContent='已停止。';}
