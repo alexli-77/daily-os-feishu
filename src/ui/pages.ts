@@ -548,7 +548,7 @@ function renderRuns(ctx: PageContext): string {
         .map((run) => {
           const send = run.send.enabled ? run.send.status : 'skipped';
           const rerun =
-            role === 'admin' && run.status === 'failed'
+            role === 'admin' && run.status === 'failed' && ['daily_plan', 'daily_review', 'weekly_review'].includes(run.workflow)
               ? `<button type="button" data-post="/api/runs/rerun" data-payload='${payload({ workflow: run.workflow })}'>Rerun</button>`
               : '';
           return `<tr>

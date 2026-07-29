@@ -9,7 +9,8 @@ export type WorkflowSendStatus = 'pending' | 'succeeded' | 'failed' | 'skipped';
 
 export interface WorkflowRunRecord {
   id: string;
-  workflow: WorkflowName;
+  /** A WorkflowName, or a skill label like `skill:weekly-review:biweekly`. */
+  workflow: WorkflowName | (string & {});
   trigger: WorkflowRunTrigger;
   source?: string;
   date: string;
@@ -31,7 +32,7 @@ export interface WorkflowRunRecord {
 export function startWorkflowRun(
   config: AppConfig,
   input: {
-    workflow: WorkflowName;
+    workflow: WorkflowName | (string & {});
     trigger?: WorkflowRunTrigger;
     source?: string;
     date: string;

@@ -7,7 +7,14 @@ import { runCommand } from '../utils/command.js';
 import { todayInTimezone } from '../utils/date.js';
 import { loadMemory, readLatestWorkflowOutput } from '../storage/memory.js';
 import { readProgressLedger } from '../progress/capture.js';
-import { listRecentWorkflowRuns } from '../workflows/run-ledger.js';
+import {
+  listRecentWorkflowRuns,
+  markWorkflowRunFailed,
+  markWorkflowRunSucceeded,
+  startWorkflowRun,
+  type WorkflowRunTrigger,
+} from '../workflows/run-ledger.js';
+import { runManager } from '../service/run-manager.js';
 import { collectEvidence } from '../workflows/evidence.js';
 import { loadOkrFromDir, buildOkrSummary } from '../okr/loader.js';
 import { resolveOkrDir } from '../okr/biweekly-progress.js';
@@ -93,11 +100,53 @@ export async function runConfiguredSkill(input: SkillRunInput): Promise<SkillRun
   if (!input.config.skills.enabled) throw new Error('Skills are disabled. Set `skills.enabled=true` in config/config.yaml first.');
   const entry = input.config.skills.registry.find((candidate) => candidate.id === input.skillId);
   if (!entry) throw new Error(`Skill not found: ${input.skillId}`);
+  const mode = input.mode || entry.default_mode || 'default';
 
+  // Ledger + in-flight registration: skill runs (e.g. biweekly) show up on the
+  // console Runs page — In flight while running, Recent runs afterwards — just
+  // like plan/review. The run executes in-process, so cancel only writes the
+  // ledger back to failed via onCancel.
+  const label = `skill:${entry.id}:${mode}`;
+  const trigger: WorkflowRunTrigger = input.source.startsWith('web-chat')
+    ? 'ui'
+    : input.source.startsWith('feishu')
+      ? 'feishu_command'
+      : 'cli';
+  let ledger = startWorkflowRun(input.config, {
+    workflow: label,
+    trigger,
+    source: input.source,
+    date: todayInTimezone(input.config),
+    sendEnabled: false,
+  });
+  let cancelled = false;
+  runManager.register(ledger.id, {}, {
+    workflow: label,
+    onCancel: () => {
+      cancelled = true;
+      ledger = markWorkflowRunFailed(input.config, ledger, 'Cancelled by operator from console.');
+    },
+  });
+  try {
+    const result = await runConfiguredSkillInner(input, entry, mode);
+    if (!cancelled) markWorkflowRunSucceeded(input.config, ledger);
+    return result;
+  } catch (error) {
+    if (!cancelled) markWorkflowRunFailed(input.config, ledger, error);
+    throw error;
+  } finally {
+    runManager.unregister(ledger.id);
+  }
+}
+
+async function runConfiguredSkillInner(
+  input: SkillRunInput,
+  entry: AppConfig['skills']['registry'][number],
+  mode: string,
+): Promise<SkillRunResult> {
   const skillPath = expandPath(entry.path);
   if (!fs.existsSync(skillPath)) throw new Error(`Skill file not found: ${skillPath}`);
   const workdir = skillWorkdir(entry);
-  const mode = input.mode || entry.default_mode || 'default';
   const inputPack = await buildSkillInputPack(input.config, {
     skillId: entry.id,
     mode,
