@@ -165,14 +165,25 @@ function sdkMessagePayload(text: string, mode: FeishuSdkSendMode, options?: Feis
  */
 export function renderFeishuPlanTableCard(table: DailyPlanTableModel, options?: FeishuSdkMessageOptions): object {
   const buttons = workflowActions('daily_plan', options).map((action) => {
-    const legacy = action as { text?: object; type?: string; value?: Record<string, string> };
+    const legacy = action as { text?: { content?: string }; type?: string; value?: Record<string, string> };
     return {
       tag: 'button',
       text: legacy.text,
       type: legacy.type,
+      size: 'small',
       behaviors: [{ type: 'callback', value: legacy.value || {} }],
     };
   });
+  // Lay buttons out horizontally (schema 2.0 renders bare buttons as one full
+  // row each): completion buttons on one line, control buttons on the next.
+  const isComplete = (button: { text?: { content?: string } }) => (button.text?.content || '').startsWith('✅');
+  const buttonRow = (row: object[]): object => ({
+    tag: 'column_set',
+    horizontal_spacing: 'small',
+    columns: row.map((button) => ({ tag: 'column', width: 'auto', elements: [button] })),
+  });
+  const completionButtons = buttons.filter((button) => isComplete(button));
+  const controlButtons = buttons.filter((button) => !isComplete(button));
   return {
     schema: '2.0',
     header: {
@@ -186,7 +197,8 @@ export function renderFeishuPlanTableCard(table: DailyPlanTableModel, options?: 
         {
           tag: 'table',
           page_size: Math.min(Math.max(table.rows.length, 1), 10),
-          row_height: 'low',
+          // No fixed row_height: rows must grow with wrapped task text (a fixed
+          // 'low' height made long cells overlap across rows).
           header_style: { bold: true, background_style: 'grey' },
           // Note: Feishu rejects arbitrary pixel widths (76px/104px failed with
           // ErrCode 200912); stick to these validated values.
@@ -204,7 +216,8 @@ export function renderFeishuPlanTableCard(table: DailyPlanTableModel, options?: 
           })),
         },
         { tag: 'hr' },
-        ...buttons,
+        ...(completionButtons.length ? [buttonRow(completionButtons)] : []),
+        ...(controlButtons.length ? [buttonRow(controlButtons)] : []),
         { tag: 'markdown', content: '<font color="grey">完成一条点「✅ 完成」；想调整点「我要调整」。</font>' },
       ],
     },
