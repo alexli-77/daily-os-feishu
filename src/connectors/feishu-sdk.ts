@@ -197,15 +197,18 @@ export function renderFeishuPlanTableCard(table: DailyPlanTableModel, options?: 
         {
           tag: 'table',
           page_size: Math.min(Math.max(table.rows.length, 1), 10),
-          // No fixed row_height: rows must grow with wrapped task text (a fixed
-          // 'low' height made long cells overlap across rows).
+          // Feishu table cells never wrap/auto-grow (content is cropped; the
+          // client reveals the rest on hover). 96px (~4 lines; platform range
+          // 32-124px) fits full task titles without truncation.
+          row_height: '96px',
           header_style: { bold: true, background_style: 'grey' },
-          // Note: Feishu rejects arbitrary pixel widths (76px/104px failed with
-          // ErrCode 200912); stick to these validated values.
+          // Note: Feishu rejects arbitrary pixel column widths — 80px seems to
+          // be the minimum (40/50/76/96/104 all fail ErrCode 200912); stick to
+          // these validated values.
           columns: [
             { name: 'priority', display_name: '优先级', data_type: 'options', width: '80px' },
             { name: 'task', display_name: '任务', data_type: 'lark_md', width: 'auto' },
-            { name: 'due', display_name: '截止', data_type: 'text', width: '110px' },
+            { name: 'due', display_name: '截止', data_type: 'text', width: '80px' },
             { name: 'status', display_name: '状态', data_type: 'options', width: '90px' },
           ],
           rows: table.rows.map((row) => ({
