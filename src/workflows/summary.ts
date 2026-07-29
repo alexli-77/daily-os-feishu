@@ -227,6 +227,7 @@ function overdueDays(dueDate: string, today: string): number {
 
 /** One row of the daily-plan table card (Feishu card 2.0 table component). */
 export interface DailyPlanTableRow {
+  rank: string;
   priority: string;
   priorityColor: string;
   taskMd: string;
@@ -275,11 +276,20 @@ export function buildDailyPlanTable(content: string, date: string, evidence?: Ev
     const issueId = todo.candidateId.startsWith('linear:') ? todo.candidateId.slice('linear:'.length) : '';
     const issue = issueId ? index.get(issueId) : undefined;
     const priority = issue ? priorityLabel(issue.priority) : '—';
+    // Feishu table cells do NOT wrap or auto-grow (long content is cropped, the
+    // client shows the rest on hover), and a leading "1." renders as an ordered
+    // list that breaks the cropping. So: no list marker (rank is its own
+    // column) and a hard-truncated title that fits the two-line row height.
+    // Row height is pinned at the platform max (124px ≈ 5-6 lines), enough for
+    // full task titles; the 120-char guard only protects pathological cases.
+    const title = todo.text.length > 120 ? `${todo.text.slice(0, 120)}…` : todo.text;
     return {
+      rank: String(todo.rank),
       priority,
       priorityColor: priority === 'P0' ? 'red' : priority === 'P1' ? 'orange' : 'grey',
-      taskMd: `${todo.rank}. ${todo.text}${issue ? ` ${link(issue.identifier)}` : ''}`,
-      due: issue?.dueDate ? (issue.dueDate <= date ? `${issue.dueDate.slice(5)} 已逾期` : issue.dueDate.slice(5)) : '无截止',
+      // Full-width "）" so the rank never parses as a markdown ordered list.
+      taskMd: `${todo.rank}）${title}${issue ? ` ${link(issue.identifier)}` : ''}`,
+      due: issue?.dueDate ? issue.dueDate.slice(5) : '无截止',
       status: issue?.stateName || '未关联',
       statusColor: issue ? STATE_COLOR[issue.stateType] || 'grey' : 'grey',
     };
