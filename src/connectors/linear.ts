@@ -49,22 +49,42 @@ const issuesQuery = `
   }
 `;
 
+/**
+ * Assignee + cycle scope applied to EVERY issue filter. Previously the
+ * project/team allowlist paths carried no assignee filter at all, so a team
+ * allowlist pulled every member's issues into the daily briefing.
+ */
+function linearScopeFilter(cfg: AppConfig['sources']['linear']): Record<string, unknown> {
+  const scope: Record<string, unknown> = {};
+  const assignee = cfg.assignee.trim();
+  if (assignee === 'me') scope.assignee = { isMe: { eq: true } };
+  else if (assignee.includes('@')) scope.assignee = { email: { eq: assignee } };
+  else if (assignee) scope.assignee = { displayName: { eq: assignee } };
+  // '' -> no assignee filter (whole team/project, the old allowlist behavior).
+  if (cfg.active_cycle_only) scope.cycle = { isActive: { eq: true } };
+  return scope;
+}
+
 async function buildLinearApiFilters(token: string, cfg: AppConfig['sources']['linear']): Promise<Record<string, unknown>[]> {
   const filters: Record<string, unknown>[] = [];
   const hasScopedAllowlist = cfg.projects_allowlist.length > 0 || cfg.teams_allowlist.length > 0;
+  const scope = linearScopeFilter(cfg);
 
   for (const project of cfg.projects_allowlist) {
-    filters.push({ ...openStateFilter, project: { name: { eq: project } } });
+    filters.push({ ...openStateFilter, ...scope, project: { name: { eq: project } } });
   }
 
   for (const team of await resolveLinearTeamNames(token, cfg.teams_allowlist)) {
-    filters.push({ ...openStateFilter, team: { name: { eq: team } } });
+    filters.push({ ...openStateFilter, ...scope, team: { name: { eq: team } } });
   }
 
   if (!hasScopedAllowlist) {
+    // Without an allowlist an empty assignee would mean "the whole workspace";
+    // fall back to isMe so a blank field can never flood the briefing.
     filters.push({
       ...openStateFilter,
-      assignee: { isMe: { eq: true } },
+      ...scope,
+      ...(cfg.assignee.trim() ? {} : { assignee: { isMe: { eq: true } } }),
     });
   }
 

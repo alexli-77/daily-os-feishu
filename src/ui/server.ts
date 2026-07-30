@@ -2132,6 +2132,9 @@ npm run service:install</code></pre>
                     <div class="secret-control"><input id="secret-LINEAR_API_KEY" type="password" autocomplete="new-password" /><button type="button" class="icon-button" data-toggle-secret="LINEAR_API_KEY" aria-label="Show Linear API key">&#128065;</button></div>
                   </div>
                   <p class="hint">Linear API key is preferred for direct collection. If it is empty, this app will try the local Codex Linear connection as a fallback.</p>
+                  <label>Assignee（我的任务标识）<input id="linear-assignee" placeholder="me / 邮箱 / 显示名；留空=整个团队" /></label>
+                  <label class="check-row"><input id="linear-active-cycle" type="checkbox" /> 仅当前 Cycle 的任务</label>
+                  <p class="hint">Assignee 作用于所有过滤（含团队/项目白名单）：me = API key 所属账号；填邮箱或 Linear 显示名可指定他人；留空拉整个团队。</p>
                   <label>Linear query<input id="linear-query" /></label>
                   <label>Allowed projects<textarea id="linear-projects-allowlist" rows="3" spellcheck="false" placeholder="One Linear project name per line"></textarea></label>
                   <label>Blocked projects<textarea id="linear-projects-blocklist" rows="3" spellcheck="false" placeholder="One Linear project name per line"></textarea></label>
@@ -3098,6 +3101,8 @@ function render() {
   set('github-repositories', (config.sources.github.repositories || []).join('\n'));
   set('github-per-repo-limit', config.sources.github.per_repo_limit || 20);
   checked('source-linear', config.sources.linear.enabled);
+  set('linear-assignee', config.sources.linear.assignee ?? 'me');
+  checked('linear-active-cycle', Boolean(config.sources.linear.active_cycle_only));
   set('linear-query', config.sources.linear.query || '');
   set('linear-projects-allowlist', (config.sources.linear.projects_allowlist || []).join('\n'));
   set('linear-projects-blocklist', (config.sources.linear.projects_blocklist || []).join('\n'));
@@ -3393,6 +3398,8 @@ async function saveAll() {
   next.sources.github.repositories = parseLines(value('github-repositories'));
   next.sources.github.per_repo_limit = Number(value('github-per-repo-limit') || 20);
   next.sources.linear.enabled = isChecked('source-linear');
+  next.sources.linear.assignee = value('linear-assignee').trim();
+  next.sources.linear.active_cycle_only = isChecked('linear-active-cycle');
   next.sources.linear.query = value('linear-query') || "assignee = me and state.type != 'completed'";
   next.sources.linear.projects_allowlist = parseLines(value('linear-projects-allowlist'));
   next.sources.linear.projects_blocklist = parseLines(value('linear-projects-blocklist'));
