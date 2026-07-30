@@ -1687,7 +1687,6 @@ const HTML = String.raw`<!doctype html>
       <nav class="nav" aria-label="Sections">
         <button class="nav-button active" data-section="overview">Overview</button>
         <button class="nav-button" data-section="guide">Guide</button>
-        <button class="nav-button" data-section="todo">Todo Inbox</button>
         <button class="nav-button" data-section="decision">Decision Policy</button>
         <button class="nav-button" data-section="okr">OKR</button>
         <button class="nav-button" data-section="setup">Setup</button>
@@ -1845,39 +1844,6 @@ npm run service:install</code></pre>
             </div>
           </section>
 
-          <section class="panel" id="section-todo">
-            <div class="panel-head">
-              <div>
-                <h2>Todo Inbox</h2>
-                <p class="hint">Only user-captured daily tasks live here. Daily plan and review will read these items as local context.</p>
-              </div>
-              <button type="button" class="secondary compact" data-action="todo_refresh">Refresh</button>
-            </div>
-            <div class="todo-page">
-              <section class="todo-editor" aria-labelledby="todo-editor-title">
-                <h3 id="todo-editor-title">Quick Capture</h3>
-                <label for="todo-page-text">Task</label>
-                <textarea id="todo-page-text" placeholder="帮我记一下：今晚 7:30 省庆活动&#10;或者：线上报销诊所医疗费用"></textarea>
-                <div class="todo-form-grid">
-                  <label>Type
-                    <select id="todo-page-type">
-                      <option value="todo">Todo</option>
-                      <option value="reminder">Reminder</option>
-                      <option value="time_boundary">Time boundary</option>
-                      <option value="note">Note</option>
-                    </select>
-                  </label>
-                  <label>Note
-                    <input id="todo-page-note" placeholder="Optional context" />
-                  </label>
-                </div>
-                <input id="todo-page-edit-id" type="hidden" />
-                <div class="todo-editor-actions">
-                  <button type="button" data-action="todo_page_save">Add Todo</button>
-                  <button type="button" class="secondary" data-action="todo_page_clear">Clear</button>
-                </div>
-                <p class="hint" id="todo-page-status"></p>
-              </section>
               <section class="todo-list-panel" aria-labelledby="todo-list-title">
                 <div class="todo-list-head">
                   <div>
