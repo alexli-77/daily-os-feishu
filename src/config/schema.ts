@@ -511,6 +511,12 @@ export const AppConfigSchema = z.object({
       // Workspace slug for building https://linear.app/<workspace>/issue/<id>
       // links in the console; empty disables linkification.
       workspace: z.string().default(''),
+      // Whose issues to collect: 'me' (API-key owner), an email, a display
+      // name, or '' to take the whole team/project (previous behavior when an
+      // allowlist was set). Applied to every filter, allowlisted or not.
+      assignee: z.string().default('me'),
+      // Only issues in the currently active cycle (sprint) when true.
+      active_cycle_only: z.boolean().default(false),
       query: z.string().default("assignee = me and state.type != 'completed'"),
       projects_allowlist: z.array(z.string()).default([]),
       projects_blocklist: z.array(z.string()).default([]),
