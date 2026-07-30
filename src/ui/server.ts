@@ -1844,17 +1844,6 @@ npm run service:install</code></pre>
             </div>
           </section>
 
-              <section class="todo-list-panel" aria-labelledby="todo-list-title">
-                <div class="todo-list-head">
-                  <div>
-                    <h3 id="todo-list-title">Open Tasks</h3>
-                    <p class="hint" id="todo-list-summary"></p>
-                  </div>
-                </div>
-                <div class="todo-list" id="todo-list"></div>
-              </section>
-            </div>
-          </section>
 
           <section class="panel" id="section-okr">
             <div class="panel-head">
@@ -2726,15 +2715,7 @@ legend {
   gap: 1rem;
   align-items: start;
 }
-.todo-editor,
-.todo-list-panel {
-  display: grid;
-  gap: .75rem;
-  border: 1px solid var(--border);
-  border-radius: .5rem;
-  background: #fbfcfb;
-  padding: .85rem;
-}
+
 .todo-editor textarea {
   min-height: 7rem;
   font-family: inherit;
