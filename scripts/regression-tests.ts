@@ -9,13 +9,13 @@ import { coalesceChatSuggestions } from '../src/chat/context-analysis.js';
 import type { ChatContextSuggestion } from '../src/chat/context-analysis.js';
 import { parseDailyOsCommand, runParsedDailyOsCommand } from '../src/interaction/daily-os-command.js';
 import { handlePendingBackgroundSuggestionReply } from '../src/service/background-suggestions.js';
-import { renderFeishuCalendarDraftCard, renderFeishuSkillCard, renderFeishuSkillWritebackPreviewCard, renderFeishuWorkflowCard } from '../src/connectors/feishu-sdk.js';
+import { renderFeishuCalendarDraftCard, renderFeishuPlanTableCard, renderFeishuSkillCard, renderFeishuSkillWritebackPreviewCard, renderFeishuWorkflowCard } from '../src/connectors/feishu-sdk.js';
 import { handleFeishuFeedbackCommand, shouldTreatAsFeedbackWorkflowRevision } from '../src/feedback/feishu-feedback.js';
 import { acquireSchedulerLock, releaseSchedulerLock, shouldRunScheduledWorkflow } from '../src/service/launchd.js';
 import { formatRecentWorkflowRuns, listRecentWorkflowRuns } from '../src/workflows/run-ledger.js';
 import { runWorkflow } from '../src/workflows/run-workflow.js';
 import { feishuDocsSource } from '../src/workflows/evidence.js';
-import { buildWorkflowEvidenceTrace, formatLatestWorkflowDetails, formatWorkflowSummaryForFeishu } from '../src/workflows/summary.js';
+import { buildDailyPlanTable, buildWorkflowEvidenceTrace, formatLatestWorkflowDetails, formatWorkflowSummaryForFeishu } from '../src/workflows/summary.js';
 import { extractWeeklyPrioritiesFromFeishuDocs, extractWeeklyPrioritiesFromXml } from '../src/workflows/weekly-priorities.js';
 import { createPolicyCandidate, listPolicyCandidates } from '../src/decision/candidates.js';
 import { decisionPolicyFiles } from '../src/decision/policy.js';
@@ -61,6 +61,7 @@ try {
   testDailyPlanSummaryKeepsReadableRowsAndUrgentQuestion();
   testDailyPlanSummaryKeepsGithubTaskTitles();
   testDailyPlanSummaryStyle2RemovesGroupsAndMarksAi();
+  testFeishuPlanUsesLinearEvidenceUrlWithoutWorkspaceConfig();
   testWorkflowSummaryQuotesLinearMetadata();
   testWorkflowDetailsShowEvidenceTrace();
   testSchedulerSkipsDailyReviewOnWeeklyReviewDay();
@@ -830,6 +831,32 @@ function testDailyPlanSummaryStyle2RemovesGroupsAndMarksAi(): void {
   assert.match(summary, /AI 解释对比材料.*（AI）/);
   assert.match(summary, /CUTTO-355「script 滚动及 frame 大小 Verify」/);
   assert.match(summary, /额外紧急事项/);
+}
+
+function testFeishuPlanUsesLinearEvidenceUrlWithoutWorkspaceConfig(): void {
+  const config = testConfig();
+  config.sources.linear.workspace = '';
+  const table = buildDailyPlanTable(
+    '{"todos":[{"rank":1,"text":"录完官网 Demo","candidateId":"linear:CUTTO-301"}]}',
+    '2026-07-31',
+    {
+      generated_at: '2026-07-31T12:00:00.000Z',
+      date: '2026-07-31',
+      sources: {
+        linear: {
+          state: 'available',
+          data: {
+            items: [{ identifier: 'CUTTO-301', title: '视频制作', url: 'https://linear.app/cutto/issue/CUTTO-301/video-production' }],
+          },
+        },
+      },
+    },
+    config,
+  );
+
+  assert.ok(table);
+  assert.match(table.rows[0]?.taskMd || '', /\[CUTTO-301\]\(https:\/\/linear\.app\/cutto\/issue\/CUTTO-301\/video-production\)/);
+  assert.match(JSON.stringify(renderFeishuPlanTableCard(table)), /https:\/\/linear\.app\/cutto\/issue\/CUTTO-301/);
 }
 
 function testWorkflowSummaryQuotesLinearMetadata(): void {

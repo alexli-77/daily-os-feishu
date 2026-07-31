@@ -298,6 +298,9 @@ async function runCommandTurn(ctx: TurnContext): Promise<void> {
       ctx.onEvent({ type: 'reply', content: reply });
     },
   });
+  const completion = '执行完成。';
+  replies.push(completion);
+  ctx.onEvent({ type: 'reply', content: completion });
   const combined = replies.join('\n\n').trim() || '已处理。';
   persistMessage(ctx.sessionId, 'assistant', combined, ctx.runId);
 }
