@@ -742,19 +742,20 @@ async function handleChatSend(
   auth: AuthContext,
 ): Promise<void> {
   const body = readRecord(await readJson(request));
-  const sessionId = String(body.session || '').trim();
   const text = String(body.text || '');
-  if (!sessionId || !text.trim()) return sendJson(response, { ok: false, error: 'session and text are required' }, 400);
+  if (!text.trim()) return sendJson(response, { ok: false, error: 'text is required' }, 400);
 
   const config = loadRuntimeConfig(options);
   const allowed = isWebChatTurnAllowed(config, auth.role, text);
   if (!allowed.ok) return sendJson(response, { ok: false, error: `权限不足：${allowed.reason}` }, 403);
+  const sessionId = String(body.session || '').trim() || createWebChatSession(config).id;
 
   response.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
     'cache-control': 'no-store',
     connection: 'keep-alive',
     'x-content-type-options': 'nosniff',
+    'x-chat-session-id': sessionId,
   });
   const write = (event: WebChatEvent): void => {
     if (!response.writableEnded) response.write(`data: ${JSON.stringify(event)}\n\n`);

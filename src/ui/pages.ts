@@ -11,6 +11,7 @@ import { listTodoFeedback } from '../todo/feedback.js';
 import { readOkrSnapshot, type OkrObjective } from './okr-lite.js';
 import { readArtifactsIndex, findArtifactById, isPreviewableType, type ArtifactRecord } from '../storage/artifacts.js';
 import { runManager } from '../service/run-manager.js';
+import { linearIssueUrl } from '../utils/linear-link.js';
 
 /**
  * Server-rendered pages for the LEO-210 web console. These are plain HTML
@@ -278,9 +279,7 @@ function renderPlanColumn(ctx: PageContext): string {
       const stateLabel = state === 'complete' ? 'done' : state === 'defer' ? 'deferred' : state === 'update' ? 'updated' : '';
       const issueId = todo.candidateId.startsWith('linear:') ? todo.candidateId.slice('linear:'.length) : '';
       const tag = issueId
-        ? workspace
-          ? `<a class="tag tag-link" href="https://linear.app/${encodeURIComponent(workspace)}/issue/${encodeURIComponent(issueId)}" target="_blank" rel="noopener">${escapeHtml(issueId)}</a>`
-          : `<span class="tag">${escapeHtml(issueId)}</span>`
+        ? `<a class="tag tag-link" href="${escapeHtml(linearIssueUrl(issueId, workspace))}" target="_blank" rel="noopener">${escapeHtml(issueId)}</a>`
         : todo.candidateId
           ? `<span class="tag">${escapeHtml(todo.candidateId)}</span>`
           : '';
@@ -439,7 +438,6 @@ const CHAT_JS = String.raw`
     sending=on;sendBtn.disabled=on;input.disabled=on;stopBtn.hidden=!on;
   }
   function send(text){
-    if(!sessionId){return;}
     bubble('user',text);
     var target=bubble('assistant','');
     var statusEl=document.createElement('div');statusEl.className='chat-status muted small';target.parentNode.appendChild(statusEl);
@@ -448,6 +446,8 @@ const CHAT_JS = String.raw`
     controller=new AbortController();
     api('/api/chat/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session:sessionId,text:text}),signal:controller.signal})
       .then(function(res){
+        var resolvedSession=res.headers.get('x-chat-session-id');
+        if(resolvedSession){sessionId=resolvedSession;}
         if(res.status===403){return res.json().then(function(d){target.textContent='拒绝：'+((d&&d.error)||'permission denied');throw 'handled';});}
         if(!res.body){return res.text().then(function(t){target.textContent=t;});}
         var reader=res.body.getReader();var dec=new TextDecoder();var buf='';
@@ -473,7 +473,7 @@ const CHAT_JS = String.raw`
       .catch(function(e){if(e!=='handled'){if(controller&&controller.signal.aborted){statusEl.textContent='已停止。';}else{target.textContent='连接中断：'+String(e);}}})
       .then(function(){setSending(false);controller=null;loadSessions();});
   }
-  form.addEventListener('submit',function(ev){ev.preventDefault();if(sending)return;var t=input.value.trim();if(!t||!sessionId)return;input.value='';send(t);});
+  form.addEventListener('submit',function(ev){ev.preventDefault();if(sending)return;var t=input.value.trim();if(!t)return;input.value='';send(t);});
   input.addEventListener('keydown',function(ev){if(ev.key==='Enter'&&!ev.shiftKey){ev.preventDefault();form.dispatchEvent(new Event('submit',{cancelable:true}));}});
   stopBtn.addEventListener('click',function(){
     if(controller)controller.abort();

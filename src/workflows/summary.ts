@@ -2,6 +2,7 @@ import type { AppConfig, WorkflowName } from '../config/schema.js';
 import type { MemoryBundle } from '../storage/memory.js';
 import type { Evidence } from './types.js';
 import { collectSyncDrift, filterUndecidedFindings, renderSyncDriftSection } from '../progress/sync-drift.js';
+import { linearIssueUrl } from '../utils/linear-link.js';
 
 const MAX_SUMMARY_CHARS = 2200;
 const MAX_DETAIL_CHARS = 7000;
@@ -181,6 +182,7 @@ function completedCandidateIdsFromEvidence(evidence?: Evidence): Set<string> {
 
 interface LinearIssueBrief {
   identifier: string;
+  url: string;
   title: string;
   priority: number;
   dueDate: string;
@@ -199,6 +201,7 @@ function linearIssueIndex(evidence?: Evidence): Map<string, LinearIssueBrief> {
     const state = (item.state ?? {}) as Record<string, unknown>;
     index.set(item.identifier, {
       identifier: item.identifier,
+      url: typeof item.url === 'string' ? item.url : '',
       title: typeof item.title === 'string' ? item.title : '',
       priority: typeof item.priority === 'number' ? item.priority : 0,
       dueDate: typeof item.dueDate === 'string' ? item.dueDate : '',
@@ -255,8 +258,8 @@ export function buildDailyPlanTable(content: string, date: string, evidence?: Ev
   if (!plan) return null;
   const index = linearIssueIndex(evidence);
   const workspace = config?.sources.linear.workspace || '';
-  const link = (identifier: string): string =>
-    workspace ? `[${identifier}](https://linear.app/${encodeURIComponent(workspace)}/issue/${identifier})` : identifier;
+  const link = (identifier: string, evidenceUrl = ''): string =>
+    `[${identifier}](${linearIssueUrl(identifier, workspace, evidenceUrl)})`;
 
   const followupLines: string[] = [];
   const urgent = [...index.values()]
@@ -267,7 +270,7 @@ export function buildDailyPlanTable(content: string, date: string, evidence?: Ev
     followupLines.push('🔴 **需要立即跟进**');
     urgent.forEach((issue, i) => {
       const days = overdueDays(issue.dueDate, date);
-      followupLines.push(`**${i + 1}. ${issue.title}**（${link(issue.identifier)}）`);
+      followupLines.push(`**${i + 1}. ${issue.title}**（${link(issue.identifier, issue.url)}）`);
       followupLines.push(`　　截止 ${issue.dueDate}（**${days > 0 ? `已逾期 ${days} 天` : '今天截止'}**）· ${priorityLabel(issue.priority)} · ${issue.stateName || '未完成'}`);
     });
   }
@@ -288,7 +291,7 @@ export function buildDailyPlanTable(content: string, date: string, evidence?: Ev
       priority,
       priorityColor: priority === 'P0' ? 'red' : priority === 'P1' ? 'orange' : 'grey',
       // Full-width "）" so the rank never parses as a markdown ordered list.
-      taskMd: `${todo.rank}）${title}${issue ? ` ${link(issue.identifier)}` : ''}`,
+      taskMd: `${todo.rank}）${title}${issueId ? ` ${link(issueId, issue?.url)}` : ''}`,
       due: issue?.dueDate ? issue.dueDate.slice(5) : '无截止',
       status: issue?.stateName || '未关联',
       statusColor: issue ? STATE_COLOR[issue.stateType] || 'grey' : 'grey',
@@ -307,10 +310,10 @@ function renderDailyPlanTodoSummary(plan: DailyPlanTodoPlan, date?: string, evid
   const index = linearIssueIndex(evidence);
   const today = date || '';
   const workspace = config?.sources.linear.workspace || '';
-  // Feishu card markdown supports **bold** and [links](url) — issue ids become
-  // clickable Linear links when a workspace slug is configured.
-  const issueRef = (identifier: string): string =>
-    workspace ? `[${identifier}](https://linear.app/${encodeURIComponent(workspace)}/issue/${identifier})` : identifier;
+  // Feishu card markdown supports **bold** and [links](url). Prefer the
+  // connector's canonical URL, then fall back to a locally resolvable URL.
+  const issueRef = (identifier: string, evidenceUrl = ''): string =>
+    `[${identifier}](${linearIssueUrl(identifier, workspace, evidenceUrl)})`;
   const lines: string[] = [];
 
   if (today && index.size > 0) {
@@ -323,7 +326,7 @@ function renderDailyPlanTodoSummary(plan: DailyPlanTodoPlan, date?: string, evid
       urgent.forEach((issue, i) => {
         const days = overdueDays(issue.dueDate, today);
         const dueNote = days > 0 ? `已逾期 ${days} 天` : '今天截止';
-        lines.push(`**${i + 1}. ${issue.title}**（${issueRef(issue.identifier)}）`);
+        lines.push(`**${i + 1}. ${issue.title}**（${issueRef(issue.identifier, issue.url)}）`);
         lines.push(`　　截止 ${issue.dueDate}（**${dueNote}**）· ${priorityLabel(issue.priority)} · ${issue.stateName || '未完成'}`);
       });
       lines.push('', '---', '');
@@ -337,7 +340,9 @@ function renderDailyPlanTodoSummary(plan: DailyPlanTodoPlan, date?: string, evid
     const issue = issueId ? index.get(issueId) : undefined;
     if (issue) {
       const due = issue.dueDate ? (today && issue.dueDate <= today ? `截止 ${issue.dueDate} **已逾期**` : `截止 ${issue.dueDate}`) : '无截止';
-      lines.push(`　　${priorityLabel(issue.priority)} · ${issueRef(issue.identifier)} · ${due} · ${issue.stateName || '未完成'}`);
+      lines.push(`　　${priorityLabel(issue.priority)} · ${issueRef(issue.identifier, issue.url)} · ${due} · ${issue.stateName || '未完成'}`);
+    } else if (issueId) {
+      lines.push(`　　${issueRef(issueId)}`);
     }
   }
   if (plan.note) lines.push('', `> ${plan.note}`);

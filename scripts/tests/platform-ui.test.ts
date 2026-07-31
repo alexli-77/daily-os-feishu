@@ -50,6 +50,8 @@ async function main(): Promise<void> {
   // Import after chdir so all cwd-relative path resolution lands in the temp dir.
   const auth = await import('../../src/ui/auth.js');
   const artifacts = await import('../../src/storage/artifacts.js');
+  const { loadConfig } = await import('../../src/config/load-config.js');
+  const { writeLatestWorkflowOutput } = await import('../../src/storage/memory.js');
   const { runManager } = await import('../../src/service/run-manager.js');
   const { startUiServer } = await import('../../src/ui/server.js');
 
@@ -151,6 +153,22 @@ async function main(): Promise<void> {
     const pageText = await authedPage.text();
     check('dashboard with admin session -> 200 html', authedPage.status === 200 && pageText.includes('Recent runs'), String(authedPage.status));
 
+    const todayConfig = loadConfig('config/config.yaml');
+    todayConfig.sources.linear.workspace = '';
+    writeLatestWorkflowOutput(
+      todayConfig,
+      'daily_plan',
+      '2026-07-31',
+      '{"todos":[{"rank":1,"text":"录完官网 Demo","candidateId":"linear:CUTTO-301"}]}',
+    );
+    const todayPage = await fetch(`${base}/today`, { headers: { cookie: adminCookie } });
+    const todayText = await todayPage.text();
+    check(
+      'today: Linear issue remains clickable without workspace config',
+      todayPage.status === 200 && todayText.includes('href="https://linear.app/issue/CUTTO-301"'),
+      String(todayPage.status),
+    );
+
     const apiNoAuth = await fetch(`${base}/api/artifacts/reindex`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
     check('write api without auth -> 401', apiNoAuth.status === 401, String(apiNoAuth.status));
 
@@ -204,15 +222,38 @@ async function main(): Promise<void> {
             return {};
           }
         });
-    const sendChat = async (cookie: string, session: string, text: string) => {
+    const sendChat = async (cookie: string, session: string | undefined, text: string) => {
       const res = await fetch(`${base}/api/chat/send`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', cookie },
-        body: JSON.stringify({ session, text }),
+        body: JSON.stringify({ ...(session ? { session } : {}), text }),
       });
       const body = await res.text();
-      return { status: res.status, events: res.status === 200 ? readSse(body) : [], body };
+      return {
+        status: res.status,
+        events: res.status === 200 ? readSse(body) : [],
+        sessionId: res.headers.get('x-chat-session-id') || '',
+        body,
+      };
     };
+
+    // Sending the first instruction from an empty Chat page creates the chat
+    // atomically and returns its id to the browser.
+    const firstTurn = await sendChat(adminCookie, undefined, 'daily-os status');
+    check('chat: first instruction auto-creates a session', firstTurn.status === 200 && firstTurn.sessionId.length > 0, `${firstTurn.status} ${firstTurn.body.slice(0, 120)}`);
+    check(
+      'chat: completed command emits an assistant completion reply',
+      firstTurn.events.some((event) => event.type === 'reply' && event.content === '执行完成。'),
+      JSON.stringify(firstTurn.events),
+    );
+    const firstMessages = (await fetch(`${base}/api/chat/messages?session=${encodeURIComponent(firstTurn.sessionId)}`, {
+      headers: { cookie: adminCookie },
+    }).then((r) => r.json())) as { messages?: Array<{ role: string; content: string }> };
+    check(
+      'chat: auto-created session persists the first turn',
+      Boolean(firstMessages.messages?.some((message) => message.role === 'user' && message.content === 'daily-os status')),
+      JSON.stringify(firstMessages.messages || []),
+    );
 
     // Admin: create a session, run a command turn (no codex needed), verify it
     // streams a reply, persists both messages, and lands a usage-ledger row.
