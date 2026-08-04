@@ -3,7 +3,13 @@ import path from 'node:path';
 import type { AppConfig } from '../config/schema.js';
 import type { Role } from './auth.js';
 import { listRecentWorkflowRuns, type WorkflowRunRecord } from '../workflows/run-ledger.js';
-import { openTodoInboxItems } from '../todo/inbox.js';
+import {
+  listTodoInboxHistory,
+  openTodoInboxItems,
+  purgeExpiredTodoInboxHistory,
+  TODO_HISTORY_RETENTION_DAYS,
+  type TodoInboxItem,
+} from '../todo/inbox.js';
 import { readLatestWorkflowOutput } from '../storage/memory.js';
 import { extractDailyPlanTodos } from '../workflows/summary.js';
 import { todayInTimezone } from '../utils/date.js';
@@ -303,30 +309,66 @@ function renderPlanColumn(ctx: PageContext): string {
 /** My todos — the user's own quick captures, with add / done / defer / delete. */
 function renderMyTodoColumn(ctx: PageContext): string {
   const { config } = ctx;
+  // Retire anything past the retention window before reading the history lists.
+  safe(() => purgeExpiredTodoInboxHistory(config), 0);
   const open = safe(() => openTodoInboxItems(config), []);
-  const feedback = readTodoFeedback();
+  const done = safe(() => listTodoInboxHistory(config, 'done'), []);
+  const deferred = safe(() => listTodoInboxHistory(config, 'deferred'), []);
   const captureForm = `
     <form class="inline-form todo-capture" data-post="/api/capture">
       <input name="text" placeholder="记一条 todo…" autocomplete="off" required />
       <button type="submit">Add</button>
     </form>`;
-  if (open.length === 0) return `${captureForm}<p class="muted">还没有记录。</p>`;
-  const rows = open
-    .map((item) => {
-      const fb = feedback.get(item.id);
-      const stateLabel = fb ? (fb === 'check' ? 'checked' : 'deferred') : 'open';
-      return `<li class="todo-item state-${stateLabel}">
+  const openList =
+    open.length === 0
+      ? '<p class="muted">还没有记录。</p>'
+      : `<ul class="todo-list">${open
+          .map(
+            (item) => `<li class="todo-item">
         <div class="todo-text">${escapeHtml(item.text)}</div>
-        <div class="todo-meta"><span class="tag">${escapeHtml(item.type)}</span><span class="muted small">${stateLabel}</span></div>
+        <div class="todo-meta"><span class="tag">${escapeHtml(item.type)}</span><span class="muted small">open</span></div>
         <div class="todo-actions">
           <button type="button" data-post="/api/today/todo-feedback" data-payload='${payload({ id: item.id, action: 'check' })}'>Done</button>
           <button type="button" class="secondary" data-post="/api/today/todo-feedback" data-payload='${payload({ id: item.id, action: 'defer' })}'>Defer</button>
           <button type="button" class="secondary" data-post="/api/todo-inbox" data-payload='${payload({ id: item.id, status: 'deleted' })}'>Delete</button>
         </div>
-      </li>`;
-    })
-    .join('');
-  return `${captureForm}<ul class="todo-list">${rows}</ul>`;
+      </li>`,
+          )
+          .join('')}</ul>`;
+  return `${captureForm}${openList}${renderTodoHistorySection('History', 'done', done)}${renderTodoHistorySection('Deferred', 'deferred', deferred)}`;
+}
+
+/**
+ * A collapsed History / Deferred list: the last month of done (or deferred) todos,
+ * each restorable back to open or deletable outright. Anything older than the
+ * retention window has already been retired before this renders.
+ */
+function renderTodoHistorySection(label: string, state: 'done' | 'deferred', items: TodoInboxItem[]): string {
+  const rows =
+    items.length === 0
+      ? `<p class="muted small">最近 ${TODO_HISTORY_RETENTION_DAYS} 天没有${state === 'done' ? '完成' : '延期'}的 todo。</p>`
+      : `<ul class="todo-list">${items
+          .map(
+            (item) => `<li class="todo-item state-${state === 'done' ? 'checked' : 'deferred'}">
+        <div class="todo-text">${escapeHtml(item.text)}</div>
+        <div class="todo-meta"><span class="tag">${escapeHtml(item.type)}</span><span class="muted small">${escapeHtml(formatTodoHistoryDate(item.updated_at || item.created_at))}</span></div>
+        <div class="todo-actions">
+          <button type="button" data-post="/api/todo-inbox" data-payload='${payload({ id: item.id, status: 'open' })}'>Restore</button>
+          <button type="button" class="secondary" data-post="/api/todo-inbox" data-payload='${payload({ id: item.id, status: 'deleted' })}'>Delete</button>
+        </div>
+      </li>`,
+          )
+          .join('')}</ul>`;
+  return `<details class="todo-history"><summary>${escapeHtml(label)} <span class="muted small">${items.length} · 最近 ${TODO_HISTORY_RETENTION_DAYS} 天</span></summary>${rows}</details>`;
+}
+
+/** `2026-08-04 14:30` — enough to tell two same-day entries apart, no timezone noise. */
+function formatTodoHistoryDate(value: string): string {
+  const ts = Date.parse(value);
+  if (Number.isNaN(ts)) return value;
+  const date = new Date(ts);
+  const pad = (input: number): string => String(input).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 // --- chat (LEO-236) ---------------------------------------------------------
@@ -731,30 +773,6 @@ function readUsageSummary(): UsageSummary {
   return { enabled: true, todayCalls, todayTokens, todayCost, monthCost, month };
 }
 
-/** Latest feedback action per todo id from data/runtime/todo-feedback.jsonl. */
-function readTodoFeedback(): Map<string, 'check' | 'defer'> {
-  const file = path.resolve('./data/runtime/todo-feedback.jsonl');
-  const out = new Map<string, 'check' | 'defer'>();
-  if (!fs.existsSync(file)) return out;
-  try {
-    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        const entry = JSON.parse(trimmed) as { id?: string; action?: string };
-        if (typeof entry.id === 'string' && (entry.action === 'check' || entry.action === 'defer')) {
-          out.set(entry.id, entry.action);
-        }
-      } catch {
-        // skip bad line
-      }
-    }
-  } catch {
-    return out;
-  }
-  return out;
-}
-
 // --- small helpers ----------------------------------------------------------
 
 function statusPill(status: WorkflowRunRecord['status']): string {
@@ -870,8 +888,17 @@ button.danger{background:var(--danger);border-color:var(--danger)}
 .todo-capture{display:flex;gap:8px;margin-bottom:10px}
 .todo-capture input{flex:1;min-width:0}
 .todo-item.state-checked{opacity:.6}
+.todo-item.state-checked .todo-text{text-decoration:line-through}
+.todo-item.state-deferred{opacity:.75;border-style:dashed}
 .todo-meta{display:flex;gap:8px;align-items:center;margin:6px 0}
 .todo-actions{display:flex;gap:8px}
+.todo-history{margin-top:12px;border-top:1px solid var(--border);padding-top:10px}
+.todo-history>summary{cursor:pointer;font-weight:600;list-style:none;display:flex;gap:8px;align-items:center}
+.todo-history>summary::-webkit-details-marker{display:none}
+.todo-history>summary::before{content:"▸";color:var(--muted);font-weight:400}
+.todo-history[open]>summary::before{content:"▾"}
+.todo-history>summary:hover{color:var(--accent)}
+.todo-history>*:not(summary){margin-top:10px}
 .signal-block{margin-bottom:14px}
 .signal-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
 .signal{display:flex;justify-content:space-between;padding:6px 8px;border-radius:8px;background:var(--surface-2)}

@@ -11,7 +11,7 @@ import { writeFileAtomic } from '../utils/atomic-write.js';
  * reweight. Appends are atomic (read-modify-writeFileAtomic) so a crash mid
  * write never corrupts the ledger.
  */
-export type TodoFeedbackEvent = 'present' | 'complete' | 'defer' | 'reorder' | 'carry_over' | 'update';
+export type TodoFeedbackEvent = 'present' | 'complete' | 'defer' | 'reorder' | 'carry_over' | 'update' | 'reopen';
 
 export interface TodoFeedbackEntry {
   ts: string;
@@ -91,8 +91,13 @@ export function recordCarryOver(config: AppConfig, date: string, candidateIds: s
  */
 export function getCompletedCandidateIds(config: AppConfig): Set<string> {
   const out = new Set<string>();
+  // Ledger order is append order, so the last complete/reopen for an id wins:
+  // restoring a todo from the console's History clears its completed state and
+  // makes it eligible for planning again.
   for (const entry of listTodoFeedback(config)) {
-    if (entry.event === 'complete' && entry.candidateId) out.add(entry.candidateId);
+    if (!entry.candidateId) continue;
+    if (entry.event === 'complete') out.add(entry.candidateId);
+    else if (entry.event === 'reopen') out.delete(entry.candidateId);
   }
   return out;
 }

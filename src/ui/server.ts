@@ -600,10 +600,6 @@ async function todoFeedback(options: UiServerOptions, body: unknown): Promise<Re
   applyEnv(env);
   const config = loadConfig(options.configPath);
   updateTodoInboxItemById(config, id, { status: action === 'check' ? 'done' : 'deferred' });
-  const filePath = path.resolve('./data/runtime/todo-feedback.jsonl');
-  const entry = JSON.stringify({ id, action, ts: new Date().toISOString() });
-  const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
-  writeFileAtomic(filePath, `${existing}${entry}\n`);
   return { ok: true, id, action };
 }
 
@@ -881,12 +877,25 @@ async function updateTodoInbox(options: UiServerOptions, body: unknown): Promise
   const env = readEnvFile(options.envPath);
   applyEnv(env);
   const config = loadConfig(options.configPath);
+  const status = typeof request.status === 'string' && isTodoInboxStatus(request.status) ? request.status : undefined;
   const result = updateTodoInboxItemById(config, id, {
     text: typeof request.text === 'string' ? request.text : undefined,
     type: typeof request.type === 'string' && isTodoInboxType(request.type) ? request.type : undefined,
-    status: typeof request.status === 'string' && isTodoInboxStatus(request.status) ? request.status : undefined,
+    status,
     note: typeof request.note === 'string' ? request.note : undefined,
   });
+  // Restoring from History/Deferred must also clear the completed state in the
+  // feedback ledger, or the scorer would keep excluding it and the restored todo
+  // could never be planned again.
+  if (status === 'open') {
+    recordTodoFeedback(config, {
+      date: todayInTimezone(config),
+      event: 'reopen',
+      candidateId: `todo_inbox:${id}`,
+      rank: 0,
+      source: 'console-my-todos',
+    });
+  }
   return { ok: true, text: result.reply || 'Todo inbox updated.', items: result.items || [], state: await buildState(options) };
 }
 
