@@ -174,6 +174,55 @@ export function updateTodoInboxItemById(config: AppConfig, id: string, update: T
   return { handled: true, reply: `Todo 已更新：${match.text}`, items: [match] };
 }
 
+/** How long a done/deferred todo stays visible in the console's History / Deferred lists. */
+export const TODO_HISTORY_RETENTION_DAYS = 30;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Done (or deferred) todos from the retention window, newest first. Anything that
+ * fell out of the window is dropped by `purgeExpiredTodoInboxHistory` on the next
+ * read, so this only ever shows the last month of activity.
+ */
+export function listTodoInboxHistory(
+  config: AppConfig,
+  status: 'done' | 'deferred',
+  now: Date = new Date(),
+): TodoInboxItem[] {
+  const cutoff = now.getTime() - TODO_HISTORY_RETENTION_DAYS * DAY_MS;
+  return listTodoInboxItems(config)
+    .filter((item) => item.status === status)
+    .filter((item) => {
+      const ts = Date.parse(item.updated_at || item.created_at);
+      return Number.isNaN(ts) ? true : ts >= cutoff;
+    })
+    .sort((left, right) => (left.updated_at < right.updated_at ? 1 : left.updated_at > right.updated_at ? -1 : 0));
+}
+
+/**
+ * Retire done/deferred todos whose retention window has passed by marking them
+ * `deleted` (the inbox's existing tombstone — nothing is hard-removed, so the
+ * ledger stays append-only and auditable). Returns how many were retired; a no-op
+ * write is skipped so this is cheap to call on every console render.
+ */
+export function purgeExpiredTodoInboxHistory(config: AppConfig, now: Date = new Date()): number {
+  const cutoff = now.getTime() - TODO_HISTORY_RETENTION_DAYS * DAY_MS;
+  const items = listTodoInboxItems(config);
+  let retired = 0;
+  for (const item of items) {
+    if (item.status !== 'done' && item.status !== 'deferred') continue;
+    const ts = Date.parse(item.updated_at || item.created_at);
+    if (Number.isNaN(ts) || ts >= cutoff) continue;
+    item.status = 'deleted';
+    retired += 1;
+  }
+  if (retired > 0) {
+    writeTodoInboxItems(config, items);
+    syncTodoInboxVaultNote(config);
+  }
+  return retired;
+}
+
 export function todoInboxEvidence(config: AppConfig): { path: string; open: TodoInboxItem[]; recent: TodoInboxItem[] } {
   const items = listTodoInboxItems(config);
   return {

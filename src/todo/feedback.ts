@@ -11,7 +11,7 @@ import { writeFileAtomic } from '../utils/atomic-write.js';
  * reweight. Appends are atomic (read-modify-writeFileAtomic) so a crash mid
  * write never corrupts the ledger.
  */
-export type TodoFeedbackEvent = 'present' | 'complete' | 'defer' | 'reorder' | 'carry_over' | 'update';
+export type TodoFeedbackEvent = 'present' | 'complete' | 'defer' | 'reorder' | 'carry_over' | 'update' | 'reopen';
 
 export interface TodoFeedbackEntry {
   ts: string;
@@ -80,6 +80,26 @@ export function recordCarryOver(config: AppConfig, date: string, candidateIds: s
     config,
     pending.map((candidateId) => ({ ts, date, event: 'carry_over' as const, candidateId, rank: 0 })),
   );
+}
+
+/**
+ * candidateIds the user has marked complete — on the Feishu plan card's ✅ button
+ * or the console's "完成". A completed todo must not be re-proposed by the next
+ * daily plan, so the scorer subtracts these from its candidate pool. Completion is
+ * terminal: an id stays excluded on every later day, not just the day it was
+ * ticked, which is exactly what "点了 ✅ 第二天还收到同样的 todo" was missing.
+ */
+export function getCompletedCandidateIds(config: AppConfig): Set<string> {
+  const out = new Set<string>();
+  // Ledger order is append order, so the last complete/reopen for an id wins:
+  // restoring a todo from the console's History clears its completed state and
+  // makes it eligible for planning again.
+  for (const entry of listTodoFeedback(config)) {
+    if (!entry.candidateId) continue;
+    if (entry.event === 'complete') out.add(entry.candidateId);
+    else if (entry.event === 'reopen') out.delete(entry.candidateId);
+  }
+  return out;
 }
 
 /**

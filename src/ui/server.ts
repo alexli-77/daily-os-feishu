@@ -588,15 +588,18 @@ async function todoFeedback(options: UiServerOptions, body: unknown): Promise<Re
     return { ok: true, candidateId, event, text: event === 'complete' ? '已标记完成' : event === 'defer' ? '已延期' : '已记录更新' };
   }
 
-  // Legacy inbox feedback (My todos): simple {id, action} display state.
+  // Inbox feedback (My todos). This must write through to the inbox ledger's own
+  // status, not just the display-state line: the next daily plan builds its
+  // candidates from `todoInboxEvidence().open`, so a "Done" that only recorded a
+  // display state left the item open and it kept being re-planned.
   const id = String(request.id || '').trim();
   const action = String(request.action || '').trim();
   if (!id) return { ok: false, error: 'Todo id is required.' };
   if (action !== 'check' && action !== 'defer') return { ok: false, error: 'action must be check or defer.' };
-  const filePath = path.resolve('./data/runtime/todo-feedback.jsonl');
-  const entry = JSON.stringify({ id, action, ts: new Date().toISOString() });
-  const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
-  writeFileAtomic(filePath, `${existing}${entry}\n`);
+  const env = readEnvFile(options.envPath);
+  applyEnv(env);
+  const config = loadConfig(options.configPath);
+  updateTodoInboxItemById(config, id, { status: action === 'check' ? 'done' : 'deferred' });
   return { ok: true, id, action };
 }
 
@@ -874,12 +877,25 @@ async function updateTodoInbox(options: UiServerOptions, body: unknown): Promise
   const env = readEnvFile(options.envPath);
   applyEnv(env);
   const config = loadConfig(options.configPath);
+  const status = typeof request.status === 'string' && isTodoInboxStatus(request.status) ? request.status : undefined;
   const result = updateTodoInboxItemById(config, id, {
     text: typeof request.text === 'string' ? request.text : undefined,
     type: typeof request.type === 'string' && isTodoInboxType(request.type) ? request.type : undefined,
-    status: typeof request.status === 'string' && isTodoInboxStatus(request.status) ? request.status : undefined,
+    status,
     note: typeof request.note === 'string' ? request.note : undefined,
   });
+  // Restoring from History/Deferred must also clear the completed state in the
+  // feedback ledger, or the scorer would keep excluding it and the restored todo
+  // could never be planned again.
+  if (status === 'open') {
+    recordTodoFeedback(config, {
+      date: todayInTimezone(config),
+      event: 'reopen',
+      candidateId: `todo_inbox:${id}`,
+      rank: 0,
+      source: 'console-my-todos',
+    });
+  }
   return { ok: true, text: result.reply || 'Todo inbox updated.', items: result.items || [], state: await buildState(options) };
 }
 

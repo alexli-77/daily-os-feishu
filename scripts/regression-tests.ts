@@ -93,6 +93,7 @@ try {
     'scripts/tests/billing.test.ts',
     'scripts/tests/okr.test.ts',
     'scripts/tests/todo-scorer.test.ts',
+    'scripts/tests/todo-inbox-history.test.ts',
     'scripts/tests/daily-review-reconcile.test.ts',
     'scripts/tests/platform-ui.test.ts',
     'scripts/tests/adversarial.test.ts',
