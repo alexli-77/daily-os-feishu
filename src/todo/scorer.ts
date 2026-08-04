@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { AppConfig } from '../config/schema.js';
 import type { Evidence, EvidenceSource } from '../workflows/types.js';
 import { DEFAULT_TOP_N, loadScorerWeights, type ScorerWeights } from './scorer-config.js';
-import { getCarryOverDaysById } from './feedback.js';
+import { getCarryOverDaysById, getCompletedCandidateIds } from './feedback.js';
 
 /**
  * LEO-209 — programmatic todo scorer.
@@ -56,6 +56,12 @@ export interface ScoreAndRankOptions {
    * tests; falls back to reading the ledger from disk in `buildScoredTodos`.
    */
   carryOverDaysById?: Map<string, number>;
+  /**
+   * candidateIds already marked complete (Feishu ✅ / console "完成"), excluded from
+   * the candidate pool so a finished todo is never re-proposed tomorrow.
+   * Injectable for tests; falls back to the ledger in `buildScoredTodos`.
+   */
+  completedCandidateIds?: Set<string>;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -76,7 +82,11 @@ export function buildScoredTodos(
 ): { generated_at: string; weights: ScorerWeights; top: ScoredTodoCandidate[]; total_candidates: number } {
   const weights = options.weights ?? loadScorerWeights();
   const now = options.now ?? new Date(`${date}T00:00:00`);
-  const candidates = normalizeCandidates({ config, evidence, date, now });
+  const all = normalizeCandidates({ config, evidence, date, now });
+  // Drop anything the user already ticked complete: a completed todo must never be
+  // re-proposed by a later plan, however its source still reports it.
+  const completed = options.completedCandidateIds ?? getCompletedCandidateIds(config);
+  const candidates = completed.size ? all.filter((candidate) => !completed.has(candidate.id)) : all;
   // LEO-232: overlay the carry-over streak (from the daily-review reconciliation
   // ledger) so a task the user keeps deferring gains carryOverDays even when its
   // source (e.g. Linear/vault) carries no creation timestamp.

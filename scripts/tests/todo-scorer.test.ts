@@ -161,6 +161,53 @@ test('buildScoredTodos returns a ranked top with breakdowns end-to-end', () => {
   assert.ok(result.top[0].breakdown.overdue === 35);
 });
 
+// --- completed todos are never re-proposed ---------------------------------
+
+test('a candidate ticked complete is dropped from the next plan (Feishu ✅ / console 完成)', () => {
+  withTmpWorkdir(() => {
+    const before = buildScoredTodos(config, makeEvidence(), DATE, { now: NOW });
+    const target = before.top[0].id;
+    // The user ticks ✅ on today's card; the ledger records a `complete` event.
+    recordTodoFeedback(config, { date: DATE, event: 'complete', candidateId: target, rank: 1, source: 'feishu-card' });
+    // The next plan must not re-propose it, even though the source still reports it.
+    const after = buildScoredTodos(config, makeEvidence(), DATE, { now: NOW });
+    assert.ok(!after.top.some((item) => item.id === target), 'completed candidate is gone from the ranked top');
+    assert.equal(after.total_candidates, before.total_candidates - 1, 'it is removed from the pool, not just demoted');
+  });
+});
+
+test('completion is terminal: still excluded on a later day, not just the day it was ticked', () => {
+  withTmpWorkdir(() => {
+    const target = buildScoredTodos(config, makeEvidence(), DATE, { now: NOW }).top[0].id;
+    recordTodoFeedback(config, { date: DATE, event: 'complete', candidateId: target, rank: 1, source: 'feishu-card' });
+    const laterDate = '2026-07-24';
+    const later = buildScoredTodos(config, makeEvidence(), laterDate, { now: new Date(`${laterDate}T00:00:00`) });
+    assert.ok(!later.top.some((item) => item.id === target), 'a week later it is still excluded');
+  });
+});
+
+test('a deferred candidate is NOT dropped — only completion removes it', () => {
+  withTmpWorkdir(() => {
+    const before = buildScoredTodos(config, makeEvidence(), DATE, { now: NOW });
+    const target = before.top[0].id;
+    recordTodoFeedback(config, { date: DATE, event: 'defer', candidateId: target, rank: 1, source: 'feishu-card' });
+    const after = buildScoredTodos(config, makeEvidence(), DATE, { now: NOW });
+    assert.ok(after.top.some((item) => item.id === target), 'deferring keeps the todo in play for tomorrow');
+  });
+});
+
+test('a done inbox item is not a candidate: only `open` items feed the plan', () => {
+  // Guards the console "My todos → Done" path, which must write the inbox ledger's
+  // own status through. `todoInboxEvidence()` only puts `open` items in `data.open`,
+  // so a done item never reaches the scorer.
+  const evidence = makeEvidence();
+  const inbox = evidence.sources.todo_inbox as { state: string; data: { open: Array<{ id: string; text: string }> } };
+  const doneId = inbox.data.open[0].id;
+  inbox.data.open = inbox.data.open.filter((item) => item.id !== doneId); // status: done -> excluded from `open`
+  const after = buildScoredTodos(config, evidence, DATE, { now: NOW });
+  assert.ok(!after.top.some((item) => item.id === `todo_inbox:${doneId}`), 'the done inbox item is not planned');
+});
+
 // --- daily-plan JSON parse + fallback --------------------------------------
 
 test('parseDailyPlanTodoPlan parses clean JSON and normalizes ranks', () => {

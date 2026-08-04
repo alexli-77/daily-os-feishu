@@ -588,11 +588,18 @@ async function todoFeedback(options: UiServerOptions, body: unknown): Promise<Re
     return { ok: true, candidateId, event, text: event === 'complete' ? '已标记完成' : event === 'defer' ? '已延期' : '已记录更新' };
   }
 
-  // Legacy inbox feedback (My todos): simple {id, action} display state.
+  // Inbox feedback (My todos). This must write through to the inbox ledger's own
+  // status, not just the display-state line: the next daily plan builds its
+  // candidates from `todoInboxEvidence().open`, so a "Done" that only recorded a
+  // display state left the item open and it kept being re-planned.
   const id = String(request.id || '').trim();
   const action = String(request.action || '').trim();
   if (!id) return { ok: false, error: 'Todo id is required.' };
   if (action !== 'check' && action !== 'defer') return { ok: false, error: 'action must be check or defer.' };
+  const env = readEnvFile(options.envPath);
+  applyEnv(env);
+  const config = loadConfig(options.configPath);
+  updateTodoInboxItemById(config, id, { status: action === 'check' ? 'done' : 'deferred' });
   const filePath = path.resolve('./data/runtime/todo-feedback.jsonl');
   const entry = JSON.stringify({ id, action, ts: new Date().toISOString() });
   const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';

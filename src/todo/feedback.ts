@@ -83,6 +83,21 @@ export function recordCarryOver(config: AppConfig, date: string, candidateIds: s
 }
 
 /**
+ * candidateIds the user has marked complete — on the Feishu plan card's ✅ button
+ * or the console's "完成". A completed todo must not be re-proposed by the next
+ * daily plan, so the scorer subtracts these from its candidate pool. Completion is
+ * terminal: an id stays excluded on every later day, not just the day it was
+ * ticked, which is exactly what "点了 ✅ 第二天还收到同样的 todo" was missing.
+ */
+export function getCompletedCandidateIds(config: AppConfig): Set<string> {
+  const out = new Set<string>();
+  for (const entry of listTodoFeedback(config)) {
+    if (entry.event === 'complete' && entry.candidateId) out.add(entry.candidateId);
+  }
+  return out;
+}
+
+/**
  * LEO-232 — for each candidateId, the number of *consecutive* days it has been
  * carried over, counting back from its most recent `carry_over` date. Feeds the
  * scorer's `carryOverDays` signal. Returns an empty map when nothing has been
