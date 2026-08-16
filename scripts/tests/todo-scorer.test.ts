@@ -99,6 +99,58 @@ test('scoreCandidate applies the weighted formula per component', () => {
   assert.equal(scoreCandidate(calendar, DEFAULT_SCORER_WEIGHTS, NOW).breakdown.calendarWithin2h, 15);
 });
 
+test('Linear board state is weighted: In Progress > In Review > untouched', () => {
+  const base: TodoCandidate = { id: 'p', title: 'CUTTO-938 四联编辑器设计 demo', source: 'linear', priority: 'High (2)' };
+  const inProgress = { ...base, stateName: 'In Progress', stateType: 'started' };
+  const inReview = { ...base, id: 'r', stateName: 'In Review', stateType: 'started' };
+  const untouched = { ...base, id: 'u', stateName: 'Todo', stateType: 'unstarted' };
+
+  assert.equal(scoreCandidate(inProgress, DEFAULT_SCORER_WEIGHTS, NOW).breakdown.linearState, 15);
+  assert.equal(scoreCandidate(inReview, DEFAULT_SCORER_WEIGHTS, NOW).breakdown.linearState, 8);
+  assert.equal(scoreCandidate(untouched, DEFAULT_SCORER_WEIGHTS, NOW).breakdown.linearState, undefined);
+
+  // A candidate with no state at all (older evidence, non-Linear source) is unchanged.
+  assert.equal(scoreCandidate(base, DEFAULT_SCORER_WEIGHTS, NOW).score, 12);
+});
+
+test('a due date 2 days out scores above no due date at all (72h tier)', () => {
+  const inThreeDays: TodoCandidate = { id: 'd', title: '封面 Figma 模板', source: 'linear', dueDate: '2026-07-19' };
+  const noDue: TodoCandidate = { id: 'n', title: '封面 Figma 模板', source: 'linear' };
+  const { breakdown } = scoreCandidate(inThreeDays, DEFAULT_SCORER_WEIGHTS, NOW);
+  assert.equal(breakdown.dueWithin72h, 12);
+  assert.equal(breakdown.dueWithin24h, undefined, 'the 24h and 72h tiers are mutually exclusive');
+  assert.ok(scoreCandidate(inThreeDays, DEFAULT_SCORER_WEIGHTS, NOW).score > scoreCandidate(noDue, DEFAULT_SCORER_WEIGHTS, NOW).score);
+
+  const tomorrow: TodoCandidate = { ...inThreeDays, dueDate: '2026-07-18' };
+  assert.equal(scoreCandidate(tomorrow, DEFAULT_SCORER_WEIGHTS, NOW).breakdown.dueWithin24h, 25, 'the tighter tier still wins');
+});
+
+test('the CUTTO-942 case: an In Progress Medium due in 2 days beats an In Review High with no due date', () => {
+  // 942 scored 0 before board state and the 72h tier existed, so it never even
+  // reached the candidate pool handed to the model — the exact reported bug.
+  const inProgressMedium: TodoCandidate = {
+    id: 'linear:CUTTO-942',
+    title: 'CUTTO-942 封面 Figma 模板',
+    source: 'linear',
+    priority: 'Medium (3)',
+    dueDate: '2026-07-19',
+    stateName: 'In Progress',
+    stateType: 'started',
+  };
+  const inReviewHigh: TodoCandidate = {
+    id: 'linear:CUTTO-919',
+    title: 'CUTTO-919 中文官网',
+    source: 'linear',
+    priority: 'High (2)',
+    stateName: 'In Review',
+    stateType: 'started',
+  };
+  const ranked = scoreAndRank([inReviewHigh, inProgressMedium], { weights: DEFAULT_SCORER_WEIGHTS, now: NOW });
+  assert.deepEqual(ranked.map((item) => item.id), ['linear:CUTTO-942', 'linear:CUTTO-919']);
+  assert.equal(ranked[0].score, 27);
+  assert.equal(ranked[1].score, 20);
+});
+
 test('scoreAndRank orders by score and returns top-N with sequential ranks', () => {
   const candidates: TodoCandidate[] = [
     { id: 'low', title: 'low', source: 'vault' },
@@ -122,11 +174,69 @@ test('normalizeCandidates pulls all four sources and drops completed weekly item
   assert.ok(!candidates.some((c) => c.title.includes('✅')), 'completed weekly items are excluded');
 });
 
+test('normalizeCandidates carries the Linear board state onto the candidate', () => {
+  const candidates = normalizeCandidates({
+    config,
+    evidence: {
+      generated_at: NOW.toISOString(),
+      date: DATE,
+      sources: {
+        linear: {
+          state: 'available',
+          data: {
+            items: [
+              { identifier: 'CUTTO-942', title: '封面 Figma 模板', priority: 3, state: { name: 'In Progress', type: 'started' } },
+              { identifier: 'CUTTO-784', title: '竞品体验报告', priority: 0 },
+            ],
+          },
+        },
+      },
+    },
+    date: DATE,
+    now: NOW,
+  });
+  assert.equal(candidates[0].stateName, 'In Progress');
+  assert.equal(candidates[0].stateType, 'started');
+  assert.equal(candidates[1].stateName, undefined, 'an item without state stays state-less rather than defaulting');
+});
+
 test('dedupe merges the duplicate "客户 A 合同" across todo_inbox and vault, keeping higher-priority source', () => {
   const candidates = normalizeCandidates({ config, evidence: makeEvidence(), date: DATE, now: NOW });
   const contractMatches = candidates.filter((c) => c.title.includes('客户 A'));
   assert.equal(contractMatches.length, 1, 'the same contract task appears once');
   assert.equal(contractMatches[0].source, 'todo_inbox', 'todo_inbox outranks vault in the merge');
+});
+
+test('a Feishu priority row and its Linear twin merge on the issue key, not on wording', () => {
+  const candidates = normalizeCandidates({
+    config,
+    evidence: {
+      generated_at: NOW.toISOString(),
+      date: DATE,
+      sources: {
+        linear: { state: 'available', data: { items: [{ identifier: 'CUTTO-777', title: 'PRD & Demo', priority: 2 }] } },
+        weekly_priorities: {
+          state: 'available',
+          data: {
+            items: [
+              { scope: '🐧', okr: 'O1', item: '整理人物与大纲组件的 PRD 与 Demo，发关梦龙审核并确认修改项（CUTTO-777）' },
+              // Two distinct actions against one issue must NOT collapse into one.
+              { scope: '🐧', okr: 'O1', item: '完成 Montreal 视频 4K 终版（CUTTO-301）' },
+              { scope: '🐧', okr: 'O1', item: '重录 30 秒内产品宣传 Demo（CUTTO-301）' },
+            ],
+          },
+        },
+      },
+    },
+    date: DATE,
+    now: NOW,
+  });
+
+  const merged = candidates.filter((item) => /CUTTO-777/.test(item.title));
+  assert.equal(merged.length, 1, 'the weekly row and the Linear issue are one candidate');
+  assert.equal(merged[0].source, 'linear', 'Linear outranks weekly_priorities in the merge');
+  assert.equal(merged[0].weeklyOkrHit, true, 'the weekly OKR signal survives the merge');
+  assert.equal(candidates.filter((item) => /CUTTO-301/.test(item.title)).length, 2, 'same-source siblings stay separate');
 });
 
 test('OKR-linked candidate scores higher than a Feishu weekly-only hit', () => {

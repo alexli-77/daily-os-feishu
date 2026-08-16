@@ -9,10 +9,16 @@ Evidence 里有一个 `todo_scored` 源（`sources.todo_scored.data`）：
   - `candidateId`: 候选唯一 id（**必须原样回填**，不要改）。
   - `title`: 候选原始标题（可能是 Linear 任务、飞书周要务、vault 笔记或用户随手记）。
   - `source`: 来源（`todo_inbox` / `linear` / `vault` / `weekly_priorities`）。
-  - `score` 和 `breakdown`: 总分与加分明细（逾期 / 24h 内到期 / Linear 优先级 / 日历临近 / carry-over / OKR 关联 / 客户信号）。
-  - 可能还有 `dueDate`、`priority`、`okrKrId`、`isCustomerFacing`。
+  - `score` 和 `breakdown`: 总分与加分明细（逾期 / 24h 内到期 / 72h 内到期 / Linear 优先级 / Linear 看板状态 / 日历临近 / carry-over / OKR 关联 / 客户信号）。
+  - 可能还有 `dueDate`、`priority`、`stateName`、`stateType`、`okrKrId`、`isCustomerFacing`。
 
 这些分数是**排序建议**，不是命令。你可以微调顺序、合并重复、剔除今天明显不该做的项，但要尊重高分项：`breakdown` 里有 `overdue`、`dueWithin24h` 或高 `okr` 的项，除非有明确理由，否则应进入今日清单。
+
+关于 `stateName`（Linear 看板状态）：
+
+- `In Progress` 表示用户已经动手、还没交付的活。这类候选即使优先级不高、没有 deadline，也应优先考虑——它已经占着用户的注意力，不推进就是烂尾。
+- `In Review` 表示已交出去等别人看。除非逾期，否则不要让它挤掉 `In Progress` 的活。
+- 今日清单里**至少保留 1 条 `In Progress` 的候选**（`top` 里确实一条都没有时除外）。
 
 # 你的任务
 

@@ -21,6 +21,10 @@ export interface TodoCandidate {
   source: TodoSource;
   dueDate?: string;
   priority?: string;
+  /** Linear workflow state name as shown on the board, e.g. "In Progress" / "In Review". */
+  stateName?: string;
+  /** Linear workflow state type, e.g. `started` / `unstarted` / `backlog`. */
+  stateType?: string;
   carryOverDays?: number;
   okrKrId?: string;
   calendarProximityMin?: number;
@@ -32,7 +36,9 @@ export interface TodoCandidate {
 export interface ScoreBreakdown {
   overdue?: number;
   dueWithin24h?: number;
+  dueWithin72h?: number;
   linearPriority?: number;
+  linearState?: number;
   calendarWithin2h?: number;
   carryOver?: number;
   okr?: number;
@@ -145,7 +151,8 @@ export function scoreAndRank(candidates: TodoCandidate[], options: ScoreAndRankO
 /**
  * Weighted score for a single candidate.
  *
- * score = overdue?35 + dueWithin24h?25 + linear(Urgent20/High12) +
+ * score = overdue?35 | dueWithin24h?25 | dueWithin72h?12 +
+ *         linear(Urgent20/High12) + linearState(InProgress15/InReview8) +
  *         calendarProximity(<=120min?15) + min(carryOverDays*5,15) +
  *         okr(linked12 | weeklyHit6) + customerFacing?10
  */
@@ -160,10 +167,14 @@ export function scoreCandidate(
   if (dueMs !== null) {
     if (dueMs < now.getTime()) breakdown.overdue = weights.overdue;
     else if (dueMs - now.getTime() <= DAY_MS) breakdown.dueWithin24h = weights.dueWithin24h;
+    else if (dueMs - now.getTime() <= 3 * DAY_MS) breakdown.dueWithin72h = weights.dueWithin72h;
   }
 
   const linearPoints = linearPriorityPoints(candidate, weights);
   if (linearPoints > 0) breakdown.linearPriority = linearPoints;
+
+  const statePoints = linearStatePoints(candidate, weights);
+  if (statePoints > 0) breakdown.linearState = statePoints;
 
   if (typeof candidate.calendarProximityMin === 'number' && candidate.calendarProximityMin <= 120) {
     breakdown.calendarWithin2h = weights.calendarWithin2h;
@@ -214,12 +225,17 @@ function fromLinear(source: EvidenceSource | undefined): TodoCandidate[] {
       const identifier = String(item.identifier);
       const title = typeof item.title === 'string' && item.title ? item.title : identifier;
       const priorityLabel = linearPriorityLabel(item.priority);
+      const state = isRecord(item.state) ? item.state : undefined;
+      const stateName = typeof state?.name === 'string' ? state.name : '';
+      const stateType = typeof state?.type === 'string' ? state.type : '';
       return {
         id: `linear:${identifier}`,
         title: `${identifier} ${title}`.trim(),
         source: 'linear' as const,
         ...(typeof item.dueDate === 'string' && item.dueDate ? { dueDate: item.dueDate } : {}),
         ...(priorityLabel ? { priority: priorityLabel } : {}),
+        ...(stateName ? { stateName } : {}),
+        ...(stateType ? { stateType } : {}),
         isCustomerFacing: CUSTOMER_SIGNAL.test(title),
       };
     });
@@ -279,7 +295,10 @@ function dedupeCandidates(candidates: TodoCandidate[]): TodoCandidate[] {
   for (const candidate of candidates) {
     const key = normalizeTitle(candidate.title);
     const existingIndex = kept.findIndex(
-      (other) => other.id === candidate.id || titlesSimilar(normalizeTitle(other.title), key),
+      (other) =>
+        other.id === candidate.id ||
+        sharesIssueKeyAcrossSources(other, candidate) ||
+        titlesSimilar(normalizeTitle(other.title), key),
     );
     if (existingIndex === -1) {
       kept.push(candidate);
@@ -300,12 +319,41 @@ function mergeCandidate(winner: TodoCandidate, loser: TodoCandidate): TodoCandid
     ...winner,
     dueDate: winner.dueDate ?? loser.dueDate,
     priority: winner.priority ?? loser.priority,
+    stateName: winner.stateName ?? loser.stateName,
+    stateType: winner.stateType ?? loser.stateType,
     carryOverDays: winner.carryOverDays ?? loser.carryOverDays,
     okrKrId: winner.okrKrId ?? loser.okrKrId,
     calendarProximityMin: winner.calendarProximityMin ?? loser.calendarProximityMin,
     isCustomerFacing: winner.isCustomerFacing || loser.isCustomerFacing,
     weeklyOkrHit: winner.weeklyOkrHit || loser.weeklyOkrHit,
   };
+}
+
+const ISSUE_KEY_PATTERN = /\b[A-Z][A-Z0-9]*-\d+\b/g;
+
+/**
+ * Same tracker issue, two different sources — e.g. Linear's own
+ * "CUTTO-777 PRD & Demo" and the Feishu priority row "整理…（CUTTO-777）".
+ * Title similarity does not catch these (the wordings barely overlap), so match
+ * on the issue key instead.
+ *
+ * Deliberately restricted to *cross-source* pairs: one Feishu priority column
+ * routinely lists several distinct actions against a single issue
+ * ("完成 4K 终版（CUTTO-301）" / "重录宣传 Demo（CUTTO-301）"), and those must
+ * survive as separate candidates.
+ */
+function sharesIssueKeyAcrossSources(left: TodoCandidate, right: TodoCandidate): boolean {
+  if (left.source === right.source) return false;
+  const keys = issueKeys(left.title);
+  if (keys.size === 0) return false;
+  for (const key of issueKeys(right.title)) {
+    if (keys.has(key)) return true;
+  }
+  return false;
+}
+
+function issueKeys(title: string): Set<string> {
+  return new Set(title.toUpperCase().match(ISSUE_KEY_PATTERN) || []);
 }
 
 function normalizeTitle(value: string): string {
@@ -394,6 +442,20 @@ function linearPriorityPoints(candidate: TodoCandidate, weights: ScorerWeights):
   const label = candidate.priority.toLowerCase();
   if (label.includes('urgent')) return weights.linearUrgent;
   if (label.includes('high')) return weights.linearHigh;
+  return 0;
+}
+
+/**
+ * Board-state weighting. Linear collapses both "In Progress" and "In Review"
+ * into state type `started`, so the human-facing state name is what separates
+ * "I am working on this" from "this is parked on someone else's review queue".
+ */
+function linearStatePoints(candidate: TodoCandidate, weights: ScorerWeights): number {
+  if (candidate.source !== 'linear') return 0;
+  const name = (candidate.stateName || '').toLowerCase();
+  const type = (candidate.stateType || '').toLowerCase();
+  if (name.includes('review')) return weights.linearInReview;
+  if (type === 'started') return weights.linearInProgress;
   return 0;
 }
 
