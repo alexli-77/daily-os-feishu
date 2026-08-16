@@ -22,10 +22,43 @@ async function collectLinearViaApi(token: string, cfg: AppConfig['sources']['lin
         if (isRecord(node) && typeof node.identifier === 'string') items.set(node.identifier, node);
       }
     }
-    return sourceFromLinearResult({ source: 'linear-api', items: [...items.values()] }, cfg);
+    const recentlyCompleted = await collectRecentlyClosed(token, cfg);
+    return sourceFromLinearResult({ source: 'linear-api', items: [...items.values()], recently_completed: recentlyCompleted }, cfg);
   } catch (error) {
     return { state: 'error', detail: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/**
+ * Issues the user finished (or dropped) in the recent past.
+ *
+ * These are deliberately kept OUT of `items` — a completed issue must never
+ * become a todo candidate. They ride along as a sidecar so the weekly-review
+ * planner can retire a carried-over priority whose Linear issue is already
+ * closed, which the open-issue list alone can never tell it (a closed issue is
+ * simply absent, indistinguishable from out-of-scope).
+ */
+const RECENTLY_CLOSED_WINDOW_DAYS = 60;
+
+async function collectRecentlyClosed(token: string, cfg: AppConfig['sources']['linear']): Promise<unknown[]> {
+  const since = new Date(Date.now() - RECENTLY_CLOSED_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  // Cycle scope is dropped on purpose: an issue often leaves the active cycle
+  // when it is closed, and it still needs to retire its carried-over priority.
+  const { cycle: _cycle, ...scope } = linearScopeFilter(cfg);
+  const items = new Map<string, unknown>();
+  for (const stateType of ['completed', 'canceled']) {
+    try {
+      const data = await linearApiQuery(token, issuesQuery, {
+        filter: { ...scope, state: { type: { eq: stateType } }, updatedAt: { gt: since } },
+      });
+      for (const node of getArrayAtPath(data, ['issues', 'nodes']) || []) {
+        if (isRecord(node) && typeof node.identifier === 'string') items.set(node.identifier, node);
+      }
+    } catch {
+      // A closed-issue lookup is supplementary: never fail the whole collection.
+    }
+  }
+  return [...items.values()];
 }
 
 const openStateFilter = { state: { type: { neq: 'completed' } } };
@@ -225,6 +258,14 @@ function filterLinearProjectData(
 
   const cloned = JSON.parse(JSON.stringify(data)) as unknown;
   if (!isRecord(cloned)) return { active, before: 0, after: 0, data: cloned };
+
+  // The closed-issue sidecar sits outside the three primary shapes below (which
+  // are alternatives, not a chain), so it gets the same allow/block treatment
+  // here rather than inside that loop.
+  const closed = getArrayAtPath(cloned, ['recently_completed']);
+  if (closed) {
+    setAtPath(cloned, ['recently_completed'], closed.filter((item) => shouldKeepLinearItem(item, allow, block, teamAllow, teamBlock)));
+  }
 
   const paths = [
     ['items'],

@@ -16,6 +16,7 @@ import {
 } from '../workflows/run-ledger.js';
 import { runManager } from '../service/run-manager.js';
 import { collectEvidence } from '../workflows/evidence.js';
+import type { EvidenceSource } from '../workflows/types.js';
 import { loadOkrFromDir, buildOkrSummary } from '../okr/loader.js';
 import { resolveOkrDir } from '../okr/biweekly-progress.js';
 import { isLifeReviewOsEntry, runLifeReviewOsSkill } from './life-review-os.js';
@@ -269,7 +270,18 @@ async function buildSkillInputPack(
       '- 仅当 Review / retro 对该 KR 有明确反馈（太重、被阻塞、要换策略）时才调整，且调整必须体现该反馈（减量、拆小步、按 retro 描述换切入点）。',
       '- 无法判断怎么安排的 KR 行**留空不写**，禁止编一条凑数。',
       '- 条目若与本 pack Linear 证据中的 issue 确定对应，在末尾以 `(LEO-97)` 形式标注编号（只写编号；多个用空格分隔）；拿不准就不标，禁止猜编号。',
+      '- 照搬是默认动作，不是唯一动作：上期要务列是种子不是边界。必须同时按下面 Linear Issue Snapshot 做双向核对——已开工但要务列没有的 issue 要逐条给出「纳入」或「本期不做」的结论；要务列还挂着但 Linear 已 completed / canceled 的条目不许照搬进新周期。',
       okrChainSummary || '(no local OKR chain found)',
+      '',
+      // Same reason as the OKR chain above: life-review-os only reads the first
+      // ~20k chars of this pack, and the full Linear dump under "Structured
+      // Evidence" lands well past that cut — so the planner never actually saw
+      // the issue list it was told to cross-check against. This compact block
+      // is the machine-readable copy that survives truncation.
+      '## Linear Issue Snapshot',
+      'Linear 当前活跃 issue 快照，供计划环节做「未覆盖」与「已完成核销」核对。',
+      '每行格式：`编号 | 状态 | 状态类型 | 优先级 | 截止 | 标题`。状态类型 `started` = 进行中或评审中，`completed` / `canceled` = 已收尾。',
+      linearIssueSnapshot(evidence.sources.linear) || '(no linear issues collected)',
       '',
       '## Latest Workflow',
       latest ? JSON.stringify(latest, null, 2) : '(none)',
@@ -499,6 +511,59 @@ function summarizeSourceData(data: unknown): string {
   } catch {
     return truncate(String(data), 1000);
   }
+}
+
+const LINEAR_SNAPSHOT_LIMIT = 60;
+
+/**
+ * One line per Linear issue, ordered so the actionable ones come first.
+ * Deliberately terse: this block is budgeted to stay inside the first 20k chars
+ * of the input pack, which is all life-review-os reads.
+ */
+export function linearIssueSnapshot(source: EvidenceSource | undefined): string {
+  if (!source || source.state !== 'available') return '';
+  const items = [...linearSnapshotItems(source.data, 'items'), ...linearSnapshotItems(source.data, 'recently_completed')];
+  if (items.length === 0) return '';
+  const rank = (item: LinearSnapshotItem): number => (item.stateType === 'started' ? 0 : item.stateType === 'unstarted' ? 1 : 2);
+  return items
+    .sort((left, right) => rank(left) - rank(right))
+    .slice(0, LINEAR_SNAPSHOT_LIMIT)
+    .map((item) =>
+      [item.identifier, item.stateName || '-', item.stateType || '-', item.priority || '-', item.dueDate || '-', truncate(item.title, 80)].join(' | '),
+    )
+    .join('\n');
+}
+
+interface LinearSnapshotItem {
+  identifier: string;
+  title: string;
+  stateName: string;
+  stateType: string;
+  priority: string;
+  dueDate: string;
+}
+
+function linearSnapshotItems(data: unknown, key: 'items' | 'recently_completed'): LinearSnapshotItem[] {
+  const raw = isRecord(data) && Array.isArray(data[key]) ? (data[key] as unknown[]) : [];
+  const priorities: Record<number, string> = { 1: 'Urgent', 2: 'High', 3: 'Medium', 4: 'Low' };
+  return raw.filter(isRecord).flatMap((item) => {
+    if (typeof item.identifier !== 'string' || !item.identifier) return [];
+    const state = isRecord(item.state) ? item.state : undefined;
+    return [
+      {
+        identifier: item.identifier,
+        title: typeof item.title === 'string' ? item.title : '',
+        stateName: typeof state?.name === 'string' ? state.name : '',
+        stateType: typeof state?.type === 'string' ? state.type : '',
+        priority: typeof item.priority === 'number' ? priorities[item.priority] || 'None' : '',
+        dueDate: typeof item.dueDate === 'string' ? item.dueDate : '',
+      },
+    ];
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
 function compactEvidenceForWeeklyPlanning(evidence: Awaited<ReturnType<typeof collectEvidence>>): Record<string, unknown> {
