@@ -15,10 +15,29 @@ export interface ScorerWeights {
   overdue: number;
   /** Item due within the next 24h (but not yet overdue). */
   dueWithin24h: number;
+  /**
+   * Item due within the next 72h (but not within 24h and not yet overdue).
+   * Without this tier a task due the day after tomorrow scores exactly the same
+   * as one with no due date at all, so it stays invisible until the morning it
+   * is already late.
+   */
+  dueWithin72h: number;
   /** Linear priority = Urgent (1). */
   linearUrgent: number;
   /** Linear priority = High (2). */
   linearHigh: number;
+  /**
+   * Linear issue actively being worked (state type `started`, e.g. "In Progress").
+   * Work already started carries a sunk start-up cost, so it outranks an
+   * untouched issue of the same priority.
+   */
+  linearInProgress: number;
+  /**
+   * Linear issue handed off and waiting on someone else (e.g. "In Review").
+   * Still open, but the next move is usually not the user's — weighted below
+   * `linearInProgress`.
+   */
+  linearInReview: number;
   /** A calendar block within 2h is associated with the item. */
   calendarWithin2h: number;
   /** Per carry-over day bonus. */
@@ -39,8 +58,11 @@ export interface ScorerWeights {
 export const DEFAULT_SCORER_WEIGHTS: ScorerWeights = {
   overdue: 35,
   dueWithin24h: 25,
+  dueWithin72h: 12,
   linearUrgent: 20,
   linearHigh: 12,
+  linearInProgress: 15,
+  linearInReview: 8,
   calendarWithin2h: 15,
   carryOverPerDay: 5,
   carryOverCap: 15,

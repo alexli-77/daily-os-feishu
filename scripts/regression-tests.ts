@@ -76,6 +76,8 @@ try {
   testWeeklyReviewSummaryShowsStructuredPriorityItems();
   testWeeklyPrioritiesExtractPortfolioReviewItem();
   testWeeklyPrioritiesUseProfileDocsSource();
+  testWeeklyPrioritiesResolveBiweeklyColumnHeader();
+  testWeeklyPrioritiesResolveYearWrappingLabel();
   await testConfirmLatestPolicyCandidateWithoutId();
   testBackgroundSuggestionDismissAllFromAmbiguousDismiss();
   testWorkflowCardRendering();
@@ -1196,6 +1198,73 @@ function testWeeklyPrioritiesUseProfileDocsSource(): void {
   const weekly = extractWeeklyPrioritiesFromFeishuDocs(source, '2026-06-16');
   assert.equal(weekly.state, 'available');
   assert.match(JSON.stringify(weekly.data), /CUTTO-318/);
+}
+
+/**
+ * The Feishu doc switched to a 14-day cadence on 2026-06-29. A locally computed
+ * Monday–Sunday label ("8.10-8.16") no longer matched the real header
+ * ("8.10-8.23"), so weekly_priorities silently reported empty for every run
+ * after that date and the daily plan lost its strategy anchor.
+ */
+function testWeeklyPrioritiesResolveBiweeklyColumnHeader(): void {
+  const xml = [
+    '<table>',
+    '<tbody>',
+    '<tr>',
+    '<td><p>🐧 重点OKR</p></td>',
+    '<td><p>retro</p></td>',
+    '<td><p>8.10-8.23 要务 · 重写稿</p></td>',
+    '<td><p>8.10-8.23 要务</p></td>',
+    '<td><p>7.27-8.9 要务</p></td>',
+    '</tr>',
+    '<tr>',
+    '<td><p>Cutto</p></td>',
+    '<td><p></p></td>',
+    '<td><ul><li>手写重写稿条目</li></ul></td>',
+    '<td><ul><li>跟进中文官网 PR 审核（CUTTO-919）</li></ul></td>',
+    '<td><ul><li>上期已完成条目</li></ul></td>',
+    '</tr>',
+    '</tbody>',
+    '</table>',
+  ].join('');
+  const source = feishuDocsSource({
+    feishu_work_docs: { state: 'available', data: { Weekly2026: { state: 'available', data: xml } } },
+  });
+
+  // 2026-08-16 is a Sunday: the old code asked for "8.10-8.16 要务" and found nothing.
+  const weekly = extractWeeklyPrioritiesFromFeishuDocs(source, '2026-08-16');
+  assert.equal(weekly.state, 'available', 'the biweekly column must be found for a mid-range date');
+  const data = weekly.data as { week: string; items: Array<{ item: string }> };
+  assert.equal(data.week, '8.10-8.23', 'the label comes from the document, not from a Monday–Sunday computation');
+  assert.match(JSON.stringify(data.items), /CUTTO-919/);
+  assert.doesNotMatch(
+    JSON.stringify(data.items),
+    /重写稿条目/,
+    'the exact "8.10-8.23 要务" column wins over a hand-added "· 重写稿" sibling',
+  );
+
+  // A date outside every column falls back rather than grabbing a stale range.
+  const outside = extractWeeklyPrioritiesFromFeishuDocs(source, '2026-09-20');
+  assert.equal(outside.state, 'empty');
+  assert.equal((outside.data as { week: string }).week, '9.14-9.20');
+}
+
+/** Wrap-around ranges ("12.29-1.4") carry no year, so a January date must still resolve. */
+function testWeeklyPrioritiesResolveYearWrappingLabel(): void {
+  const xml = [
+    '<table>',
+    '<tbody>',
+    '<tr><td><p>🐶 重点OKR</p></td><td><p>12.29-1.4 要务</p></td></tr>',
+    '<tr><td><p>Cutto</p></td><td><ul><li>跨年周条目</li></ul></td></tr>',
+    '</tbody>',
+    '</table>',
+  ].join('');
+  const source = feishuDocsSource({
+    feishu_work_docs: { state: 'available', data: { Weekly2026: { state: 'available', data: xml } } },
+  });
+  const weekly = extractWeeklyPrioritiesFromFeishuDocs(source, '2026-01-02');
+  assert.equal(weekly.state, 'available');
+  assert.equal((weekly.data as { week: string }).week, '12.29-1.4');
 }
 
 function testBackgroundSuggestionDismissAllFromAmbiguousDismiss(): void {
