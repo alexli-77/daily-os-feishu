@@ -6,6 +6,8 @@ import type { Evidence, EvidenceSource } from '../workflows/types.js';
 import { todayInTimezone, addDays } from '../utils/date.js';
 import { runCommand } from '../utils/command.js';
 import { openTodoInboxItems } from '../todo/inbox.js';
+import { applyCalendarAdjustments, type CalendarAdjustment } from './adjust.js';
+import { dbLoadCalendarAdjustments } from '../storage/db.js';
 
 export type CalendarDraftPeriod = 'week' | 'today';
 
@@ -87,7 +89,7 @@ export async function runCalendarDraft(config: AppConfig, period: CalendarDraftP
   const inputPath = writeCalendarInput(config, input);
   const engine = resolveCalendarEngine(config);
   if (engine === 'builtin') {
-    const draft = runBuiltinCalendarDraft(input, period, date);
+    const draft = applyStoredAdjustments(runBuiltinCalendarDraft(input, period, date), period);
     return {
       period,
       date,
@@ -116,17 +118,31 @@ export async function runCalendarDraft(config: AppConfig, period: CalendarDraftP
     throw new Error(`calendar-planning-os failed: ${(result.stderr || result.stdout).slice(0, 2000)}`);
   }
 
+  const parsed = parseDraftFromCliOutput(result.stdout);
+  const draft = parsed ? applyStoredAdjustments(parsed, period) : parsed;
   return {
     period,
     date,
     command: `${config.calendar.engine.command} ${args.join(' ')}`,
     inputPath,
     markdown: result.stdout.trim(),
-    draft: parseDraftFromCliOutput(result.stdout),
+    draft,
     taskCount: input.tasks.length,
     existingEventCount: input.existingEvents.length,
     engine,
   };
+}
+
+/** LEO-268: fold any stored adjustments for this period into a fresh draft. */
+function applyStoredAdjustments(draft: CalendarDraft, period: CalendarDraftPeriod): CalendarDraft {
+  const payload = dbLoadCalendarAdjustments(period === 'week' ? 'week' : 'today');
+  if (!payload) return draft;
+  try {
+    const adjustments = JSON.parse(payload) as CalendarAdjustment[];
+    return Array.isArray(adjustments) && adjustments.length ? applyCalendarAdjustments(draft, adjustments) : draft;
+  } catch {
+    return draft;
+  }
 }
 
 export async function testCalendarBridge(config: AppConfig): Promise<CalendarBridgeTestResult> {

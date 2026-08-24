@@ -24,6 +24,9 @@ import { buildOkrWritebackPreview, executeConfirmedOkrWriteback } from './okr-wr
 import { formatWorkflowRevisionMemoryNote } from './workflow-revision.js';
 import { handleTodoInboxCommand, parseTodoInboxCommand, type TodoInboxCommand } from '../todo/inbox.js';
 import { formatCalendarDraftForFeishu, runCalendarDraft, type CalendarDraftPeriod, type CalendarDraftResult } from '../calendar/bridge.js';
+import { undoCalendarBatch } from '../calendar/writeback.js';
+import { parseCalendarAdjustments, supportedAdjustmentForms, type CalendarAdjustment } from '../calendar/adjust.js';
+import { dbClearCalendarAdjustments, dbLoadCalendarAdjustments, dbSaveCalendarAdjustments } from '../storage/db.js';
 
 export type ParsedDailyOsCommand =
   | { type: 'ignore' }
@@ -42,6 +45,8 @@ export type ParsedDailyOsCommand =
   | { type: 'skill_run'; skillId: string; mode?: string; text?: string }
   | { type: 'writeback'; target: 'feishu' | 'okr'; confirm: boolean }
   | { type: 'calendar_draft'; period: CalendarDraftPeriod }
+  | { type: 'calendar_undo'; batchId?: string }
+  | { type: 'calendar_adjust'; period: CalendarDraftPeriod; text: string }
   | { type: 'todo_inbox'; command: TodoInboxCommand }
   | { type: 'remember'; text: string }
   | { type: 'feedback'; text: string }
@@ -196,6 +201,7 @@ export function dailyOsStatusText(prefix: string, config?: AppConfig): string {
     `- ${prefix} weekly`,
     `- ${prefix} calendar week`,
     `- ${prefix} calendar today`,
+    `- ${prefix} calendar undo`,
   ];
   return lines.join('\n');
 }
@@ -276,6 +282,41 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
       } else {
         await context.reply(text);
       }
+      return;
+    }
+    case 'calendar_undo': {
+      const summary = await undoCalendarBatch(context.config, command.batchId);
+      if (!summary.batchId) {
+        await context.reply('没有可撤销的日历写回批次。');
+        return;
+      }
+      const tail = summary.failed > 0 ? `，失败 ${summary.failed}（${summary.errors.slice(0, 3).join('；')}）` : '';
+      await context.reply(`已撤销日历写回批次 ${summary.batchId}：删除 ${summary.deleted} 个事件${tail}。`);
+      return;
+    }
+    case 'calendar_adjust': {
+      const scope = command.period === 'week' ? 'week' : 'today';
+      const scopeLabel = scope === 'week' ? '本周' : '今日';
+      if (/^(clear|reset|清空|重置|清除)$/i.test(command.text.trim())) {
+        dbClearCalendarAdjustments(scope);
+        await context.reply(`已清空${scopeLabel}日历草稿的调整意见。`);
+        return;
+      }
+      const { adjustments, unrecognized } = parseCalendarAdjustments(command.text);
+      if (!adjustments.length) {
+        await context.reply(
+          `没识别出可用的调整。\n\n${supportedAdjustmentForms()}${unrecognized.length ? `\n\n未识别：${unrecognized.join('；')}` : ''}`,
+        );
+        return;
+      }
+      const existing = parseStoredAdjustments(dbLoadCalendarAdjustments(scope));
+      const merged = [...existing, ...adjustments];
+      dbSaveCalendarAdjustments(scope, JSON.stringify(merged), todayInTimezone(context.config));
+      const cmd = scope === 'week' ? 'calendar week' : 'calendar today';
+      const tail = unrecognized.length ? `\n未识别（已忽略）：${unrecognized.join('；')}` : '';
+      await context.reply(
+        `已记录 ${adjustments.length} 条${scopeLabel}调整意见（累计 ${merged.length} 条）。发送 ${context.prefix} ${cmd} 查看应用后的草稿。${tail}`,
+      );
       return;
     }
     case 'todo_inbox': {
@@ -572,9 +613,29 @@ function parseSkillCommand(text: string): ParsedDailyOsCommand | null {
   };
 }
 
+function parseStoredAdjustments(payload: string | undefined): CalendarAdjustment[] {
+  if (!payload) return [];
+  try {
+    const parsed = JSON.parse(payload) as CalendarAdjustment[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 function parseCalendarCommand(text: string): ParsedDailyOsCommand | null {
   const normalized = text.replace(/\s+/g, ' ').trim();
   const lower = normalized.toLowerCase();
+  const undo = lower.match(/^calendar\s+undo(?:\s+(\S+))?$/) || normalized.match(/^(?:日历|日程)\s*撤销(?:\s+(\S+))?$/);
+  if (undo) return { type: 'calendar_undo', ...(undo[1] ? { batchId: undo[1] } : {}) };
+  const adjust =
+    normalized.match(/^calendar\s+(?:(week|weekly|today|day|daily)\s+)?adjust\s*[:：]?\s*(.+)$/i) ||
+    normalized.match(/^(?:日历|日程)\s*(?:(本周|周|今日|今天)\s*)?调整\s*[:：]?\s*(.+)$/);
+  if (adjust?.[2]?.trim()) {
+    const p = adjust[1] || '';
+    const period: CalendarDraftPeriod = /week|weekly|本周|周/i.test(p) ? 'week' : 'today';
+    return { type: 'calendar_adjust', period, text: adjust[2].trim() };
+  }
   if (/^calendar\s+(week|weekly|本周|周计划)$/.test(lower) || /^(?:日历|日程)\s*(?:本周|周计划)$/.test(normalized)) {
     return { type: 'calendar_draft', period: 'week' };
   }
@@ -628,6 +689,9 @@ function commandEffect(command: ParsedDailyOsCommand): FeishuControlEffect {
     case 'skill_run':
     case 'calendar_draft':
       return 'workflow_trigger';
+    case 'calendar_undo':
+    case 'calendar_adjust':
+      return 'memory_write';
     // Preview is read-only; confirming actually writes a doc / the OKR files.
     case 'writeback':
       return command.confirm ? 'memory_write' : 'read';

@@ -75,6 +75,15 @@ calendar:
   draft:
     week_days: 5
     max_tasks: 8
+  writeback:
+    # LEO-266: write confirmed drafts into the real Feishu calendar via lark-cli.
+    # OFF by default; nothing is ever written unless you set enabled: true.
+    # Requires the Feishu app to have calendar read/write scope (calendar:calendar).
+    enabled: false
+    identity: "user" # user | bot
+    calendar_id: "primary"
+    conflict_policy: "warn" # warn | block | ignore (LEO-267)
+    dry_run: false # true = print the lark-cli request without writing (safe preview)
 
 service:
   prevent_sleep:

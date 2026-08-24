@@ -131,6 +131,21 @@ export const AppConfigSchema = z.object({
           week_days: 5,
           max_tasks: 8,
         }),
+      writeback: z
+        .object({
+          enabled: z.boolean().default(false),
+          identity: z.enum(['user', 'bot']).default('user'),
+          calendar_id: z.string().default('primary'),
+          conflict_policy: z.enum(['warn', 'block', 'ignore']).default('warn'),
+          dry_run: z.boolean().default(false),
+        })
+        .default({
+          enabled: false,
+          identity: 'user',
+          calendar_id: 'primary',
+          conflict_policy: 'warn',
+          dry_run: false,
+        }),
     })
     .default({
       enabled: false,
@@ -147,6 +162,13 @@ export const AppConfigSchema = z.object({
       draft: {
         week_days: 5,
         max_tasks: 8,
+      },
+      writeback: {
+        enabled: false,
+        identity: 'user',
+        calendar_id: 'primary',
+        conflict_policy: 'warn',
+        dry_run: false,
       },
     }),
   service: z
