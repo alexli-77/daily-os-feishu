@@ -1103,10 +1103,12 @@ async function handleCalendarCardAction(input: {
     }
     const summary = await writebackCalendarDraft(input.config, draft);
     const parts = [`新建 ${summary.created}`, `更新 ${summary.updated}`, `跳过 ${summary.skipped}`];
+    if (summary.blocked > 0) parts.push(`冲突跳过 ${summary.blocked}`);
     if (summary.failed > 0) parts.push(`失败 ${summary.failed}`);
     appendDailyMemory(input.config, 'daily_plan', todayInTimezone(input.config), `用户确认${label}并写入 Feishu 日历（${parts.join('，')}；batch=${summary.batchId ?? '-'}）。`);
+    const warnLine = summary.conflicts > summary.blocked ? `\n⚠️ 有 ${summary.conflicts - summary.blocked} 个时间块与已有日程重叠（已按 warn 策略写入）。` : '';
     const undoHint = summary.batchId ? '\n如需撤销，发送 daily-os calendar undo。' : '';
-    await input.channel.send(input.event.chatId, { text: `已把${label}写入 Feishu 日历：${parts.join('，')}。${undoHint}` }, { replyTo: input.event.messageId });
+    await input.channel.send(input.event.chatId, { text: `已把${label}写入 Feishu 日历：${parts.join('，')}。${warnLine}${undoHint}` }, { replyTo: input.event.messageId });
     return;
   }
   if (input.action.action === 'adjust') {

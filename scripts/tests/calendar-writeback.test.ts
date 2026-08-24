@@ -33,10 +33,42 @@ function fakeClient(): Client {
   };
 }
 
-const config = {
-  user: { timezone: 'America/Toronto' },
-  calendar: { writeback: { enabled: true, identity: 'user', calendar_id: 'primary', conflict_policy: 'warn', dry_run: false } },
-} as unknown as AppConfig;
+function makeConfig(conflictPolicy: 'warn' | 'block' | 'ignore'): AppConfig {
+  return {
+    user: { timezone: 'America/Toronto' },
+    calendar: { writeback: { enabled: true, identity: 'user', calendar_id: 'primary', conflict_policy: conflictPolicy, dry_run: false } },
+  } as unknown as AppConfig;
+}
+const config = makeConfig('warn');
+
+// LEO-267: a busy interval that overlaps the 09:00-10:00 slots used by conflict tests.
+const OVERLAP: wb.FreeBusyInterval[] = [{ start: '2026-09-01T09:30:00-04:00', end: '2026-09-01T10:30:00-04:00' }];
+
+type ConflictClient = wb.LarkCalendarClient & { calls: { create: number; update: number; delete: number; freebusy: number } };
+
+/** Client whose free/busy always reports the given busy intervals. */
+function conflictClient(busy: wb.FreeBusyInterval[]): ConflictClient {
+  const calls = { create: 0, update: 0, delete: 0, freebusy: 0 };
+  let seq = 0;
+  return {
+    calls,
+    async createEvent() {
+      calls.create += 1;
+      seq += 1;
+      return { eventId: `cev_${seq}`, calendarId: 'primary' };
+    },
+    async updateEvent() {
+      calls.update += 1;
+    },
+    async deleteEvent() {
+      calls.delete += 1;
+    },
+    async queryFreeBusy() {
+      calls.freebusy += 1;
+      return busy;
+    },
+  };
+}
 
 let draftSeq = 0;
 function event(over: Partial<CalendarDraftEvent> & Pick<CalendarDraftEvent, 'sourceTaskIds' | 'start' | 'end'>): CalendarDraftEvent {
@@ -62,6 +94,10 @@ try {
   await testDryRunPersistsNothing();
   testTimezoneOffsets();
   await testPartialFailureStillRecordsBatch();
+  await testConflictWarnWritesButFlags();
+  await testConflictBlockSkipsWrite();
+  await testConflictIgnoreSkipsCheck();
+  await testNoOverlapWritesClean();
   console.log('calendar-writeback.test.ts: all tests passed');
 } finally {
   db.resetDbForTests();
@@ -129,6 +165,47 @@ function testTimezoneOffsets(): void {
   assert.ok(wb.localWallTimeToRfc3339('2026-07-15T09:30:00', 'America/Toronto').endsWith('-04:00'), 'summer EDT offset');
   assert.ok(wb.localWallTimeToRfc3339('2026-01-15T09:30:00', 'America/Toronto').endsWith('-05:00'), 'winter EST offset');
   assert.equal(wb.localWallTimeToRfc3339('2026-07-15T09:30:00', 'UTC'), '2026-07-15T09:30:00+00:00', 'UTC offset');
+}
+
+async function testConflictWarnWritesButFlags(): Promise<void> {
+  const client = conflictClient(OVERLAP);
+  const d = draft([event({ sourceTaskIds: ['cw1'], start: '2026-09-01T09:00:00', end: '2026-09-01T10:00:00', title: 'Warn' })]);
+  const r = await wb.writebackCalendarDraft(makeConfig('warn'), d, { client });
+  assert.equal(client.calls.freebusy, 1, 'free/busy queried before write');
+  assert.equal(r.created, 1, 'warn policy still writes');
+  assert.equal(r.conflicts, 1, 'conflict counted');
+  assert.equal(r.events[0]!.conflict, true, 'event flagged as conflicting');
+  assert.ok(db.dbFindCalendarWriteback(wb.calendarDedupKey(d.events[0]!)), 'row persisted under warn');
+}
+
+async function testConflictBlockSkipsWrite(): Promise<void> {
+  const client = conflictClient(OVERLAP);
+  const d = draft([event({ sourceTaskIds: ['cb1'], start: '2026-09-01T09:00:00', end: '2026-09-01T10:00:00', title: 'Block' })]);
+  const r = await wb.writebackCalendarDraft(makeConfig('block'), d, { client });
+  assert.equal(r.blocked, 1, 'block policy blocks the conflicting slot');
+  assert.equal(r.created, 0, 'nothing written under block');
+  assert.equal(client.calls.create, 0, 'create never called under block');
+  assert.equal(r.events[0]!.action, 'blocked');
+  assert.ok(!db.dbFindCalendarWriteback(wb.calendarDedupKey(d.events[0]!)), 'no row under block');
+}
+
+async function testConflictIgnoreSkipsCheck(): Promise<void> {
+  const client = conflictClient(OVERLAP);
+  const d = draft([event({ sourceTaskIds: ['ci1'], start: '2026-09-01T09:00:00', end: '2026-09-01T10:00:00', title: 'Ignore' })]);
+  const r = await wb.writebackCalendarDraft(makeConfig('ignore'), d, { client });
+  assert.equal(client.calls.freebusy, 0, 'ignore policy never queries free/busy');
+  assert.equal(r.created, 1, 'ignore writes directly');
+  assert.equal(r.conflicts, 0, 'no conflict recorded under ignore');
+}
+
+async function testNoOverlapWritesClean(): Promise<void> {
+  const client = conflictClient([]);
+  const d = draft([event({ sourceTaskIds: ['no1'], start: '2026-09-01T09:00:00', end: '2026-09-01T10:00:00', title: 'Clean' })]);
+  const r = await wb.writebackCalendarDraft(makeConfig('warn'), d, { client });
+  assert.equal(client.calls.freebusy, 1, 'free/busy queried');
+  assert.equal(r.created, 1);
+  assert.equal(r.conflicts, 0, 'no conflict when free/busy is empty');
+  assert.equal(r.events[0]!.conflict, false);
 }
 
 async function testPartialFailureStillRecordsBatch(): Promise<void> {
