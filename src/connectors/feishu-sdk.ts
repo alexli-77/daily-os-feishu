@@ -45,6 +45,10 @@ export interface FeishuCalendarDraftCardOptions {
   taskCount: number;
   engine?: 'external' | 'builtin';
   writebackSupported: boolean;
+  /** LEO-266: id of the persisted draft snapshot the confirm action writes back. */
+  draftId?: string;
+  /** LEO-266: whether calendar.writeback.enabled is on (changes the confirm copy). */
+  writebackEnabled?: boolean;
 }
 
 export interface FeishuSdkStatus {
@@ -356,21 +360,30 @@ export function renderFeishuCalendarDraftCard(text: string, options: FeishuCalen
           stripTextOnlyInstructions(text),
           '',
           `> ${options.date} · ${options.taskCount} 个任务 · ${options.eventCount} 个时间块 · ${options.engine || 'external'} engine`,
-          options.writebackSupported ? '> Calendar writeback: engine reports supported.' : '> Calendar writeback: 当前关闭；这张卡不会修改任何日历。',
+          options.writebackEnabled
+            ? '> Calendar writeback: 已开启；确认后会写入 Feishu 日历（可撤销）。'
+            : '> Calendar writeback: 当前关闭；这张卡不会修改任何日历。',
         ].join('\n'),
       },
       { tag: 'hr' },
       {
         tag: 'action',
         actions: [
-          cardButton('确认草稿', { daily_os_calendar_action: 'confirm', period: options.period }, 'primary'),
-          cardButton('我要调整', { daily_os_calendar_action: 'adjust', period: options.period }, 'default'),
-          cardButton('先不排', { daily_os_calendar_action: 'skip', period: options.period }, 'default'),
+          cardButton('确认草稿', { daily_os_calendar_action: 'confirm', period: options.period, draftId: options.draftId ?? '' }, 'primary'),
+          cardButton('我要调整', { daily_os_calendar_action: 'adjust', period: options.period, draftId: options.draftId ?? '' }, 'default'),
+          cardButton('先不排', { daily_os_calendar_action: 'skip', period: options.period, draftId: options.draftId ?? '' }, 'default'),
         ],
       },
       {
         tag: 'note',
-        elements: [{ tag: 'plain_text', content: '确认只记录你认可这版草稿；真实写入 Feishu / Apple / Google Calendar 会单独确认。' }],
+        elements: [
+          {
+            tag: 'plain_text',
+            content: options.writebackEnabled
+              ? '确认后写入 Feishu 日历；如需撤销，发送 daily-os calendar undo。'
+              : '确认只记录你认可这版草稿；真实写入 Feishu / Apple / Google Calendar 会单独确认。',
+          },
+        ],
       },
     ],
   };

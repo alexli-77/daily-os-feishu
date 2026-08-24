@@ -68,6 +68,34 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS chat_messages_session ON chat_messages (session_id, created_at);
+-- LEO-266 calendar write-back state (dedup / batch / undo). See src/calendar/writeback.ts.
+CREATE TABLE IF NOT EXISTS calendar_draft_snapshots (
+  draft_id   TEXT PRIMARY KEY,
+  period     TEXT NOT NULL,
+  payload    TEXT NOT NULL,   -- JSON-encoded CalendarDraft, retrieved on confirm
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS calendar_batches (
+  batch_id    TEXT PRIMARY KEY,
+  draft_id    TEXT NOT NULL,
+  period      TEXT NOT NULL,
+  created_at  TEXT NOT NULL,
+  event_count INTEGER NOT NULL,
+  undone_at   TEXT
+);
+CREATE TABLE IF NOT EXISTS calendar_writebacks (
+  dedup_key       TEXT PRIMARY KEY,   -- sha1(source_task_ids + '|' + start day)
+  event_id        TEXT NOT NULL,
+  calendar_id     TEXT NOT NULL,
+  batch_id        TEXT NOT NULL,
+  title           TEXT NOT NULL,
+  start           TEXT NOT NULL,
+  end             TEXT NOT NULL,
+  source_task_ids TEXT NOT NULL,      -- JSON array
+  created_at      TEXT NOT NULL,
+  deleted_at      TEXT                 -- non-null once undone
+);
+CREATE INDEX IF NOT EXISTS calendar_writebacks_batch ON calendar_writebacks (batch_id);
 CREATE VIRTUAL TABLE IF NOT EXISTS artifacts_fts USING fts5(
   id UNINDEXED, name, rel_path, tags, tokenize = 'unicode61'
 );
@@ -297,6 +325,107 @@ export function dbListChatSessions(channel: string, limit = 100): ChatSessionSum
         LIMIT ?`,
     )
     .all(channel, limit) as ChatSessionSummaryRow[];
+}
+
+// --- calendar write-back state (LEO-266) ------------------------------------
+
+export interface CalendarWritebackRow {
+  dedup_key: string;
+  event_id: string;
+  calendar_id: string;
+  batch_id: string;
+  title: string;
+  start: string;
+  end: string;
+  source_task_ids: string; // JSON array
+  created_at: string;
+  deleted_at: string | null;
+}
+
+export interface CalendarBatchRow {
+  batch_id: string;
+  draft_id: string;
+  period: string;
+  created_at: string;
+  event_count: number;
+  undone_at: string | null;
+}
+
+/** Persist a draft so the confirm card action can retrieve exactly what was shown. */
+export function dbSaveCalendarDraftSnapshot(draftId: string, period: string, payload: string, createdAt: string): void {
+  getDb()
+    .prepare(
+      `INSERT INTO calendar_draft_snapshots (draft_id, period, payload, created_at)
+       VALUES (?,?,?,?)
+       ON CONFLICT(draft_id) DO UPDATE SET period = excluded.period, payload = excluded.payload, created_at = excluded.created_at`,
+    )
+    .run(draftId, period, payload, createdAt);
+}
+
+export function dbLoadCalendarDraftSnapshot(draftId: string): string | undefined {
+  const row = getDb().prepare('SELECT payload FROM calendar_draft_snapshots WHERE draft_id = ?').get(draftId) as
+    | { payload: string }
+    | undefined;
+  return row?.payload;
+}
+
+/** Active (not undone) write-back for a dedup key, or undefined. */
+export function dbFindCalendarWriteback(dedupKey: string): CalendarWritebackRow | undefined {
+  const row = getDb()
+    .prepare('SELECT * FROM calendar_writebacks WHERE dedup_key = ? AND deleted_at IS NULL')
+    .get(dedupKey) as CalendarWritebackRow | undefined;
+  return row;
+}
+
+export function dbInsertCalendarBatch(row: CalendarBatchRow): void {
+  getDb()
+    .prepare(
+      'INSERT INTO calendar_batches (batch_id, draft_id, period, created_at, event_count, undone_at) VALUES (@batch_id, @draft_id, @period, @created_at, @event_count, @undone_at)',
+    )
+    .run(row);
+}
+
+/** Insert or resurrect a write-back row (a previously undone key can be reused). */
+export function dbUpsertCalendarWriteback(row: CalendarWritebackRow): void {
+  getDb()
+    .prepare(
+      `INSERT INTO calendar_writebacks (dedup_key, event_id, calendar_id, batch_id, title, start, end, source_task_ids, created_at, deleted_at)
+       VALUES (@dedup_key, @event_id, @calendar_id, @batch_id, @title, @start, @end, @source_task_ids, @created_at, @deleted_at)
+       ON CONFLICT(dedup_key) DO UPDATE SET
+         event_id = excluded.event_id, calendar_id = excluded.calendar_id, batch_id = excluded.batch_id,
+         title = excluded.title, start = excluded.start, end = excluded.end,
+         source_task_ids = excluded.source_task_ids, created_at = excluded.created_at, deleted_at = NULL`,
+    )
+    .run(row);
+}
+
+/** Update the time of an existing (active) write-back after a lark-cli +update. */
+export function dbUpdateCalendarWritebackTime(dedupKey: string, start: string, end: string, batchId: string): void {
+  getDb()
+    .prepare('UPDATE calendar_writebacks SET start = ?, end = ?, batch_id = ? WHERE dedup_key = ?')
+    .run(start, end, batchId, dedupKey);
+}
+
+export function dbListCalendarBatchWritebacks(batchId: string): CalendarWritebackRow[] {
+  return getDb()
+    .prepare('SELECT * FROM calendar_writebacks WHERE batch_id = ? AND deleted_at IS NULL')
+    .all(batchId) as CalendarWritebackRow[];
+}
+
+export function dbMarkCalendarWritebackDeleted(dedupKey: string, deletedAt: string): void {
+  getDb().prepare('UPDATE calendar_writebacks SET deleted_at = ? WHERE dedup_key = ?').run(deletedAt, dedupKey);
+}
+
+export function dbMarkCalendarBatchUndone(batchId: string, undoneAt: string): void {
+  getDb().prepare('UPDATE calendar_batches SET undone_at = ? WHERE batch_id = ?').run(undoneAt, batchId);
+}
+
+/** Most recent batch that has not been undone (for `calendar undo` with no id). */
+export function dbLatestCalendarBatchId(): string | undefined {
+  const row = getDb()
+    .prepare('SELECT batch_id FROM calendar_batches WHERE undone_at IS NULL ORDER BY created_at DESC LIMIT 1')
+    .get() as { batch_id: string } | undefined;
+  return row?.batch_id;
 }
 
 // --- one-time migration from the legacy JSON files --------------------------

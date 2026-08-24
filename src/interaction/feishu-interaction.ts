@@ -52,7 +52,9 @@ import { executeLifeReviewOsWriteback, prepareLifeReviewOsWriteback } from '../s
 import { buildOkrWritebackPreview, executeConfirmedOkrWriteback, renderOkrWritebackCard } from './okr-writeback-card.js';
 import { formatWorkflowRevisionMemoryNote } from './workflow-revision.js';
 import { handleTodoInboxCommand, parseTodoInboxCommand } from '../todo/inbox.js';
-import type { CalendarDraftPeriod, CalendarDraftResult } from '../calendar/bridge.js';
+import type { CalendarDraft, CalendarDraftPeriod, CalendarDraftResult } from '../calendar/bridge.js';
+import { writebackCalendarDraft } from '../calendar/writeback.js';
+import { dbLoadCalendarDraftSnapshot, dbSaveCalendarDraftSnapshot } from '../storage/db.js';
 import { isSelfOriginMessage, SelfOriginGuard, type SelfOriginContext } from './self-origin.js';
 
 /**
@@ -102,6 +104,7 @@ type SkillCardAction = {
 type CalendarCardAction = {
   action: 'confirm' | 'adjust' | 'skip';
   period: CalendarDraftPeriod;
+  draftId?: string;
 };
 
 const CARD_ACTION_DEDUPE_MS = 30_000;
@@ -1086,8 +1089,24 @@ async function handleCalendarCardAction(input: {
 
   const label = input.action.period === 'week' ? '本周日历草稿' : '今日日历草稿';
   if (input.action.action === 'confirm') {
-    appendDailyMemory(input.config, 'daily_plan', todayInTimezone(input.config), `用户确认${label}可作为排程参考；尚未写入任何外部日历。`);
-    await input.channel.send(input.event.chatId, { text: `收到，${label}已确认。我只记录为排程参考，没有修改 Feishu / Apple / Google Calendar。` }, { replyTo: input.event.messageId });
+    // Default (writeback off): keep the draft-only behavior — record a note only.
+    if (!input.config.calendar.writeback.enabled) {
+      appendDailyMemory(input.config, 'daily_plan', todayInTimezone(input.config), `用户确认${label}可作为排程参考；尚未写入任何外部日历。`);
+      await input.channel.send(input.event.chatId, { text: `收到，${label}已确认。我只记录为排程参考，没有修改 Feishu / Apple / Google Calendar。` }, { replyTo: input.event.messageId });
+      return;
+    }
+    const snapshot = input.action.draftId ? dbLoadCalendarDraftSnapshot(input.action.draftId) : undefined;
+    const draft = snapshot ? parseCalendarDraftSnapshot(snapshot) : undefined;
+    if (!draft) {
+      await input.channel.send(input.event.chatId, { text: `这版${label}已过期，请重新发送 daily-os calendar ${input.action.period === 'week' ? 'week' : 'today'} 生成后再确认。` }, { replyTo: input.event.messageId });
+      return;
+    }
+    const summary = await writebackCalendarDraft(input.config, draft);
+    const parts = [`新建 ${summary.created}`, `更新 ${summary.updated}`, `跳过 ${summary.skipped}`];
+    if (summary.failed > 0) parts.push(`失败 ${summary.failed}`);
+    appendDailyMemory(input.config, 'daily_plan', todayInTimezone(input.config), `用户确认${label}并写入 Feishu 日历（${parts.join('，')}；batch=${summary.batchId ?? '-'}）。`);
+    const undoHint = summary.batchId ? '\n如需撤销，发送 daily-os calendar undo。' : '';
+    await input.channel.send(input.event.chatId, { text: `已把${label}写入 Feishu 日历：${parts.join('，')}。${undoHint}` }, { replyTo: input.event.messageId });
     return;
   }
   if (input.action.action === 'adjust') {
@@ -1497,11 +1516,11 @@ function persistDailyReviewCarryOver(config: AppConfig, date: string): number {
 
 function parseCalendarCardAction(value: unknown): CalendarCardAction | null {
   if (!value || typeof value !== 'object') return null;
-  const raw = value as { daily_os_calendar_action?: unknown; period?: unknown };
+  const raw = value as { daily_os_calendar_action?: unknown; period?: unknown; draftId?: unknown };
   const action = raw.daily_os_calendar_action;
   const period = raw.period;
   if ((action !== 'confirm' && action !== 'adjust' && action !== 'skip') || (period !== 'week' && period !== 'today')) return null;
-  return { action, period };
+  return { action, period, draftId: typeof raw.draftId === 'string' ? raw.draftId : undefined };
 }
 
 function parseSkillCardAction(value: unknown): SkillCardAction | null {
@@ -1623,9 +1642,23 @@ async function maybeSendOkrWritebackCard(config: AppConfig, result: SkillRunResu
   }
 }
 
+function parseCalendarDraftSnapshot(payload: string): CalendarDraft | undefined {
+  try {
+    const parsed = JSON.parse(payload) as CalendarDraft;
+    return Array.isArray(parsed?.events) && typeof parsed.draftId === 'string' ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function sendCalendarCardOutput(config: AppConfig, text: string, result: CalendarDraftResult, source: string): Promise<void> {
   const eventCount = result.draft?.events?.length || 0;
   const writebackSupported = Boolean(result.draft?.writeback?.supported);
+  const writebackEnabled = config.calendar.writeback.enabled;
+  // Persist the exact draft so the confirm card action writes back what was shown.
+  if (result.draft) {
+    dbSaveCalendarDraftSnapshot(result.draft.draftId, result.draft.period, JSON.stringify(result.draft), new Date().toISOString());
+  }
   console.log(`[interaction] sending calendar-card source=${source}; period=${result.period}; events=${eventCount}; bytes=${Buffer.byteLength(text, 'utf8')}`);
   await sendFeishuCard(
     config,
@@ -1636,6 +1669,8 @@ async function sendCalendarCardOutput(config: AppConfig, text: string, result: C
       taskCount: result.taskCount,
       engine: result.engine,
       writebackSupported,
+      draftId: result.draft?.draftId,
+      writebackEnabled,
     }),
     text,
   );

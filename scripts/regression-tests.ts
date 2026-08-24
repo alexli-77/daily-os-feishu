@@ -114,6 +114,8 @@ try {
     'scripts/tests/okr-writeback-guardrails.test.ts',
     // Web-chat bare keywords / aliases incl. trailing text (regressed once).
     'scripts/tests/keyword-commands.test.ts',
+    // LEO-266 calendar write-back: idempotency (by-day), move, undo, dry-run, tz.
+    'scripts/tests/calendar-writeback.test.ts',
   ]);
   console.log('Regression tests passed.');
 } finally {
