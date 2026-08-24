@@ -96,6 +96,12 @@ CREATE TABLE IF NOT EXISTS calendar_writebacks (
   deleted_at      TEXT                 -- non-null once undone
 );
 CREATE INDEX IF NOT EXISTS calendar_writebacks_batch ON calendar_writebacks (batch_id);
+-- LEO-268 adjust feed-back: stored per-period adjustment instructions.
+CREATE TABLE IF NOT EXISTS calendar_adjustments (
+  scope      TEXT PRIMARY KEY,   -- 'week' | 'today'
+  payload    TEXT NOT NULL,      -- JSON array of CalendarAdjustment
+  updated_at TEXT NOT NULL
+);
 CREATE VIRTUAL TABLE IF NOT EXISTS artifacts_fts USING fts5(
   id UNINDEXED, name, rel_path, tags, tokenize = 'unicode61'
 );
@@ -426,6 +432,28 @@ export function dbLatestCalendarBatchId(): string | undefined {
     .prepare('SELECT batch_id FROM calendar_batches WHERE undone_at IS NULL ORDER BY created_at DESC LIMIT 1')
     .get() as { batch_id: string } | undefined;
   return row?.batch_id;
+}
+
+// --- calendar adjustments (LEO-268) -----------------------------------------
+
+export function dbLoadCalendarAdjustments(scope: string): string | undefined {
+  const row = getDb().prepare('SELECT payload FROM calendar_adjustments WHERE scope = ?').get(scope) as
+    | { payload: string }
+    | undefined;
+  return row?.payload;
+}
+
+export function dbSaveCalendarAdjustments(scope: string, payload: string, updatedAt: string): void {
+  getDb()
+    .prepare(
+      `INSERT INTO calendar_adjustments (scope, payload, updated_at) VALUES (?,?,?)
+       ON CONFLICT(scope) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at`,
+    )
+    .run(scope, payload, updatedAt);
+}
+
+export function dbClearCalendarAdjustments(scope: string): void {
+  getDb().prepare('DELETE FROM calendar_adjustments WHERE scope = ?').run(scope);
 }
 
 // --- one-time migration from the legacy JSON files --------------------------

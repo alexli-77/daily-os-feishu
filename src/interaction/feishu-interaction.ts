@@ -1112,17 +1112,17 @@ async function handleCalendarCardAction(input: {
     return;
   }
   if (input.action.action === 'adjust') {
+    const p = input.action.period === 'week' ? 'week' : 'today';
     await input.channel.send(
       input.event.chatId,
       {
         text: [
-          '可以，直接告诉我你想怎么改日程草稿。',
+          '可以，把调整用一条命令发给我，我会记录并在下次生成草稿时应用（可多次累积）：',
           '',
-          '例如：',
-          '把上午留给深度工作，邮件统一放下午。',
-          '或者：周三下午不要排任务，留给 meeting buffer。',
+          `daily-os calendar ${p} adjust: 把 深度工作 挪到 上午，删掉 报销`,
           '',
-          '我收到后会先记录修改意见。之后发送 daily-os calendar week 或 daily-os calendar today，我会重新生成草稿。',
+          '支持：删除 / 改时段（上午·14:00）/ 改日期（周四）/ 改时长（缩到 60 分钟）。',
+          `记录后发送 daily-os calendar ${p} 查看应用后的草稿；daily-os calendar ${p} adjust: clear 可清空。`,
         ].join('\n'),
       },
       { replyTo: input.event.messageId },

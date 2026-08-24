@@ -116,6 +116,8 @@ try {
     'scripts/tests/keyword-commands.test.ts',
     // LEO-266 calendar write-back: idempotency (by-day), move, undo, dry-run, tz.
     'scripts/tests/calendar-writeback.test.ts',
+    // LEO-268 calendar adjust feed-back loop: parse + apply (move/drop/resize).
+    'scripts/tests/calendar-adjust.test.ts',
   ]);
   console.log('Regression tests passed.');
 } finally {
