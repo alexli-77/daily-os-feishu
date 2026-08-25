@@ -63,12 +63,22 @@ async function collectRecentlyClosed(token: string, cfg: AppConfig['sources']['l
 
 const openStateFilter = { state: { type: { neq: 'completed' } } };
 
+/**
+ * `description` and `comments` are what the user actually edits when an issue's
+ * scope moves — the title usually stays frozen at whatever it was created as.
+ * Without them the weekly planner can only ever restate a stale title, so a
+ * priority carried forward keeps quoting numbers the issue itself has already
+ * revised (see linearIssueNotes in ../skills/runner.ts).
+ */
+const LINEAR_COMMENTS_PER_ISSUE = 3;
+
 const issuesQuery = `
   query LinearIssues($filter: IssueFilter) {
     issues(filter: $filter, first: 100, orderBy: updatedAt) {
       nodes {
         identifier
         title
+        description
         priority
         url
         state { name type }
@@ -77,6 +87,7 @@ const issuesQuery = `
         assignee { name }
         updatedAt
         dueDate
+        comments(first: ${LINEAR_COMMENTS_PER_ISSUE}) { nodes { body createdAt } }
       }
     }
   }
@@ -170,13 +181,15 @@ Required JSON shape:
     {
       "identifier": "LEO-123",
       "title": "Issue title",
+      "description": "Issue description in markdown, or null",
       "priority": 0,
       "url": "https://linear.app/...",
       "state": {"name": "In Progress", "type": "started"},
       "project": {"name": "Project name"},
       "team": {"name": "Team name", "key": "TEAM"},
       "updatedAt": "ISO timestamp or null",
-      "dueDate": "YYYY-MM-DD or null"
+      "dueDate": "YYYY-MM-DD or null",
+      "comments": {"nodes": [{"body": "Latest progress note", "createdAt": "ISO timestamp"}]}
     }
   ]
 }
@@ -184,6 +197,7 @@ Required JSON shape:
 Scope:
 - Current user's assigned Linear issues.
 - Exclude completed/canceled issues.
+- Include the description and the ${LINEAR_COMMENTS_PER_ISSUE} most recent comments per issue: the weekly planner needs them to notice when an issue's scope moved past its title.
 - Prefer issues matching this query when possible: ${config.sources.linear.query}
 - Limit to 25 issues.
 - Do not apply project or team filtering yourself; return project/team metadata so the local app can filter deterministically.

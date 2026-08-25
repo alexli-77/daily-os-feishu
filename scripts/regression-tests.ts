@@ -118,6 +118,8 @@ try {
     'scripts/tests/calendar-writeback.test.ts',
     // LEO-268 calendar adjust feed-back loop: parse + apply (move/drop/resize).
     'scripts/tests/calendar-adjust.test.ts',
+    // Linear description/comments reach the planner; snapshot columns unchanged.
+    'scripts/tests/linear-notes.test.ts',
   ]);
   console.log('Regression tests passed.');
 } finally {
