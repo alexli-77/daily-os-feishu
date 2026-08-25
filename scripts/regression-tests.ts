@@ -120,6 +120,8 @@ try {
     'scripts/tests/calendar-adjust.test.ts',
     // Linear description/comments reach the planner; snapshot columns unchanged.
     'scripts/tests/linear-notes.test.ts',
+    // Console-editable review strategy: allowlist, cross-repo write, fallback.
+    'scripts/tests/review-strategy.test.ts',
   ]);
   console.log('Regression tests passed.');
 } finally {
