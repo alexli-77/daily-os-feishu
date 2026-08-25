@@ -122,6 +122,8 @@ try {
     'scripts/tests/linear-notes.test.ts',
     // Console-editable review strategy: allowlist, cross-repo write, fallback.
     'scripts/tests/review-strategy.test.ts',
+    // A SIGTERMed child must report the timeout, not two empty streams.
+    'scripts/tests/command-timeout.test.ts',
   ]);
   console.log('Regression tests passed.');
 } finally {
