@@ -265,12 +265,7 @@ async function buildSkillInputPack(
       '- evidence 字段必须逐字引用本 input pack 中真实存在的一行原文（会被程序反查校验，查不到该 KR 不会写回）；严禁改写、拼接或把别处条目的 ✅ 归到当前 KR 上。',
       '- 100% 仅在 Current 达到 Target 且有明确完成证据时使用。',
       '',
-      '计划条目规则（下双周要务）：',
-      '- 延续上期未完成的要务时**逐字照搬上期原文**（含 Linear 编号），不要换措辞改写——改写不产生信息。',
-      '- 仅当 Review / retro 对该 KR 有明确反馈（太重、被阻塞、要换策略）时才调整，且调整必须体现该反馈（减量、拆小步、按 retro 描述换切入点）。',
-      '- 无法判断怎么安排的 KR 行**留空不写**，禁止编一条凑数。',
-      '- 条目若与本 pack Linear 证据中的 issue 确定对应，在末尾以 `(LEO-97)` 形式标注编号（只写编号；多个用空格分隔）；拿不准就不标，禁止猜编号。',
-      '- 照搬是默认动作，不是唯一动作：上期要务列是种子不是边界。必须同时按下面 Linear Issue Snapshot 做双向核对——已开工但要务列没有的 issue 要逐条给出「纳入」或「本期不做」的结论；要务列还挂着但 Linear 已 completed / canceled 的条目不许照搬进新周期。',
+      readBiweeklyStrategy(),
       okrChainSummary || '(no local OKR chain found)',
       '',
       // Same reason as the OKR chain above: life-review-os only reads the first
@@ -282,6 +277,12 @@ async function buildSkillInputPack(
       'Linear 当前活跃 issue 快照，供计划环节做「未覆盖」与「已完成核销」核对。',
       '每行格式：`编号 | 状态 | 状态类型 | 优先级 | 截止 | 标题`。状态类型 `started` = 进行中或评审中，`completed` / `canceled` = 已收尾。',
       linearIssueSnapshot(evidence.sources.linear) || '(no linear issues collected)',
+      '',
+      // Titles alone freeze an issue at its original framing; these are the
+      // fields the user actually updates when the work moves.
+      '## Linear Issue Notes',
+      '进行中 issue 的描述与最近备注。**条目文案与这里的最新备注冲突时以备注为准**——备注是执行事实，issue 标题通常停留在创建时的说法。',
+      linearIssueNotes(evidence.sources.linear) || '(no linear notes collected)',
       '',
       '## Latest Workflow',
       latest ? JSON.stringify(latest, null, 2) : '(none)',
@@ -534,13 +535,85 @@ export function linearIssueSnapshot(source: EvidenceSource | undefined): string 
     .join('\n');
 }
 
+export const BIWEEKLY_STRATEGY_FILE = path.join('prompts', 'biweekly_strategy.md');
+
+/**
+ * Fallback copy of the rules, used when the editable file is missing or blank.
+ * Keeping it in code means an accidentally-emptied file degrades to the shipped
+ * behavior instead of sending the planner an input pack with no plan rules.
+ */
+const DEFAULT_BIWEEKLY_STRATEGY = [
+  '计划条目规则（下双周要务）：',
+  '- 延续上期未完成的要务时**逐字照搬上期原文**（含 Linear 编号），不要换措辞改写——改写不产生信息。',
+  '- 仅当 Review / retro 对该 KR 有明确反馈（太重、被阻塞、要换策略）时才调整，且调整必须体现该反馈（减量、拆小步、按 retro 描述换切入点）。',
+  '- 例外（优先于照搬）：条目标注的 issue 在下面 Linear Issue Notes 里有更新的描述或备注，且备注与条目文案冲突（目标值、金额、范围、前置条件已变）时，**必须按备注改写条目**，用备注里的最新事实，不要照搬过时原文。',
+  '- 无法判断怎么安排的 KR 行**留空不写**，禁止编一条凑数。',
+  '- 条目若与本 pack Linear 证据中的 issue 确定对应，在末尾以 `(LEO-97)` 形式标注编号（只写编号；多个用空格分隔）；拿不准就不标，禁止猜编号。',
+  '- 照搬是默认动作，不是唯一动作：上期要务列是种子不是边界。必须同时按下面 Linear Issue Snapshot 做双向核对——已开工但要务列没有的 issue 要逐条给出「纳入」或「本期不做」的结论；要务列还挂着但 Linear 已 completed / canceled 的条目不许照搬进新周期。',
+].join('\n');
+
+/** The biweekly plan rules injected into the input pack, editable from the console. */
+export function readBiweeklyStrategy(): string {
+  try {
+    const text = fs.readFileSync(path.resolve(BIWEEKLY_STRATEGY_FILE), 'utf8').trim();
+    return text || DEFAULT_BIWEEKLY_STRATEGY;
+  } catch {
+    return DEFAULT_BIWEEKLY_STRATEGY;
+  }
+}
+
+export function defaultBiweeklyStrategy(): string {
+  return DEFAULT_BIWEEKLY_STRATEGY;
+}
+
+const LINEAR_NOTES_LIMIT = 12;
+const LINEAR_NOTE_CHARS = 420;
+
+/**
+ * The snapshot above carries titles only, and a Linear title is written once at
+ * creation and rarely touched again. Progress lives in the description and the
+ * comments, so a planner given titles alone can only restate the original
+ * framing — which is how a carried-over priority keeps quoting a target the
+ * issue itself has since revised.
+ *
+ * Restricted to started issues and hard-capped: this block shares the same 20k
+ * budget as the snapshot, and only in-flight work has progress worth reading.
+ */
+export function linearIssueNotes(source: EvidenceSource | undefined): string {
+  if (!source || source.state !== 'available') return '';
+  const notes = linearSnapshotItems(source.data, 'items')
+    .filter((item) => item.stateType === 'started' && (item.description || item.comments.length > 0))
+    .slice(0, LINEAR_NOTES_LIMIT)
+    .map((item) => {
+      const lines = [`### ${item.identifier} ${item.title}`];
+      if (item.description) lines.push(`描述：${truncate(flattenNote(item.description), LINEAR_NOTE_CHARS)}`);
+      for (const comment of item.comments) {
+        lines.push(`备注（${comment.createdAt.slice(0, 10)}）：${truncate(flattenNote(comment.body), LINEAR_NOTE_CHARS)}`);
+      }
+      return lines.join('\n');
+    });
+  return notes.join('\n\n');
+}
+
+/** Notes are markdown with newlines; the pack stays readable if each is one paragraph. */
+function flattenNote(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+interface LinearSnapshotComment {
+  body: string;
+  createdAt: string;
+}
+
 interface LinearSnapshotItem {
   identifier: string;
   title: string;
+  description: string;
   stateName: string;
   stateType: string;
   priority: string;
   dueDate: string;
+  comments: LinearSnapshotComment[];
 }
 
 function linearSnapshotItems(data: unknown, key: 'items' | 'recently_completed'): LinearSnapshotItem[] {
@@ -553,13 +626,28 @@ function linearSnapshotItems(data: unknown, key: 'items' | 'recently_completed')
       {
         identifier: item.identifier,
         title: typeof item.title === 'string' ? item.title : '',
+        description: typeof item.description === 'string' ? item.description : '',
         stateName: typeof state?.name === 'string' ? state.name : '',
         stateType: typeof state?.type === 'string' ? state.type : '',
         priority: typeof item.priority === 'number' ? priorities[item.priority] || 'None' : '',
         dueDate: typeof item.dueDate === 'string' ? item.dueDate : '',
+        comments: linearSnapshotComments(item.comments),
       },
     ];
   });
+}
+
+/** Newest first, so a truncated notes block keeps the most recent progress. */
+function linearSnapshotComments(raw: unknown): LinearSnapshotComment[] {
+  const nodes = isRecord(raw) && Array.isArray(raw.nodes) ? raw.nodes : Array.isArray(raw) ? raw : [];
+  return nodes
+    .filter(isRecord)
+    .flatMap((comment) => {
+      const body = typeof comment.body === 'string' ? comment.body.trim() : '';
+      if (!body) return [];
+      return [{ body, createdAt: typeof comment.createdAt === 'string' ? comment.createdAt : '' }];
+    })
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -604,7 +692,7 @@ function previewSourceData(data: unknown): string {
   }
 }
 
-function expandPath(value: string): string {
+export function expandPath(value: string): string {
   if (value === '~') return os.homedir();
   if (value.startsWith('~/')) return path.join(os.homedir(), value.slice(2));
   return path.resolve(value);

@@ -21,6 +21,7 @@ import { appendUiLog, clearUiLogs, readUiLogs } from '../storage/ui-log.js';
 import { appVersion } from '../utils/version.js';
 import { startDecisionOnboarding } from '../decision/onboarding.js';
 import { ensureDecisionPolicyFiles } from '../decision/policy.js';
+import { BIWEEKLY_STRATEGY_FILE, defaultBiweeklyStrategy, expandPath } from '../skills/runner.js';
 import { readOkrEditorState, writeOkrFile } from '../okr/editor.js';
 import { normalizeOkrMarkdown } from '../okr/normalize.js';
 import type { OkrLevel } from '../okr/editor.js';
@@ -372,6 +373,7 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
     if (request.method === 'POST' && url.pathname === '/api/capture') return sendJson(response, await captureTodo(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/todo-inbox') return sendJson(response, await updateTodoInbox(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/decision-policy') return sendJson(response, await saveDecisionPolicy(options, await readJson(request)));
+    if (request.method === 'POST' && url.pathname === '/api/strategy') return sendJson(response, await saveStrategy(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/okr') return sendJson(response, await saveOkr(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/okr/format') return sendJson(response, formatOkr(await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/config') return sendJson(response, await saveConfig(options, await readJson(request)));
@@ -839,6 +841,7 @@ async function buildState(options: UiServerOptions): Promise<Record<string, unkn
     service: await getLaunchAgentStatus(),
     backgroundSuggestions: readBackgroundSuggestionsState(config),
     decisionPolicy: readDecisionPolicyState(config),
+    strategy: readStrategyState(config),
     okr: readOkrEditorState(config),
     todoInbox: {
       enabled: config.todo_inbox.enabled,
@@ -846,6 +849,86 @@ async function buildState(options: UiServerOptions): Promise<Record<string, unkn
       recent: listTodoInboxItems(config).filter((item) => item.status !== 'deleted').slice(-40).reverse(),
     },
   };
+}
+
+/**
+ * The biweekly plan rules live in three files across two repos: the block this
+ * app injects into the input pack, and the two life-review-os files its prompt
+ * builder embeds. Editing only one leaves the planner reading two versions of
+ * the same rule, so the console exposes all three together.
+ *
+ * Clients send an id from this list, never a path — the allowlist is what keeps
+ * the endpoint from turning into an arbitrary file write.
+ */
+interface StrategyFile {
+  id: string;
+  label: string;
+  hint: string;
+  path: string;
+}
+
+function strategyFiles(config: AppConfig): StrategyFile[] {
+  const files: StrategyFile[] = [
+    {
+      id: 'biweekly_strategy',
+      label: '计划条目规则（注入 input pack）',
+      hint: 'Daily OS 拼进双周 input pack 的计划条目规则。留空则回退到代码内置的默认规则。',
+      path: path.resolve(BIWEEKLY_STRATEGY_FILE),
+    },
+  ];
+  const workdir = lifeReviewOsWorkdir(config);
+  if (workdir) {
+    files.push(
+      {
+        id: 'plan_rules',
+        label: 'engine/03-plan.md（规划规则）',
+        hint: 'life-review-os 作为 "# Planning Rules" 整段嵌入 prompt：MIT 数量、要务粒度、照搬规则、Linear 覆盖核对。',
+        path: path.join(workdir, 'engine', '03-plan.md'),
+      },
+      {
+        id: 'biweekly_mode',
+        label: 'modes/biweekly.md（双周模式）',
+        hint: '双周模式独有的读取范围、趋势分析和写回行为。',
+        path: path.join(workdir, 'modes', 'biweekly.md'),
+      },
+    );
+  }
+  return files;
+}
+
+function lifeReviewOsWorkdir(config: AppConfig): string {
+  const entry = config.skills.registry.find((candidate) => candidate.id === 'weekly-review');
+  if (!entry) return '';
+  const workdir = expandPath(entry.workdir || '');
+  return workdir && fs.existsSync(workdir) ? workdir : '';
+}
+
+function readStrategyState(config: AppConfig): Record<string, unknown> {
+  return {
+    files: strategyFiles(config).map((file) => ({
+      id: file.id,
+      label: file.label,
+      hint: file.hint,
+      path: file.path,
+      exists: fs.existsSync(file.path),
+      markdown: readTextIfExists(file.path),
+    })),
+    defaultStrategy: defaultBiweeklyStrategy(),
+  };
+}
+
+async function saveStrategy(options: UiServerOptions, body: unknown): Promise<Record<string, unknown>> {
+  const request = readRecord(body);
+  const env = readEnvFile(options.envPath);
+  applyEnv(env);
+  const config = loadConfig(options.configPath);
+  const id = String(request.id || '');
+  const file = strategyFiles(config).find((candidate) => candidate.id === id);
+  if (!file) throw new Error(`Unknown strategy file: ${id || '(empty)'}`);
+  const markdown = String(request.markdown ?? '').replace(/\r\n/g, '\n');
+  fs.mkdirSync(path.dirname(file.path), { recursive: true });
+  fs.writeFileSync(file.path, markdown, 'utf8');
+  return { ok: true, text: `Saved ${file.path}`, state: await buildState(options) };
 }
 
 function readDecisionPolicyState(config: AppConfig): Record<string, unknown> {
@@ -1705,6 +1788,7 @@ const HTML = String.raw`<!doctype html>
         <button class="nav-button active" data-section="overview">Overview</button>
         <button class="nav-button" data-section="guide">Guide</button>
         <button class="nav-button" data-section="decision">Decision Policy</button>
+        <button class="nav-button" data-section="strategy">Review Strategy</button>
         <button class="nav-button" data-section="okr">OKR</button>
         <button class="nav-button" data-section="setup">Setup</button>
         <button class="nav-button" data-section="sources">Sources</button>
@@ -1892,6 +1976,38 @@ npm run service:install</code></pre>
                 <textarea id="okr-md-current" spellcheck="false" placeholder="## Objective O1: 本季目标"></textarea>
                 <div class="panel-actions"><button type="button" class="secondary" data-action="okr_format_current">整理格式</button><button type="button" data-action="okr_save_current">Save Current</button></div>
                 <p class="hint" id="okr-status-current"></p>
+              </section>
+            </div>
+          </section>
+
+          <section class="panel" id="section-strategy">
+            <div class="panel-head">
+              <div>
+                <h2>Review Strategy</h2>
+                <p class="hint">双周 / 周复盘的计划策略。这三个文件一起决定要务怎么生成，改完下一次 review 立即生效，不用重启。</p>
+              </div>
+              <div class="panel-actions">
+                <button type="button" class="secondary compact" data-action="strategy_reload">Refresh</button>
+                <button type="button" data-action="strategy_save">Save Markdown</button>
+              </div>
+            </div>
+            <div class="decision-page">
+              <section class="decision-editor" aria-labelledby="strategy-editor-title">
+                <div>
+                  <h3 id="strategy-editor-title">策略文件</h3>
+                  <select id="strategy-file"></select>
+                  <p class="hint" id="strategy-hint"></p>
+                  <p class="hint" id="strategy-path"></p>
+                </div>
+                <textarea id="strategy-md" spellcheck="false" placeholder="计划条目规则（下双周要务）："></textarea>
+                <p class="hint" id="strategy-status"></p>
+              </section>
+              <section class="decision-example-panel" aria-labelledby="strategy-default-title">
+                <div>
+                  <h3 id="strategy-default-title">内置默认规则</h3>
+                  <p class="hint">「计划条目规则」文件为空或删掉时，回退到这份内置副本。可以照抄回去做重置。</p>
+                </div>
+                <pre class="decision-example"><code id="strategy-default"></code></pre>
               </section>
             </div>
           </section>
@@ -2978,6 +3094,12 @@ document.querySelectorAll('[data-action]').forEach((button) => {
 
 $('llm-provider')?.addEventListener('change', updateProviderSections);
 
+$('strategy-file')?.addEventListener('change', () => {
+  const status = $('strategy-status');
+  if (status) status.textContent = '';
+  renderStrategy(state?.strategy);
+});
+
 $('todo-list')?.addEventListener('click', (event) => {
   const button = event.target.closest('[data-todo-action]');
   if (!button) return;
@@ -3056,6 +3178,7 @@ function render() {
   }
   renderTodoInbox(openTodos);
   renderDecisionPolicy(state.decisionPolicy);
+  renderStrategy(state.strategy);
   renderOkr(state.okr);
   set('env-CODEX_BIN', state.env.CODEX_BIN || 'codex');
   set('env-CODEX_HOME', state.env.CODEX_HOME || '');
@@ -3261,6 +3384,56 @@ async function formatOkrFromPage(level) {
   if (result.formatted != null) set('okr-md-' + level, result.formatted);
   if (status) status.textContent = '已整理为标准格式，请检查后点 Save 保存。';
   showToast('OKR formatted', 'success');
+}
+
+function strategyFileById(id) {
+  var files = (state && state.strategy && state.strategy.files) || [];
+  for (var i = 0; i < files.length; i += 1) if (files[i].id === id) return files[i];
+  return null;
+}
+
+function renderStrategy(strategy) {
+  if (!strategy) return;
+  var select = $('strategy-file');
+  if (!select) return;
+  var files = strategy.files || [];
+  // Keep the current pick across re-renders, or an edit + save would silently
+  // bounce the editor back to the first file.
+  var selected = select.value && strategyFileById(select.value) ? select.value : (files[0] || {}).id;
+  if (select.options.length !== files.length) {
+    select.innerHTML = '';
+    for (var i = 0; i < files.length; i += 1) {
+      var option = document.createElement('option');
+      option.value = files[i].id;
+      option.textContent = files[i].label;
+      select.appendChild(option);
+    }
+  }
+  select.value = selected || '';
+  var file = strategyFileById(select.value);
+  set('strategy-md', file ? file.markdown || '' : '');
+  var hint = $('strategy-hint');
+  if (hint) hint.textContent = file ? file.hint || '' : '';
+  var pathHint = $('strategy-path');
+  if (pathHint) pathHint.textContent = file ? file.path + (file.exists ? '' : '（文件不存在，保存后创建）') : '';
+  var fallback = $('strategy-default');
+  if (fallback) fallback.textContent = strategy.defaultStrategy || '';
+}
+
+async function saveStrategyFromPage() {
+  var select = $('strategy-file');
+  var id = select ? select.value : '';
+  var status = $('strategy-status');
+  if (!id) {
+    if (status) status.textContent = 'No strategy file selected.';
+    return;
+  }
+  if (status) status.textContent = 'Saving...';
+  var result = await post('/api/strategy', { id: id, markdown: value('strategy-md') });
+  if (result.state) state = result.state;
+  render();
+  if (status) status.textContent = result.text || 'Saved.';
+  showToast('Review strategy saved', 'success');
 }
 
 function renderDecisionPolicy(policy) {
@@ -3514,6 +3687,22 @@ function secretValue(key) {
 }
 
 async function runAction(action) {
+  if (action === 'strategy_reload') {
+    await loadState();
+    showToast('Review strategy reloaded', 'success');
+    return;
+  }
+  if (action === 'strategy_save') {
+    try {
+      await saveStrategyFromPage();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const status = $('strategy-status');
+      if (status) status.textContent = message;
+      showToast('Review strategy save failed: ' + message, 'error', false);
+    }
+    return;
+  }
   if (action === 'decision_policy_reload') {
     await loadState();
     showToast('Decision policy reloaded', 'success');
