@@ -86,6 +86,26 @@ test('the one-line snapshot keeps its 6-column contract when notes are present',
   assert.match(parts[5], /^换汇补加元缺口/);
 });
 
+test("a note's closing recommendation survives — it is the part that matters most", () => {
+  // The real regression: at 420 chars LEO-197 was cut at "…后决定二次", severing
+  // "换汇金额" and with it the instruction NOT to fix an amount yet. The planner
+  // then committed to one. A cut recommendation reads as a different
+  // recommendation, not as an obviously incomplete one.
+  const body = `进展：已累计换汇 8,000 CAD（原目标 13,000）。${'家庭支出基线变化明细。'.repeat(60)}建议：本 issue 保持 In Progress，等 9/1 快照看真实新支出后决定二次换汇金额。`;
+  const notes = linearIssueNotes(source([{ ...started, comments: { nodes: [{ body, createdAt: '2026-08-15T20:55:01.904Z' }] } }]));
+  assert.match(notes, /已累计换汇 8,000 CAD/, 'the opening is kept');
+  assert.match(notes, /决定二次换汇金额/, 'the closing recommendation must not be severed');
+});
+
+test('an over-long note drops from the middle and says so', () => {
+  const body = `开头结论很重要。${'中间细节。'.repeat(400)}结尾建议：等快照后再定。`;
+  const notes = linearIssueNotes(source([{ ...started, comments: { nodes: [{ body, createdAt: '2026-08-15T20:55:01.904Z' }] } }]));
+  assert.match(notes, /开头结论很重要/);
+  assert.match(notes, /结尾建议：等快照后再定/);
+  assert.match(notes, /…\[中间省略\]…/);
+  assert.ok(notes.length < body.length, 'it still has to shrink');
+});
+
 test('an unavailable or malformed linear source degrades to an empty block', () => {
   assert.equal(linearIssueNotes(undefined), '');
   assert.equal(linearIssueNotes({ state: 'error', detail: 'boom' }), '');

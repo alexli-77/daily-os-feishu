@@ -547,6 +547,7 @@ const DEFAULT_BIWEEKLY_STRATEGY = [
   '- 延续上期未完成的要务时**逐字照搬上期原文**（含 Linear 编号），不要换措辞改写——改写不产生信息。',
   '- 仅当 Review / retro 对该 KR 有明确反馈（太重、被阻塞、要换策略）时才调整，且调整必须体现该反馈（减量、拆小步、按 retro 描述换切入点）。',
   '- 例外（优先于照搬）：条目标注的 issue 在下面 Linear Issue Notes 里有更新的描述或备注，且备注与条目文案冲突（目标值、金额、范围、前置条件已变）时，**必须按备注改写条目**，用备注里的最新事实，不要照搬过时原文。',
+  '- 备注里把决定推迟到某个时点的（如「等 9/1 快照后再定金额」），**不要替它做决定**：要务写成推进到那个决策点的动作，不要写死一个备注没给的数字或结论。',
   '- 无法判断怎么安排的 KR 行**留空不写**，禁止编一条凑数。',
   '- 条目若与本 pack Linear 证据中的 issue 确定对应，在末尾以 `(LEO-97)` 形式标注编号（只写编号；多个用空格分隔）；拿不准就不标，禁止猜编号。',
   '- 照搬是默认动作，不是唯一动作：上期要务列是种子不是边界。必须同时按下面 Linear Issue Snapshot 做双向核对——已开工但要务列没有的 issue 要逐条给出「纳入」或「本期不做」的结论；要务列还挂着但 Linear 已 completed / canceled 的条目不许照搬进新周期。',
@@ -567,7 +568,15 @@ export function defaultBiweeklyStrategy(): string {
 }
 
 const LINEAR_NOTES_LIMIT = 12;
-const LINEAR_NOTE_CHARS = 420;
+/**
+ * A progress note's most load-bearing sentence is usually its last one — the
+ * recommendation. At 420 chars LEO-197 was cut at "…等 9/1 快照看真实新支出后决定二次",
+ * severing "换汇金额" and with it the instruction NOT to commit to an amount
+ * yet; the planner filled the gap by committing to one. Truncating a
+ * recommendation mid-clause can invert its meaning, so keep notes whole at a
+ * realistic length and, when a cut is unavoidable, keep the tail.
+ */
+const LINEAR_NOTE_CHARS = 1200;
 
 /**
  * The snapshot above carries titles only, and a Linear title is written once at
@@ -586,9 +595,9 @@ export function linearIssueNotes(source: EvidenceSource | undefined): string {
     .slice(0, LINEAR_NOTES_LIMIT)
     .map((item) => {
       const lines = [`### ${item.identifier} ${item.title}`];
-      if (item.description) lines.push(`描述：${truncate(flattenNote(item.description), LINEAR_NOTE_CHARS)}`);
+      if (item.description) lines.push(`描述：${truncateNote(flattenNote(item.description))}`);
       for (const comment of item.comments) {
-        lines.push(`备注（${comment.createdAt.slice(0, 10)}）：${truncate(flattenNote(comment.body), LINEAR_NOTE_CHARS)}`);
+        lines.push(`备注（${comment.createdAt.slice(0, 10)}）：${truncateNote(flattenNote(comment.body))}`);
       }
       return lines.join('\n');
     });
@@ -598,6 +607,19 @@ export function linearIssueNotes(source: EvidenceSource | undefined): string {
 /** Notes are markdown with newlines; the pack stays readable if each is one paragraph. */
 function flattenNote(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Drop from the middle rather than the end. A note's conclusion is the part the
+ * planner most needs, and the generic tail-truncation silently removed exactly
+ * that — leaving a recommendation cut mid-clause, which reads as a different
+ * recommendation instead of an obviously incomplete one.
+ */
+function truncateNote(value: string): string {
+  if (value.length <= LINEAR_NOTE_CHARS) return value;
+  const tail = Math.floor(LINEAR_NOTE_CHARS / 3);
+  const head = LINEAR_NOTE_CHARS - tail;
+  return `${value.slice(0, head)} …[中间省略]… ${value.slice(-tail)}`;
 }
 
 interface LinearSnapshotComment {
