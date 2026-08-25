@@ -63,7 +63,11 @@ export async function runLifeReviewOsSkill(input: {
   const cli = requireLifeReviewOsCli(input.entry);
   const args = [cli, 'run', input.mode, '--json', '--provider', input.provider, '--daily-os-input', input.inputPackPath];
   if (input.userText.trim()) args.push('--user-text', input.userText.trim());
-  const result = await runCommand('node', args, { cwd: lifeReviewOsRoot(cli), timeoutMs: 660000 });
+  // Must stay above life-review-os's own provider timeout (20 min by default),
+  // plus room for the Feishu reads around it. When this one fires first the CLI
+  // dies before it can report anything, which is the least useful failure of the
+  // two — a measured biweekly run is ~9.5 min, so neither should trip normally.
+  const result = await runCommand('node', args, { cwd: lifeReviewOsRoot(cli), timeoutMs: 1500000 });
   const parsed = parseLifeReviewOsJson(result.stdout, result.stderr, 'run', result.ok);
   return {
     runId: stringValue(parsed.run_id),
