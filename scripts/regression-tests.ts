@@ -124,6 +124,8 @@ try {
     'scripts/tests/review-strategy.test.ts',
     // A SIGTERMed child must report the timeout, not two empty streams.
     'scripts/tests/command-timeout.test.ts',
+    // Retro review reaches Feishu, and its failure never fails the write-back.
+    'scripts/tests/retro-review-writeback.test.ts',
   ]);
   console.log('Regression tests passed.');
 } finally {

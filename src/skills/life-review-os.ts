@@ -47,6 +47,18 @@ export interface LifeReviewOsWritebackResult {
   skippedCount: number;
   insertedColumns: boolean;
   alreadyWritten: boolean;
+  /** Retro review outcome. Absent only if the CLI predates the write-review command. */
+  review?: LifeReviewOsReviewResult;
+}
+
+export interface LifeReviewOsReviewResult {
+  written: boolean;
+  alreadyWritten: boolean;
+  retroHeader: string;
+  targetRow: number;
+  chars: number;
+  /** Set when the review could not be written; the priorities were still written. */
+  error?: string;
 }
 
 export function isLifeReviewOsEntry(entry: SkillEntry): boolean {
@@ -115,7 +127,49 @@ export async function executeLifeReviewOsWriteback(config: AppConfig, skillId: s
     skippedCount: numberValue(parsed.skipped_count),
     insertedColumns: Boolean(parsed.inserted_columns),
     alreadyWritten: Boolean(parsed.already_written),
+    review: await writeLifeReviewOsRetroReview(entry, runId),
   };
+}
+
+/**
+ * The retro review is a second, independent write: it goes into the retro cell
+ * next to the priorities column, which only exists once write-back has created
+ * the pair. Nothing called this before, so the review sat in the run record and
+ * never reached Feishu even though every draft produced one.
+ *
+ * Deliberately never throws. The priorities are already in the document by the
+ * time this runs, and there is no rollback — failing the whole write-back over
+ * the review would report a success as a failure and invite a duplicate retry.
+ */
+async function writeLifeReviewOsRetroReview(entry: SkillEntry, runId: string): Promise<LifeReviewOsReviewResult> {
+  try {
+    const parsed = await callLifeReviewOs(entry, ['write-review', '--run-id', runId, '--json'], 'write-review');
+    return {
+      written: Boolean(parsed.written),
+      alreadyWritten: Boolean(parsed.already_written),
+      retroHeader: stringValue(parsed.retro_header),
+      targetRow: numberValue(parsed.target_row),
+      chars: numberValue(parsed.chars),
+    };
+  } catch (error) {
+    return {
+      written: false,
+      alreadyWritten: false,
+      retroHeader: '',
+      targetRow: 0,
+      chars: 0,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/** One line describing what happened to the retro review, for either channel. */
+export function formatRetroReviewOutcome(review: LifeReviewOsReviewResult | undefined): string {
+  if (!review) return '';
+  if (review.error) return `retro review 未写入：${review.error}`;
+  if (review.alreadyWritten) return `retro review 已存在（${review.retroHeader}），未重复写入`;
+  if (review.written) return `retro review：已写入 ${review.retroHeader} 第 ${review.targetRow} 行，${review.chars} 字`;
+  return 'retro review 未写入';
 }
 
 function assertWritebackReady(writeback: LifeReviewOsWriteback): void {

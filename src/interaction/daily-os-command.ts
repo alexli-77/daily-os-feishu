@@ -19,7 +19,7 @@ import { formatRecentWorkflowRuns, listRecentWorkflowRuns } from '../workflows/r
 import { markWorkflowRunFailed, markWorkflowRunSucceeded } from '../workflows/run-ledger.js';
 import { formatSkillList, readLatestSkillRun, runConfiguredSkill } from '../skills/runner.js';
 import type { SkillRunResult } from '../skills/runner.js';
-import { executeLifeReviewOsWriteback, prepareLifeReviewOsWriteback } from '../skills/life-review-os.js';
+import { executeLifeReviewOsWriteback, formatRetroReviewOutcome, prepareLifeReviewOsWriteback } from '../skills/life-review-os.js';
 import { buildOkrWritebackPreview, executeConfirmedOkrWriteback } from './okr-writeback-card.js';
 import { formatWorkflowRevisionMemoryNote } from './workflow-revision.js';
 import { handleTodoInboxCommand, parseTodoInboxCommand, type TodoInboxCommand } from '../todo/inbox.js';
@@ -575,6 +575,7 @@ async function runWritebackCommand(
       `- 任务区：${result.taskHeader}`,
       `- 写入 ${result.itemCount} 条${result.skippedCount ? `，跳过 ${result.skippedCount} 条` : ''}`,
       result.insertedColumns ? '- 已插入新列' : '',
+      formatRetroReviewOutcome(result.review) ? `- ${formatRetroReviewOutcome(result.review)}` : '',
     ]
       .filter(Boolean)
       .join('\n'),
