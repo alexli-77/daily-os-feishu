@@ -48,7 +48,7 @@ import { renderFeishuCalendarDraftCard, renderFeishuSkillCard, renderFeishuSkill
 import { sendFeishuCard } from '../connectors/lark-cli.js';
 import type { SkillRunResult } from '../skills/runner.js';
 import { readLatestSkillRun } from '../skills/runner.js';
-import { executeLifeReviewOsWriteback, prepareLifeReviewOsWriteback } from '../skills/life-review-os.js';
+import { executeLifeReviewOsWriteback, formatRetroReviewOutcome, prepareLifeReviewOsWriteback } from '../skills/life-review-os.js';
 import { buildOkrWritebackPreview, executeConfirmedOkrWriteback, renderOkrWritebackCard } from './okr-writeback-card.js';
 import { formatWorkflowRevisionMemoryNote } from './workflow-revision.js';
 import { handleTodoInboxCommand, parseTodoInboxCommand } from '../todo/inbox.js';
@@ -1256,6 +1256,7 @@ async function handleSkillCardAction(input: {
             `本次新写入：${result.itemCount} 条要务`,
             result.skippedCount ? `已存在并跳过：${result.skippedCount} 条要务` : '',
             result.insertedColumns ? '操作：已插入新周列' : '操作：写入已有空周列',
+            formatRetroReviewOutcome(result.review),
           ]
             .filter(Boolean)
             .join('\n'),
