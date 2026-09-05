@@ -2088,7 +2088,7 @@ npm run service:install</code></pre>
               <label>Timezone<input id="user-timezone" /></label>
               <label>Language<input id="assistant-language" /></label>
               <label>LLM provider<select id="llm-provider"><option>codex</option><option>openai</option><option>claude</option></select></label>
-              <label>Model<input id="llm-model" /></label>
+              <label>Model<input id="llm-model" list="llm-model-options" autocomplete="off" placeholder="default" /><datalist id="llm-model-options"></datalist><span class="hint">Suggestions follow the selected provider. Any id the provider accepts can still be typed in; <code>default</code> follows the provider's own default.</span></label>
               <div class="form-field">
                 <label for="secret-OPENAI_API_KEY">OpenAI API key</label>
                 <div class="secret-control"><input id="secret-OPENAI_API_KEY" type="password" autocomplete="new-password" /><button type="button" class="icon-button" data-toggle-secret="OPENAI_API_KEY" aria-label="Show OpenAI API key">&#128065;</button></div>
@@ -3151,12 +3151,56 @@ async function loadState() {
   render();
 }
 
+// Suggestions only. Model ids move faster than this file does — 'gpt-6-astra'
+// started rolling out mid-2026 and would not have been in any list shipped
+// before it — so the Model field stays a free-text input backed by a datalist
+// rather than a <select>. A <select> would silently drop a config value it did
+// not know about the moment the form is saved.
+const MODEL_SUGGESTIONS = {
+  codex: [
+    ['default', "follow the Codex CLI's own default"],
+    ['gpt-6-astra', 'most capable, for complex work'],
+    ['gpt-5.6-terra', 'balanced, everyday work'],
+    ['gpt-5.6-sol', 'reliable everyday workhorse'],
+    ['gpt-5.6-luna', 'fast and affordable'],
+    ['gpt-5.5', 'proven previous generation'],
+    ['gpt-5.4-mini', 'small, fast, cost-efficient'],
+  ],
+  openai: [
+    ['default', 'gpt-4o-mini'],
+    ['gpt-4.1-mini', ''], ['gpt-4.1', ''], ['gpt-4o-mini', ''], ['gpt-4o', ''], ['o3-mini', ''], ['o3', ''],
+  ],
+  claude: [
+    ['default', 'claude-sonnet-5'],
+    ['claude-haiku-4', 'fastest, cheapest'], ['claude-sonnet-5', 'balanced'], ['claude-opus-4', 'most capable'],
+  ],
+  anthropic: [
+    ['default', 'claude-sonnet-5'],
+    ['claude-haiku-4', 'fastest, cheapest'], ['claude-sonnet-5', 'balanced'], ['claude-opus-4', 'most capable'],
+  ],
+};
+
+function updateModelSuggestions() {
+  const list = $('llm-model-options');
+  if (!list) return;
+  const current = value('llm-model');
+  const options = MODEL_SUGGESTIONS[value('llm-provider')] || [['default', '']];
+  // Keep whatever is configured at the top even when it is not a known id, so
+  // the dropdown never implies the current value is invalid.
+  const known = options.some((entry) => entry[0] === current);
+  const merged = !known && current ? [[current, 'current setting']].concat(options) : options;
+  list.innerHTML = merged
+    .map((entry) => '<option value="' + escapeAttr(entry[0]) + '">' + escapeHtml(entry[1] || '') + '</option>')
+    .join('');
+}
+
 function updateProviderSections() {
   const provider = value('llm-provider');
   const codex = $('codex-fieldset');
   const claude = $('claude-fieldset');
   if (codex) codex.hidden = provider !== 'codex';
   if (claude) claude.hidden = provider !== 'claude';
+  updateModelSuggestions();
 }
 
 function render() {
