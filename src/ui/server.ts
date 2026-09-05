@@ -3034,7 +3034,14 @@ pre {
   .log-entry { grid-template-columns: 1fr; gap: .35rem; }
 }`;
 
-const JS = String.raw`let state;
+/**
+ * Exported so tests can evaluate the shipped console script against a DOM stub.
+ * A syntax check is not enough on its own: the model picker regressed while
+ * parsing perfectly, because the defect was behavioural — a datalist filters
+ * its suggestions against the input's current value, so a field that always
+ * holds a value never showed a menu.
+ */
+export const JS = String.raw`let state;
 
 const UI_TOKEN = (function () {
   // Priority: ?token=... (first open) -> sessionStorage -> token injected into the page HTML.
