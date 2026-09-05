@@ -43,6 +43,7 @@ export interface ScoreBreakdown {
   carryOver?: number;
   okr?: number;
   customerFacing?: number;
+  manualCapture?: number;
 }
 
 export interface ScoredTodoCandidate extends TodoCandidate {
@@ -200,6 +201,8 @@ export function scoreCandidate(
 
   if (candidate.isCustomerFacing) breakdown.customerFacing = weights.customerFacing;
 
+  if (candidate.source === 'todo_inbox') breakdown.manualCapture = weights.manualCapture;
+
   const score = Object.values(breakdown).reduce((sum, value) => sum + (value ?? 0), 0);
   return { score, breakdown };
 }
@@ -220,7 +223,7 @@ function fromTodoInbox(source: EvidenceSource | undefined, now: Date): TodoCandi
         id: `todo_inbox:${typeof item.id === 'string' ? item.id : title}`,
         title,
         source: 'todo_inbox' as const,
-        ...(typeof item.due_hint === 'string' && item.due_hint ? { dueDate: item.due_hint } : {}),
+        ...dueDateFromHint(typeof item.due_hint === 'string' ? item.due_hint : undefined, now),
         ...(carryOverDays !== undefined ? { carryOverDays } : {}),
         isCustomerFacing: CUSTOMER_SIGNAL.test(title),
       };
@@ -501,6 +504,66 @@ function parseDateMs(value: string | undefined): number | null {
   if (!isoLike) return null;
   const ms = Date.parse(isoLike.length === 10 ? `${isoLike}T00:00:00` : isoLike.replace(' ', 'T'));
   return Number.isNaN(ms) ? null : ms;
+}
+
+/**
+ * Normalize a capture hint into the `dueDate` field. A hint that resolves to a
+ * real day is stored as `YYYY-MM-DD` so the urgency tiers and the card renderer
+ * both understand it; anything else is kept verbatim so the user still sees
+ * what they typed, and simply earns no urgency points.
+ */
+function dueDateFromHint(hint: string | undefined, now: Date): { dueDate?: string } {
+  if (!hint) return {};
+  const resolved = resolveDueHintMs(hint, now);
+  if (resolved === null) return { dueDate: hint };
+  const day = new Date(resolved);
+  const pad = (part: number): string => String(part).padStart(2, '0');
+  return { dueDate: `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}` };
+}
+
+const WEEKDAY_HINTS: Record<string, number> = {
+  日: 0, 天: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6,
+};
+
+/**
+ * Resolve the relative Chinese date hints the todo capture produces.
+ *
+ * Capture stores what the user typed — `周六`, `明天`, `下周三` — but scoring
+ * only understood ISO dates, so every hand-captured deadline evaluated as "no
+ * due date at all" and earned nothing from the urgency tiers. A todo written as
+ * "周六下午 6-8PM 去打球" was invisible on the Saturday it was due.
+ *
+ * Returns midnight of the resolved day, or null when the hint is not a date.
+ * Absolute `YYYY-MM-DD` text keeps taking precedence via `parseDateMs`.
+ */
+export function resolveDueHintMs(hint: string | undefined, now: Date): number | null {
+  const absolute = parseDateMs(hint);
+  if (absolute !== null) return absolute;
+  if (!hint) return null;
+  const text = hint.replace(/\s+/g, '');
+  const midnight = (offsetDays: number): number => {
+    const day = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    day.setDate(day.getDate() + offsetDays);
+    return day.getTime();
+  };
+
+  if (/^(今天|今日|今晚)/.test(text)) return midnight(0);
+  if (/^(明天|明日|明晚)/.test(text)) return midnight(1);
+  if (/^(后天|後天)/.test(text)) return midnight(2);
+
+  // 周六 / 周6 / 星期六 / 礼拜六, optionally prefixed with 本 / 这 / 下 / 下下.
+  const weekday = text.match(/^(本|这|這|下下|下)?(?:周|週|星期|礼拜|禮拜)([日天一二三四五六]|[0-6])/);
+  if (!weekday) return null;
+  const token = weekday[2];
+  const target = /[0-6]/.test(token) ? Number(token) % 7 : WEEKDAY_HINTS[token];
+  if (target === undefined) return null;
+
+  // "下周X" means the same weekday one week on; a bare or 本/这 prefixed weekday
+  // means the next occurrence, counting today as a hit so a Saturday todo
+  // written on Saturday is due today rather than a week out.
+  const weeksAhead = weekday[1] === '下' ? 1 : weekday[1] === '下下' ? 2 : 0;
+  const delta = (target - now.getDay() + 7) % 7;
+  return midnight(delta + weeksAhead * 7);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
