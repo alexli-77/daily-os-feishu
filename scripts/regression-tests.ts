@@ -130,6 +130,8 @@ try {
     'scripts/tests/command-timeout.test.ts',
     // Retro review reaches Feishu, and its failure never fails the write-back.
     'scripts/tests/retro-review-writeback.test.ts',
+    // Priorities and retro review are confirmed separately, on both channels.
+    'scripts/tests/split-confirm.test.ts',
   ]);
   console.log('Regression tests passed.');
 } finally {

@@ -108,27 +108,38 @@ async function withStubCli(reviewBehaviour: 'ok' | 'fail', fn: () => Promise<voi
   }
 }
 
-test('a successful review rides along on the write-back result', async () => {
+test('writing the priorities does NOT also write the review', async () => {
+  // They are two writes into two different cells, so they are two decisions.
+  // Chaining them meant one confirmation covered both, and the review was never
+  // shown before it happened.
   await withStubCli('ok', async () => {
     const { executeLifeReviewOsWriteback } = await import('../../src/skills/life-review-os.js');
     const config = (globalThis as Record<string, any>).__stubConfig;
     const result = await executeLifeReviewOsWriteback(config, 'weekly-review', 'run-1');
     assert.equal(result.itemCount, 13);
-    assert.equal(result.review?.written, true);
-    assert.equal(result.review?.retroHeader, '8.24-9.6 retro');
-    assert.equal(result.review?.targetRow, 2);
+    assert.equal(result.review, undefined, 'the review must not ride along');
   });
 });
 
-test('a failing review does NOT fail the write-back — the priorities are already written', async () => {
-  await withStubCli('fail', async () => {
-    const { executeLifeReviewOsWriteback } = await import('../../src/skills/life-review-os.js');
+test('the review is written by its own call', async () => {
+  await withStubCli('ok', async () => {
+    const { executeLifeReviewOsRetroReview } = await import('../../src/skills/life-review-os.js');
     const config = (globalThis as Record<string, any>).__stubConfig;
-    const result = await executeLifeReviewOsWriteback(config, 'weekly-review', 'run-1');
-    assert.equal(result.itemCount, 13, 'the write-back result must survive intact');
-    assert.equal(result.review?.written, false);
-    assert.match(result.review?.error || '', /adjacent to/);
-    assert.match(formatRetroReviewOutcome(result.review), /未写入/);
+    const review = await executeLifeReviewOsRetroReview(config, 'weekly-review', 'run-1');
+    assert.equal(review.written, true);
+    assert.equal(review.retroHeader, '8.24-9.6 retro');
+    assert.equal(review.targetRow, 2);
+  });
+});
+
+test('a failing review reports instead of throwing — the priorities are untouched by it', async () => {
+  await withStubCli('fail', async () => {
+    const { executeLifeReviewOsRetroReview } = await import('../../src/skills/life-review-os.js');
+    const config = (globalThis as Record<string, any>).__stubConfig;
+    const review = await executeLifeReviewOsRetroReview(config, 'weekly-review', 'run-1');
+    assert.equal(review.written, false);
+    assert.match(review.error || '', /adjacent to/);
+    assert.match(formatRetroReviewOutcome(review), /未写入/);
   });
 });
 

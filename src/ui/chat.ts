@@ -143,6 +143,10 @@ const BARE_COMMAND_KEYWORDS = new Set([
   '写回预览',
   '确认写回',
   '确认写回 okr',
+  '写入 review',
+  '确认写入 review',
+  'write review',
+  'confirm write review',
   'okr writeback',
   'okr 写回',
 ]);
