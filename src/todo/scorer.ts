@@ -49,6 +49,17 @@ export interface ScoredTodoCandidate extends TodoCandidate {
   rank: number;
   score: number;
   breakdown: ScoreBreakdown;
+  /**
+   * Same value as `id`, under the name the daily-plan prompt asks the model to
+   * echo back. `prompts/daily_plan.md` documents `top[].candidateId` and says to
+   * return it verbatim, but this payload only ever carried `id` — the two ends
+   * of the contract disagreed. Models used to paper over it by inferring the
+   * mapping; a stricter one instead refused to invent the missing field and
+   * returned an empty plan. Emitting both keeps `id` for every internal
+   * consumer (dedupe, completion ledger, carry-over) and makes "return it
+   * verbatim" literally true.
+   */
+  candidateId: string;
 }
 
 export interface ScoreAndRankOptions {
@@ -142,7 +153,7 @@ export function scoreAndRank(candidates: TodoCandidate[], options: ScoreAndRankO
   const topN = options.topN ?? DEFAULT_TOP_N;
   const scored = candidates.map((candidate) => {
     const { score, breakdown } = scoreCandidate(candidate, weights, now);
-    return { ...candidate, score, breakdown, rank: 0 };
+    return { ...candidate, score, breakdown, rank: 0, candidateId: candidate.id };
   });
   scored.sort((left, right) => right.score - left.score || left.title.localeCompare(right.title));
   return scored.slice(0, topN).map((candidate, index) => ({ ...candidate, rank: index + 1 }));
