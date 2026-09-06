@@ -39,6 +39,7 @@ export interface LifeReviewOsWritebackPreview {
     action: 'append_to_existing_empty_column' | 'insert_columns';
   };
   items: Array<{ text: string; targetRowLabel: string; isMit: boolean }>;
+  review?: { text: string; retroHeader: string };
 }
 
 export interface LifeReviewOsWritebackResult {
@@ -115,7 +116,22 @@ export async function prepareLifeReviewOsWriteback(input: {
       targetRowLabel: stringValue(item.target_row_label),
       isMit: Boolean(item.is_mit),
     })),
+    // Surfaced so it can be read before being confirmed, rather than written
+    // as an invisible side effect of confirming the priorities.
+    review: reviewPreview(writeback),
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function reviewPreview(writeback: LifeReviewOsWriteback): { text: string; retroHeader: string } | undefined {
+  const review = (writeback as Record<string, unknown>).review;
+  if (!isRecord(review)) return undefined;
+  const text = stringValue(review.text).trim();
+  if (!text) return undefined;
+  return { text, retroHeader: stringValue(review.source_task_header) || stringValue(review.target_retro_header) || 'retro' };
 }
 
 export async function executeLifeReviewOsWriteback(config: AppConfig, skillId: string, runId: string): Promise<LifeReviewOsWritebackResult> {
@@ -127,8 +143,19 @@ export async function executeLifeReviewOsWriteback(config: AppConfig, skillId: s
     skippedCount: numberValue(parsed.skipped_count),
     insertedColumns: Boolean(parsed.inserted_columns),
     alreadyWritten: Boolean(parsed.already_written),
-    review: await writeLifeReviewOsRetroReview(entry, runId),
   };
+}
+
+/**
+ * The retro review is confirmed on its own.
+ *
+ * It rode along on the priorities write-back when the wiring first landed,
+ * which meant one confirmation covered two writes into two different cells —
+ * and the review was never shown before it happened. They are separate
+ * decisions, so they are separate calls.
+ */
+export async function executeLifeReviewOsRetroReview(config: AppConfig, skillId: string, runId: string): Promise<LifeReviewOsReviewResult> {
+  return writeLifeReviewOsRetroReview(skillEntry(config, skillId), runId);
 }
 
 /**

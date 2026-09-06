@@ -19,7 +19,7 @@ import { formatRecentWorkflowRuns, listRecentWorkflowRuns } from '../workflows/r
 import { markWorkflowRunFailed, markWorkflowRunSucceeded } from '../workflows/run-ledger.js';
 import { formatSkillList, readLatestSkillRun, runConfiguredSkill } from '../skills/runner.js';
 import type { SkillRunResult } from '../skills/runner.js';
-import { executeLifeReviewOsWriteback, formatRetroReviewOutcome, prepareLifeReviewOsWriteback } from '../skills/life-review-os.js';
+import { executeLifeReviewOsRetroReview, executeLifeReviewOsWriteback, formatRetroReviewOutcome, prepareLifeReviewOsWriteback } from '../skills/life-review-os.js';
 import { buildOkrWritebackPreview, executeConfirmedOkrWriteback } from './okr-writeback-card.js';
 import { formatWorkflowRevisionMemoryNote } from './workflow-revision.js';
 import { handleTodoInboxCommand, parseTodoInboxCommand, type TodoInboxCommand } from '../todo/inbox.js';
@@ -44,6 +44,7 @@ export type ParsedDailyOsCommand =
   | { type: 'skill_list' }
   | { type: 'skill_run'; skillId: string; mode?: string; text?: string }
   | { type: 'writeback'; target: 'feishu' | 'okr'; confirm: boolean }
+  | { type: 'write_review'; confirm: boolean }
   | { type: 'calendar_draft'; period: CalendarDraftPeriod }
   | { type: 'calendar_undo'; batchId?: string }
   | { type: 'calendar_adjust'; period: CalendarDraftPeriod; text: string }
@@ -125,6 +126,8 @@ export function parseDailyOsCommand(text: string, prefix: string): ParsedDailyOs
   if (chatCommand) {
     return chatCommand;
   }
+  const reviewCommand = parseReviewCommand(normalized);
+  if (reviewCommand) return reviewCommand;
   const writebackCommand = parseWritebackCommand(normalized);
   if (writebackCommand) return writebackCommand;
   const skillCommand = parseSkillCommand(normalized);
@@ -267,6 +270,10 @@ export async function runParsedDailyOsCommand(context: DailyOsCommandContext, co
     }
     case 'writeback': {
       await runWritebackCommand(context, command);
+      return;
+    }
+    case 'write_review': {
+      await runWriteReviewCommand(context, command);
       return;
     }
     case 'calendar_draft': {
@@ -575,11 +582,52 @@ async function runWritebackCommand(
       `- 任务区：${result.taskHeader}`,
       `- 写入 ${result.itemCount} 条${result.skippedCount ? `，跳过 ${result.skippedCount} 条` : ''}`,
       result.insertedColumns ? '- 已插入新列' : '',
-      formatRetroReviewOutcome(result.review) ? `- ${formatRetroReviewOutcome(result.review)}` : '',
+      '',
+      'retro review 是单独一次确认：核对无误后发送 `确认写入 review`。',
     ]
       .filter(Boolean)
       .join('\n'),
   );
+}
+
+/**
+ * Web chat has no cards — the two buttons on the Feishu preview are these two
+ * commands here, so both channels offer the same split decision.
+ */
+function parseReviewCommand(text: string): ParsedDailyOsCommand | null {
+  const compact = text.replace(/\s+/g, '').toLowerCase();
+  if (!/review/.test(compact)) return null;
+  // 写入/写回 is required: bare `review` is already the daily-review workflow
+  // keyword, and matching it here would have hijacked that command.
+  if (!/^(确认)?(写入|写回)review$/.test(compact) && !/^(confirm)?writereview$/.test(compact)) return null;
+  return { type: 'write_review', confirm: /(confirm|确认)/.test(compact) };
+}
+
+async function runWriteReviewCommand(context: DailyOsCommandContext, command: { confirm: boolean }): Promise<void> {
+  const latest = readLatestSkillRun(context.config, WRITEBACK_SKILL_ID, 'biweekly') || readLatestSkillRun(context.config, WRITEBACK_SKILL_ID, 'weekly');
+  if (!latest?.runId) {
+    await context.reply('没有可用的 weekly-review 草稿，先跑一次 biweekly。');
+    return;
+  }
+  if (!command.confirm) {
+    const plan = await prepareLifeReviewOsWriteback({ config: context.config, skillId: WRITEBACK_SKILL_ID, runId: latest.runId });
+    if (!plan.review) {
+      await context.reply('这次草稿没有 retro review 正文，无法写入。');
+      return;
+    }
+    await context.reply(
+      [
+        `将写入 retro review（${plan.review.retroHeader} 相邻 retro，${plan.review.text.length} 字）：`,
+        '',
+        plan.review.text,
+        '',
+        '确认无误后发送 `确认写入 review`。要务是另一条独立指令 `确认写回`。',
+      ].join('\n'),
+    );
+    return;
+  }
+  const review = await executeLifeReviewOsRetroReview(context.config, WRITEBACK_SKILL_ID, latest.runId);
+  await context.reply(formatRetroReviewOutcome(review) || 'retro review 未写入');
 }
 
 function parseWritebackCommand(text: string): ParsedDailyOsCommand | null {
@@ -695,6 +743,8 @@ function commandEffect(command: ParsedDailyOsCommand): FeishuControlEffect {
       return 'memory_write';
     // Preview is read-only; confirming actually writes a doc / the OKR files.
     case 'writeback':
+      return command.confirm ? 'memory_write' : 'read';
+    case 'write_review':
       return command.confirm ? 'memory_write' : 'read';
     case 'todo_inbox':
       return 'memory_write';

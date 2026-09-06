@@ -36,6 +36,8 @@ export interface FeishuSkillWritebackPreviewCardOptions {
   taskHeader: string;
   action: 'append_to_existing_empty_column' | 'insert_columns';
   items: Array<{ text: string; targetRowLabel: string; isMit: boolean }>;
+  /** Retro review destined for the reviewed cycle's retro cell — confirmed separately. */
+  review?: { text: string; retroHeader: string };
 }
 
 export interface FeishuCalendarDraftCardOptions {
@@ -328,19 +330,33 @@ export function renderFeishuSkillWritebackPreviewCard(options: FeishuSkillWriteb
           '',
           '**将写入这些要务**',
           itemLines || '（没有可写入要务）',
+          // The review used to ride along on the same confirmation without ever
+          // being shown — it was signed blind. It is a separate write into a
+          // different cell, so it gets its own preview and its own button.
+          ...(options.review
+            ? ['', `**将写入 retro review**（${options.review.retroHeader}，${options.review.text.length} 字）`, `> ${options.review.text.replace(/\n+/g, '\n> ')}`]
+            : []),
         ].join('\n'),
       },
       { tag: 'hr' },
       {
         tag: 'action',
         actions: [
-          cardButton('确认写回', { daily_os_skill_action: 'execute_writeback', skill_id: options.skillId, mode: options.mode, token: options.token }, 'primary'),
+          cardButton('写入要务', { daily_os_skill_action: 'execute_writeback', skill_id: options.skillId, mode: options.mode, token: options.token }, 'primary'),
+          ...(options.review
+            ? [cardButton('写入 review', { daily_os_skill_action: 'execute_review', skill_id: options.skillId, mode: options.mode, token: options.token }, 'primary')]
+            : []),
           cardButton('取消', { daily_os_skill_action: 'dismiss', skill_id: options.skillId, mode: options.mode }, 'default'),
         ],
       },
       {
         tag: 'note',
-        elements: [{ tag: 'plain_text', content: '如果目标列已有内容，执行会自动停止，不会覆盖。确认 token 30 分钟内有效。' }],
+        elements: [
+          {
+            tag: 'plain_text',
+            content: '两个按钮各写各的，互不影响，可以只点一个或分两次点；重复点会跳过已写入的内容。确认 token 30 分钟内有效。',
+          },
+        ],
       },
     ],
   };

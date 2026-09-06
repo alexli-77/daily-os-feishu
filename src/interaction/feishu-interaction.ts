@@ -48,7 +48,7 @@ import { renderFeishuCalendarDraftCard, renderFeishuSkillCard, renderFeishuSkill
 import { sendFeishuCard } from '../connectors/lark-cli.js';
 import type { SkillRunResult } from '../skills/runner.js';
 import { readLatestSkillRun } from '../skills/runner.js';
-import { executeLifeReviewOsWriteback, formatRetroReviewOutcome, prepareLifeReviewOsWriteback } from '../skills/life-review-os.js';
+import { executeLifeReviewOsRetroReview, executeLifeReviewOsWriteback, formatRetroReviewOutcome, prepareLifeReviewOsWriteback } from '../skills/life-review-os.js';
 import { buildOkrWritebackPreview, executeConfirmedOkrWriteback, renderOkrWritebackCard } from './okr-writeback-card.js';
 import { formatWorkflowRevisionMemoryNote } from './workflow-revision.js';
 import { handleTodoInboxCommand, parseTodoInboxCommand } from '../todo/inbox.js';
@@ -94,7 +94,7 @@ type WorkflowCardCommand = {
 };
 
 type SkillCardAction = {
-  action: 'confirm_writeback' | 'writeback_info' | 'prepare_writeback' | 'execute_writeback' | 'confirm_okr_writeback' | 'rerun' | 'dismiss';
+  action: 'confirm_writeback' | 'writeback_info' | 'prepare_writeback' | 'execute_writeback' | 'execute_review' | 'confirm_okr_writeback' | 'rerun' | 'dismiss';
   skillId: string;
   mode?: string;
   runId?: string;
@@ -1224,6 +1224,7 @@ async function handleSkillCardAction(input: {
             taskHeader: plan.target.taskHeader,
             action: plan.target.action,
             items: plan.items,
+            ...(plan.review ? { review: plan.review } : {}),
           }),
         },
         { replyTo: input.event.messageId },
@@ -1231,6 +1232,20 @@ async function handleSkillCardAction(input: {
     } catch (error) {
       await input.channel.send(input.event.chatId, { text: `写回预检失败：${error instanceof Error ? error.message : String(error)}` }, { replyTo: input.event.messageId });
     }
+    return;
+  }
+  if (input.action.action === 'execute_review') {
+    const control = decideFeishuControl(input.config, access, { effect: 'memory_write' });
+    if (!control.ok) {
+      await input.channel.send(input.event.chatId, { text: `权限不足：${control.reason}` }, { replyTo: input.event.messageId });
+      return;
+    }
+    if (!input.action.token) {
+      await input.channel.send(input.event.chatId, { text: '缺少确认 token，请重新点「准备写回」。' }, { replyTo: input.event.messageId });
+      return;
+    }
+    const review = await executeLifeReviewOsRetroReview(input.config, input.action.skillId, input.action.token);
+    await input.channel.send(input.event.chatId, { text: formatRetroReviewOutcome(review) || 'retro review 未写入' }, { replyTo: input.event.messageId });
     return;
   }
   if (input.action.action === 'execute_writeback') {
@@ -1256,7 +1271,8 @@ async function handleSkillCardAction(input: {
             `本次新写入：${result.itemCount} 条要务`,
             result.skippedCount ? `已存在并跳过：${result.skippedCount} 条要务` : '',
             result.insertedColumns ? '操作：已插入新周列' : '操作：写入已有空周列',
-            formatRetroReviewOutcome(result.review),
+            '',
+            'retro review 未写入——它是单独一次确认，点卡片上的「写入 review」。',
           ]
             .filter(Boolean)
             .join('\n'),
@@ -1536,6 +1552,7 @@ function parseSkillCardAction(value: unknown): SkillCardAction | null {
       action !== 'writeback_info' &&
       action !== 'prepare_writeback' &&
       action !== 'execute_writeback' &&
+      action !== 'execute_review' &&
       action !== 'confirm_okr_writeback' &&
       action !== 'rerun' &&
       action !== 'dismiss') ||

@@ -516,7 +516,21 @@ const CHAT_JS = String.raw`
       .then(function(){setSending(false);controller=null;loadSessions();});
   }
   form.addEventListener('submit',function(ev){ev.preventDefault();if(sending)return;var t=input.value.trim();if(!t)return;input.value='';send(t);});
-  input.addEventListener('keydown',function(ev){if(ev.key==='Enter'&&!ev.shiftKey){ev.preventDefault();form.dispatchEvent(new Event('submit',{cancelable:true}));}});
+  // An IME sends Enter to accept the highlighted candidate. Without the
+  // composing guard that keypress submitted a half-typed message — hitting
+  // anyone typing Chinese, every time they picked a candidate. isComposing is
+  // the standard signal; keyCode 229 is the older browsers equivalent, and the
+  // composing flag covers the gap between compositionstart and the first keydown.
+  // (No backticks in here: this block lives inside a JS template literal.)
+  var composing=false;
+  input.addEventListener('compositionstart',function(){composing=true;});
+  input.addEventListener('compositionend',function(){composing=false;});
+  input.addEventListener('keydown',function(ev){
+    if(ev.key!=='Enter'||ev.shiftKey)return;
+    if(composing||ev.isComposing||ev.keyCode===229)return;
+    ev.preventDefault();
+    form.dispatchEvent(new Event('submit',{cancelable:true}));
+  });
   stopBtn.addEventListener('click',function(){
     if(controller)controller.abort();
     if(sessionId)api('/api/chat/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session:sessionId})});
