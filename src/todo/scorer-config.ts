@@ -53,6 +53,16 @@ export interface ScorerWeights {
   okrWeeklyHit: number;
   /** Item carries a customer / delivery facing signal. */
   customerFacing: number;
+  /**
+   * Item the user captured by hand (My todos / Feishu capture).
+   *
+   * Every other source arrives with structural signal — a Linear priority, an
+   * OKR link, a parseable due date — so a hand-typed line scored zero and lost
+   * to everything, however deliberately it was written down. Deliberately below
+   * `overdue` (35): something jotted this morning should reach the shortlist,
+   * not outrank a delivery that is already late.
+   */
+  manualCapture: number;
 }
 
 export const DEFAULT_SCORER_WEIGHTS: ScorerWeights = {
@@ -69,6 +79,7 @@ export const DEFAULT_SCORER_WEIGHTS: ScorerWeights = {
   okrLinked: 12,
   okrWeeklyHit: 6,
   customerFacing: 10,
+  manualCapture: 20,
 };
 
 export const DEFAULT_TOP_N = 10;
