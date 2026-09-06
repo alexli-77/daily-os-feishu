@@ -96,6 +96,10 @@ try {
     'scripts/tests/okr.test.ts',
     'scripts/tests/todo-scorer.test.ts',
     'scripts/tests/todo-inbox-history.test.ts',
+    // Console model picker, driven against a DOM stub. A datalist-backed
+    // version type-checked, rendered and parsed cleanly, yet never opened a
+    // menu — only exercising the shipped script catches that class of defect.
+    'scripts/tests/console-model-picker.test.ts',
     'scripts/tests/daily-review-reconcile.test.ts',
     'scripts/tests/platform-ui.test.ts',
     'scripts/tests/adversarial.test.ts',

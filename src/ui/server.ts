@@ -2088,7 +2088,7 @@ npm run service:install</code></pre>
               <label>Timezone<input id="user-timezone" /></label>
               <label>Language<input id="assistant-language" /></label>
               <label>LLM provider<select id="llm-provider"><option>codex</option><option>openai</option><option>claude</option></select></label>
-              <label>Model<input id="llm-model" /></label>
+              <label>Model<select id="llm-model-select"></select><input id="llm-model" autocomplete="off" placeholder="model id" hidden /><span class="hint">Options follow the selected provider. Choose <code>Custom…</code> to type any id the provider accepts; <code>default</code> follows the provider's own default.</span></label>
               <div class="form-field">
                 <label for="secret-OPENAI_API_KEY">OpenAI API key</label>
                 <div class="secret-control"><input id="secret-OPENAI_API_KEY" type="password" autocomplete="new-password" /><button type="button" class="icon-button" data-toggle-secret="OPENAI_API_KEY" aria-label="Show OpenAI API key">&#128065;</button></div>
@@ -3034,7 +3034,14 @@ pre {
   .log-entry { grid-template-columns: 1fr; gap: .35rem; }
 }`;
 
-const JS = String.raw`let state;
+/**
+ * Exported so tests can evaluate the shipped console script against a DOM stub.
+ * A syntax check is not enough on its own: the model picker regressed while
+ * parsing perfectly, because the defect was behavioural — a datalist filters
+ * its suggestions against the input's current value, so a field that always
+ * holds a value never showed a menu.
+ */
+export const JS = String.raw`let state;
 
 const UI_TOKEN = (function () {
   // Priority: ?token=... (first open) -> sessionStorage -> token injected into the page HTML.
@@ -3093,6 +3100,7 @@ document.querySelectorAll('[data-action]').forEach((button) => {
 });
 
 $('llm-provider')?.addEventListener('change', updateProviderSections);
+$('llm-model-select')?.addEventListener('change', onModelSelectChange);
 
 $('strategy-file')?.addEventListener('change', () => {
   const status = $('strategy-status');
@@ -3151,12 +3159,83 @@ async function loadState() {
   render();
 }
 
+// Suggestions only, never the allowed set. Model ids move faster than this file
+// does — 'gpt-6-astra' started rolling out mid-2026 and was in no list shipped
+// before it — so anything configured that is missing here is preserved as a
+// selectable option rather than replaced, and "Custom…" always allows an id we
+// have never heard of. See updateModelSuggestions().
+const MODEL_SUGGESTIONS = {
+  codex: [
+    ['default', "follow the Codex CLI's own default"],
+    ['gpt-6-astra', 'most capable, for complex work'],
+    ['gpt-5.6-terra', 'balanced, everyday work'],
+    ['gpt-5.6-sol', 'reliable everyday workhorse'],
+    ['gpt-5.6-luna', 'fast and affordable'],
+    ['gpt-5.5', 'proven previous generation'],
+    ['gpt-5.4-mini', 'small, fast, cost-efficient'],
+  ],
+  openai: [
+    ['default', 'gpt-4o-mini'],
+    ['gpt-4.1-mini', ''], ['gpt-4.1', ''], ['gpt-4o-mini', ''], ['gpt-4o', ''], ['o3-mini', ''], ['o3', ''],
+  ],
+  claude: [
+    ['default', 'claude-sonnet-5'],
+    ['claude-haiku-4', 'fastest, cheapest'], ['claude-sonnet-5', 'balanced'], ['claude-opus-4', 'most capable'],
+  ],
+  anthropic: [
+    ['default', 'claude-sonnet-5'],
+    ['claude-haiku-4', 'fastest, cheapest'], ['claude-sonnet-5', 'balanced'], ['claude-opus-4', 'most capable'],
+  ],
+};
+
+const MODEL_CUSTOM = '__custom__';
+
+// #llm-model stays the single source of truth that collect() reads. The select
+// mirrors into it, and is the only visible control unless "Custom…" is picked.
+function updateModelSuggestions() {
+  const select = $('llm-model-select');
+  const custom = $('llm-model');
+  if (!select || !custom) return;
+  const current = custom.value;
+  const options = (MODEL_SUGGESTIONS[value('llm-provider')] || [['default', '']]).slice();
+  // An id we do not ship (a model newer than this build, or one from another
+  // deployment) must stay selectable, or opening this page would silently
+  // rewrite it on the next save.
+  if (current && !options.some((entry) => entry[0] === current)) {
+    options.unshift([current, 'current setting']);
+  }
+  options.push([MODEL_CUSTOM, 'enter a model id manually']);
+  select.innerHTML = options
+    .map((entry) => {
+      const label = entry[1] ? entry[0] + ' — ' + entry[1] : entry[0];
+      return '<option value="' + escapeAttr(entry[0]) + '">' + escapeHtml(entry[0] === MODEL_CUSTOM ? 'Custom…' : label) + '</option>';
+    })
+    .join('');
+  const isCustom = !options.some((entry) => entry[0] === current && entry[0] !== MODEL_CUSTOM);
+  select.value = isCustom ? MODEL_CUSTOM : current;
+  custom.hidden = !isCustom;
+}
+
+function onModelSelectChange() {
+  const select = $('llm-model-select');
+  const custom = $('llm-model');
+  if (!select || !custom) return;
+  if (select.value === MODEL_CUSTOM) {
+    custom.hidden = false;
+    custom.focus();
+    return;
+  }
+  custom.hidden = true;
+  custom.value = select.value;
+}
+
 function updateProviderSections() {
   const provider = value('llm-provider');
   const codex = $('codex-fieldset');
   const claude = $('claude-fieldset');
   if (codex) codex.hidden = provider !== 'codex';
   if (claude) claude.hidden = provider !== 'claude';
+  updateModelSuggestions();
 }
 
 function render() {
