@@ -151,6 +151,21 @@ test('the CUTTO-942 case: an In Progress Medium due in 2 days beats an In Review
   assert.equal(ranked[1].score, 20);
 });
 
+test('every scored candidate carries candidateId, matching what the prompt tells the model to echo back', () => {
+  // Regression: the payload only carried `id` while prompts/daily_plan.md
+  // documented `top[].candidateId` and required returning it verbatim. A strict
+  // model refused to invent the absent field and returned {"todos": []}, so the
+  // card degraded to the "output was truncated" fallback.
+  const result = buildScoredTodos(config, makeEvidence(), DATE, { now: NOW });
+  assert.ok(result.top.length > 0);
+  for (const item of result.top) {
+    assert.equal(item.candidateId, item.id, 'candidateId mirrors id exactly');
+    assert.ok(item.candidateId, 'candidateId is never empty');
+  }
+  // `id` must survive: dedupe, the completion ledger and carry-over all key on it.
+  assert.ok(result.top.every((item) => typeof item.id === 'string' && item.id.length > 0));
+});
+
 test('scoreAndRank orders by score and returns top-N with sequential ranks', () => {
   const candidates: TodoCandidate[] = [
     { id: 'low', title: 'low', source: 'vault' },
