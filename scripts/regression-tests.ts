@@ -132,6 +132,8 @@ try {
     'scripts/tests/retro-review-writeback.test.ts',
     // Priorities and retro review are confirmed separately, on both channels.
     'scripts/tests/split-confirm.test.ts',
+    // LEO-276 cycle files: round-trip fidelity, per-section ownership, atomicity.
+    'scripts/tests/cycle-file.test.ts',
   ]);
   console.log('Regression tests passed.');
 } finally {
