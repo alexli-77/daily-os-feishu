@@ -3293,10 +3293,12 @@ $('strategy-file')?.addEventListener('change', () => {
 // '要务' is a poor element id, so the page keys everything by slug and maps
 // back at the API boundary.
 const CYCLE_SECTION_KEYS = [['priorities', '要务'], ['retro', 'retro'], ['review', 'review']];
-// Slugs whose textarea holds unsaved typing. A save or a refresh re-renders all
-// three editors, and refilling a section someone is halfway through writing
-// would eat a hand-written retro — the one thing this page must never do.
-const cycleDrafts = new Set();
+// Unsaved typing, keyed by cycle id + section slug. A save or a re-render
+// refilling a section someone is halfway through writing would eat a
+// hand-written retro — the one thing this page must never do. Keying by cycle
+// rather than by section alone extends that to switching cycles: click another
+// one and come back, and your draft is still there. Only Refresh discards.
+const cycleDrafts = new Map();
 let selectedCycleId = '';
 
 $('cycle-list')?.addEventListener('click', (event) => {
@@ -3306,7 +3308,9 @@ $('cycle-list')?.addEventListener('click', (event) => {
 });
 
 CYCLE_SECTION_KEYS.forEach((pair) => {
-  $('cycle-md-' + pair[0])?.addEventListener('input', () => cycleDrafts.add(pair[0]));
+  $('cycle-md-' + pair[0])?.addEventListener('input', () => {
+    if (selectedCycleId) cycleDrafts.set(selectedCycleId + '::' + pair[0], value('cycle-md-' + pair[0]));
+  });
 });
 
 $('todo-list')?.addEventListener('click', (event) => {
@@ -3776,7 +3780,9 @@ function renderCycleDetail(item) {
   CYCLE_SECTION_KEYS.forEach((pair) => {
     const key = pair[0];
     const stored = item.sections ? item.sections[pair[1]] : null;
-    if (!cycleDrafts.has(key)) set('cycle-md-' + key, stored ? stored.content || '' : '');
+    const draftKey = item.id + '::' + key;
+    if (cycleDrafts.has(draftKey)) set('cycle-md-' + key, cycleDrafts.get(draftKey));
+    else set('cycle-md-' + key, stored ? stored.content || '' : '');
     const meta = $('cycle-meta-' + key);
     if (meta) {
       // A missing key and an empty string mean different things: never written
@@ -3795,12 +3801,13 @@ function renderCycleDetail(item) {
 function selectCycle(id) {
   if (!id || id === selectedCycleId) return;
   selectedCycleId = id;
-  clearCycleDrafts();
+  // Drafts survive the switch: they are keyed by cycle, and renderCycleDetail
+  // restores this cycle's own. Only Refresh and a successful save clear them.
+  clearCycleStatuses();
   renderCycles(state && state.cycles);
 }
 
-function clearCycleDrafts() {
-  cycleDrafts.clear();
+function clearCycleStatuses() {
   CYCLE_SECTION_KEYS.forEach((pair) => {
     const status = $('cycle-status-' + pair[0]);
     if (status) status.textContent = '';
@@ -3816,7 +3823,7 @@ async function saveCycleSectionFromPage(key) {
   }
   if (status) status.textContent = 'Saving...';
   const result = await post('/api/cycles/section', { id: selectedCycleId, section: section, content: value('cycle-md-' + key) });
-  cycleDrafts.delete(key);
+  cycleDrafts.delete(selectedCycleId + '::' + key);
   if (result.state) state = result.state;
   render();
   if (status) status.textContent = (result.savedAt ? formatClientTime(result.savedAt) + ' · ' : '') + (result.text || 'Saved.');
@@ -4107,7 +4114,9 @@ async function runAction(action) {
     return;
   }
   if (action === 'cycles_reload') {
-    clearCycleDrafts();
+    // Refresh is the explicit discard: drafts survive everything else.
+    cycleDrafts.clear();
+    clearCycleStatuses();
     await loadState();
     showToast('Cycles reloaded', 'success');
     return;
