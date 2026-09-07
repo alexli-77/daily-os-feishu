@@ -25,6 +25,8 @@ import { BIWEEKLY_STRATEGY_FILE, defaultBiweeklyStrategy, expandPath } from '../
 import { readOkrEditorState, writeOkrFile } from '../okr/editor.js';
 import { normalizeOkrMarkdown } from '../okr/normalize.js';
 import type { OkrLevel } from '../okr/editor.js';
+import { CYCLE_SECTIONS, cycleFilePath, cyclesDir, listCycles, parseCycleId, readCycle, writeSection } from '../cycles/file.js';
+import type { CycleSection } from '../cycles/file.js';
 import { collectProgressCandidates, formatProgressCandidates } from '../progress/capture.js';
 import { analyzeChatContext, formatChatContextAnalysis } from '../chat/context-analysis.js';
 import { readBackgroundSuggestionsState } from '../service/background-suggestions.js';
@@ -376,6 +378,7 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
     if (request.method === 'POST' && url.pathname === '/api/strategy') return sendJson(response, await saveStrategy(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/okr') return sendJson(response, await saveOkr(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/okr/format') return sendJson(response, formatOkr(await readJson(request)));
+    if (request.method === 'POST' && url.pathname === '/api/cycles/section') return sendJson(response, await saveCycleSection(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/config') return sendJson(response, await saveConfig(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/env') return sendJson(response, await saveEnv(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/action') return sendJson(response, await runAction(options, await readJson(request)));
@@ -843,6 +846,7 @@ async function buildState(options: UiServerOptions): Promise<Record<string, unkn
     decisionPolicy: readDecisionPolicyState(config),
     strategy: readStrategyState(config),
     okr: readOkrEditorState(config),
+    cycles: readCyclesState(config),
     todoInbox: {
       enabled: config.todo_inbox.enabled,
       open: openTodoInboxItems(config),
@@ -1010,6 +1014,68 @@ function formatOkr(body: unknown): Record<string, unknown> {
   const level = String(request.level ?? '') as OkrLevel;
   const markdown = String(request.markdown ?? '');
   return { ok: true, formatted: normalizeOkrMarkdown(markdown, level) };
+}
+
+/**
+ * Cycle documents for the console (LEO-277).
+ *
+ * `sections` is passed through as the file layer reports it: a section that was
+ * never written has no key at all, which the page has to show differently from
+ * one someone deliberately emptied. `frontmatterError` travels with the cycle
+ * because the write path refuses those files — the page disables saving rather
+ * than letting the user type a retro that will bounce.
+ */
+function readCyclesState(config: AppConfig): Record<string, unknown> {
+  const items = listCycles(config).map((doc) => ({
+    id: doc.id,
+    startDate: doc.startDate,
+    cycle: doc.cycle,
+    mode: doc.mode,
+    updatedAt: doc.updatedAt,
+    path: cycleFilePath(config, doc.id),
+    frontmatterError: doc.frontmatterError || '',
+    sections: doc.sections,
+  }));
+  return { dir: cyclesDir(config), items };
+}
+
+/**
+ * Save one section of one cycle. The other two sections are left byte-identical
+ * by `writeSection`, so editing the retro mid-cycle cannot restamp the
+ * planner-written priorities.
+ *
+ * The user is always the author here: whatever they type is `source: 'user'`,
+ * which is what stops a later planner run from overwriting it.
+ */
+async function saveCycleSection(options: UiServerOptions, body: unknown): Promise<Record<string, unknown>> {
+  const request = readRecord(body);
+  const env = readEnvFile(options.envPath);
+  applyEnv(env);
+  const config = loadConfig(options.configPath);
+
+  const id = String(request.id || '').trim();
+  if (!parseCycleId(id)) throw new Error(`Invalid cycle id: ${id || '(empty)'}`);
+  const section = String(request.section || '') as CycleSection;
+  if (!CYCLE_SECTIONS.includes(section)) throw new Error(`Unknown cycle section: ${String(request.section || '(empty)')}`);
+
+  // Only cycles that already exist are editable. The console offers the list it
+  // read from disk, so an id that is not there is a stale page or a typo, and
+  // honouring it would create an empty cycle file nobody asked for.
+  const current = readCycle(config, id);
+  if (!current) throw new Error(`Cycle not found: ${id}`);
+  if (current.frontmatterError) {
+    throw new Error(
+      `周期 ${id} 的 frontmatter 无法解析（${current.frontmatterError}），已拒绝保存。请先在文件里修好 YAML 再回来。`,
+    );
+  }
+
+  const doc = writeSection(config, id, section, String(request.content ?? ''), 'user');
+  return {
+    ok: true,
+    text: `已保存 ${section} → ${cycleFilePath(config, id)}`,
+    savedAt: doc.sections[section]?.updatedAt || '',
+    state: await buildState(options),
+  };
 }
 
 function isTodoInboxType(value: string): value is 'todo' | 'reminder' | 'time_boundary' | 'note' {
@@ -1789,6 +1855,7 @@ const HTML = String.raw`<!doctype html>
         <button class="nav-button" data-section="guide">Guide</button>
         <button class="nav-button" data-section="decision">Decision Policy</button>
         <button class="nav-button" data-section="strategy">Review Strategy</button>
+        <button class="nav-button" data-section="cycles">Cycles</button>
         <button class="nav-button" data-section="okr">OKR</button>
         <button class="nav-button" data-section="setup">Setup</button>
         <button class="nav-button" data-section="sources">Sources</button>
@@ -2009,6 +2076,58 @@ npm run service:install</code></pre>
                 </div>
                 <pre class="decision-example"><code id="strategy-default"></code></pre>
               </section>
+            </div>
+          </section>
+
+          <section class="panel" id="section-cycles">
+            <div class="panel-head">
+              <div>
+                <h2>Cycles</h2>
+                <p class="hint">每个周期一个本地 markdown 文件，三段内容：要务（planner 生成）、retro（你手写）、review（AI 写）。三段各自保存，改 retro 不会动要务。</p>
+                <p class="hint">双周中途要插紧急事项，就直接改「要务」再保存；保存后这一段的来源会记成 user，下一次 planner 重跑不会悄悄覆盖它。</p>
+                <p class="hint" id="cycles-dir"></p>
+              </div>
+              <div class="panel-actions">
+                <button type="button" class="secondary compact" data-action="cycles_reload">Refresh</button>
+              </div>
+            </div>
+            <div class="cycles-empty" id="cycles-empty" hidden>
+              <h3>还没有任何周期文件</h3>
+              <p class="hint">跑一次双周复盘（<code>npm run weekly</code>）之后，上面这个目录里会出现 <code>&lt;开始日期&gt;_&lt;周期标签&gt;.md</code>，例如 <code>2026-08-24_8.24-9.6.md</code>。也可以先手动建一个同名文件，再回来点 Refresh。</p>
+            </div>
+            <div class="cycles-page" id="cycles-page">
+              <aside class="cycle-list" id="cycle-list" aria-label="周期列表"></aside>
+              <div class="cycle-detail">
+                <p class="hint" id="cycle-file-path"></p>
+                <div class="cycle-warning" id="cycle-frontmatter-error" role="alert" hidden></div>
+                <section class="decision-editor" aria-labelledby="cycle-title-priorities">
+                  <div>
+                    <h3 id="cycle-title-priorities">要务</h3>
+                    <p class="hint" id="cycle-meta-priorities"></p>
+                  </div>
+                  <textarea id="cycle-md-priorities" spellcheck="false" placeholder="- **MIT** 这个周期最重要的一件事"></textarea>
+                  <div class="panel-actions"><button type="button" id="cycle-save-priorities" data-action="cycle_save_priorities">保存要务</button></div>
+                  <p class="hint" id="cycle-status-priorities"></p>
+                </section>
+                <section class="decision-editor" aria-labelledby="cycle-title-retro">
+                  <div>
+                    <h3 id="cycle-title-retro">retro</h3>
+                    <p class="hint" id="cycle-meta-retro"></p>
+                  </div>
+                  <textarea id="cycle-md-retro" spellcheck="false" placeholder="这个周期实际发生了什么、哪里没做到"></textarea>
+                  <div class="panel-actions"><button type="button" id="cycle-save-retro" data-action="cycle_save_retro">保存 retro</button></div>
+                  <p class="hint" id="cycle-status-retro"></p>
+                </section>
+                <section class="decision-editor" aria-labelledby="cycle-title-review">
+                  <div>
+                    <h3 id="cycle-title-review">review</h3>
+                    <p class="hint" id="cycle-meta-review"></p>
+                  </div>
+                  <textarea id="cycle-md-review" spellcheck="false" placeholder="对这个周期的评价与下一步建议"></textarea>
+                  <div class="panel-actions"><button type="button" id="cycle-save-review" data-action="cycle_save_review">保存 review</button></div>
+                  <p class="hint" id="cycle-status-review"></p>
+                </section>
+              </div>
             </div>
           </section>
 
@@ -2963,6 +3082,68 @@ legend {
   }
 }
 
+.cycles-page {
+  display: grid;
+  grid-template-columns: minmax(13rem, .26fr) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+.cycle-list {
+  display: grid;
+  gap: .4rem;
+  align-content: start;
+  max-height: 70vh;
+  overflow: auto;
+}
+.cycle-item {
+  display: grid;
+  gap: .15rem;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: .45rem;
+  background: #fbfcfb;
+  color: var(--text);
+  padding: .5rem .6rem;
+  cursor: pointer;
+}
+.cycle-item.active {
+  border-color: var(--accent);
+  background: var(--surface);
+}
+.cycle-item strong { font-size: .9rem; }
+.cycle-item span { color: var(--muted); font-size: .76rem; }
+.cycle-item .cycle-item-broken { color: var(--danger); }
+.cycle-detail {
+  display: grid;
+  gap: 1rem;
+}
+/* Three editors stacked in one column, so they cannot each be 34rem tall. */
+.cycle-detail .decision-editor textarea { min-height: 12rem; }
+.cycle-warning {
+  border: 1px solid var(--danger);
+  border-radius: .45rem;
+  background: #fff0f0;
+  color: var(--danger);
+  padding: .7rem .85rem;
+  font-size: .85rem;
+}
+.cycles-empty {
+  display: grid;
+  gap: .5rem;
+  border: 1px dashed var(--border);
+  border-radius: .5rem;
+  padding: 1.2rem;
+}
+/* An explicit display value outranks the UA rule for [hidden], and these two
+   panels are toggled against each other. */
+.cycles-page[hidden], .cycles-empty[hidden] { display: none; }
+@media (max-width: 1080px) {
+  .cycles-page {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .log-list {
   display: grid;
   gap: .5rem;
@@ -3106,6 +3287,26 @@ $('strategy-file')?.addEventListener('change', () => {
   const status = $('strategy-status');
   if (status) status.textContent = '';
   renderStrategy(state?.strategy);
+});
+
+// Slug <-> section name. The section names are the markdown headings, and
+// '要务' is a poor element id, so the page keys everything by slug and maps
+// back at the API boundary.
+const CYCLE_SECTION_KEYS = [['priorities', '要务'], ['retro', 'retro'], ['review', 'review']];
+// Slugs whose textarea holds unsaved typing. A save or a refresh re-renders all
+// three editors, and refilling a section someone is halfway through writing
+// would eat a hand-written retro — the one thing this page must never do.
+const cycleDrafts = new Set();
+let selectedCycleId = '';
+
+$('cycle-list')?.addEventListener('click', (event) => {
+  const item = event.target.closest('[data-cycle-id]');
+  if (!item) return;
+  selectCycle(item.dataset.cycleId);
+});
+
+CYCLE_SECTION_KEYS.forEach((pair) => {
+  $('cycle-md-' + pair[0])?.addEventListener('input', () => cycleDrafts.add(pair[0]));
 });
 
 $('todo-list')?.addEventListener('click', (event) => {
@@ -3258,6 +3459,7 @@ function render() {
   renderTodoInbox(openTodos);
   renderDecisionPolicy(state.decisionPolicy);
   renderStrategy(state.strategy);
+  renderCycles(state.cycles);
   renderOkr(state.okr);
   set('env-CODEX_BIN', state.env.CODEX_BIN || 'codex');
   set('env-CODEX_HOME', state.env.CODEX_HOME || '');
@@ -3513,6 +3715,112 @@ async function saveStrategyFromPage() {
   render();
   if (status) status.textContent = result.text || 'Saved.';
   showToast('Review strategy saved', 'success');
+}
+
+function cycleSectionName(key) {
+  for (var i = 0; i < CYCLE_SECTION_KEYS.length; i += 1) if (CYCLE_SECTION_KEYS[i][0] === key) return CYCLE_SECTION_KEYS[i][1];
+  return '';
+}
+
+function renderCycles(cycles) {
+  if (!cycles) return;
+  const items = cycles.items || [];
+  const dir = $('cycles-dir');
+  if (dir) dir.textContent = cycles.dir ? 'Cycles dir: ' + cycles.dir : '';
+  const empty = $('cycles-empty');
+  const page = $('cycles-page');
+  if (empty) empty.hidden = items.length > 0;
+  if (page) page.hidden = items.length === 0;
+  if (items.length === 0) {
+    selectedCycleId = '';
+    return;
+  }
+  // Newest cycle by default, and keep the current pick across re-renders.
+  if (!items.some((item) => item.id === selectedCycleId)) selectedCycleId = items[0].id;
+  renderCycleList(items);
+  renderCycleDetail(items.find((item) => item.id === selectedCycleId));
+}
+
+function renderCycleList(items) {
+  const list = $('cycle-list');
+  if (!list) return;
+  list.innerHTML = items.map((item) => {
+    const mode = item.mode || '';
+    const updated = item.updatedAt ? '更新于 ' + formatClientTime(item.updatedAt) : '未记录更新时间';
+    const broken = item.frontmatterError ? '<span class="cycle-item-broken">frontmatter 解析失败</span>' : '';
+    return '<button type="button" class="cycle-item' + (item.id === selectedCycleId ? ' active' : '') + '"' +
+      ' data-cycle-id="' + escapeAttr(item.id) + '">' +
+      '<strong>' + escapeHtml(item.cycle || item.id) + '</strong>' +
+      '<span>' + escapeHtml(item.startDate + ' · ' + mode) + '</span>' +
+      '<span>' + escapeHtml(updated) + '</span>' + broken +
+      '</button>';
+  }).join('');
+}
+
+function renderCycleDetail(item) {
+  if (!item) return;
+  const pathHint = $('cycle-file-path');
+  if (pathHint) pathHint.textContent = item.path || '';
+
+  // A file whose frontmatter will not parse is read-only here: the write path
+  // refuses it, so letting someone type a full retro first would just lose it.
+  const broken = Boolean(item.frontmatterError);
+  const warning = $('cycle-frontmatter-error');
+  if (warning) {
+    warning.hidden = !broken;
+    warning.textContent = broken
+      ? 'frontmatter 无法解析（' + item.frontmatterError + '）。保存已禁用：写回会丢掉整段 frontmatter。请先用编辑器修好 ' + (item.path || '这个文件') + ' 里的 YAML，再回来点 Refresh。'
+      : '';
+  }
+
+  CYCLE_SECTION_KEYS.forEach((pair) => {
+    const key = pair[0];
+    const stored = item.sections ? item.sections[pair[1]] : null;
+    if (!cycleDrafts.has(key)) set('cycle-md-' + key, stored ? stored.content || '' : '');
+    const meta = $('cycle-meta-' + key);
+    if (meta) {
+      // A missing key and an empty string mean different things: never written
+      // vs. written and then cleared.
+      meta.textContent = stored
+        ? '来源 ' + (stored.source || 'unknown') + ' · ' + (stored.updatedAt ? '更新于 ' + formatClientTime(stored.updatedAt) : '未记录更新时间')
+        : '这一段还没写过（文件里没有这个小节）';
+    }
+    const textarea = $('cycle-md-' + key);
+    if (textarea) textarea.disabled = broken;
+    const button = $('cycle-save-' + key);
+    if (button) button.disabled = broken;
+  });
+}
+
+function selectCycle(id) {
+  if (!id || id === selectedCycleId) return;
+  selectedCycleId = id;
+  clearCycleDrafts();
+  renderCycles(state && state.cycles);
+}
+
+function clearCycleDrafts() {
+  cycleDrafts.clear();
+  CYCLE_SECTION_KEYS.forEach((pair) => {
+    const status = $('cycle-status-' + pair[0]);
+    if (status) status.textContent = '';
+  });
+}
+
+async function saveCycleSectionFromPage(key) {
+  const status = $('cycle-status-' + key);
+  const section = cycleSectionName(key);
+  if (!selectedCycleId) {
+    if (status) status.textContent = '还没有选中任何周期。';
+    return;
+  }
+  if (status) status.textContent = 'Saving...';
+  const result = await post('/api/cycles/section', { id: selectedCycleId, section: section, content: value('cycle-md-' + key) });
+  cycleDrafts.delete(key);
+  if (result.state) state = result.state;
+  render();
+  if (status) status.textContent = (result.savedAt ? formatClientTime(result.savedAt) + ' · ' : '') + (result.text || 'Saved.');
+  showToast('Cycle ' + section + ' saved', 'success');
 }
 
 function renderDecisionPolicy(policy) {
@@ -3795,6 +4103,24 @@ async function runAction(action) {
       const status = $('decision-policy-status');
       if (status) status.textContent = message;
       showToast('Decision policy save failed: ' + message, 'error', false);
+    }
+    return;
+  }
+  if (action === 'cycles_reload') {
+    clearCycleDrafts();
+    await loadState();
+    showToast('Cycles reloaded', 'success');
+    return;
+  }
+  if (action === 'cycle_save_priorities' || action === 'cycle_save_retro' || action === 'cycle_save_review') {
+    const key = action.slice('cycle_save_'.length);
+    try {
+      await saveCycleSectionFromPage(key);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const status = $('cycle-status-' + key);
+      if (status) status.textContent = message;
+      showToast('Cycle save failed: ' + message, 'error', false);
     }
     return;
   }
