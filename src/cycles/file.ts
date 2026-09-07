@@ -78,6 +78,12 @@ export interface CycleDoc {
    * and go through `writeCycle` / `writeSection` to change a document.
    */
   blocks: CycleBlock[];
+  /**
+   * Frontmatter keys this module does not know about, carried through untouched.
+   * Symmetrical with unknown `##` headings: the file is hand-edited, so dropping
+   * keys we did not expect would be silent data loss.
+   */
+  extra?: Record<string, unknown>;
   /** Set when the frontmatter existed but could not be parsed. */
   frontmatterError?: string;
 }
@@ -176,6 +182,18 @@ export function writeCycle(config: AppConfig, id: string, patch: CyclePatch, opt
   const now = options.now || new Date().toISOString();
   const current = readCycle(config, id) || emptyCycleDoc(id);
 
+  // Refuse rather than overwrite what we could not read. Serializing a document
+  // whose frontmatter failed to parse would drop every key it held, and these
+  // files are not recoverable: the vault directory holding them is untracked in
+  // git, so there is no version history to fall back on. The caller is expected
+  // to surface `frontmatterError` and let the user repair the file directly.
+  if (current.frontmatterError) {
+    throw new Error(
+      `Refusing to write ${id}: its frontmatter could not be parsed (${current.frontmatterError}). ` +
+        'Fix the frontmatter in the file first — writing now would discard it.',
+    );
+  }
+
   const next: CycleDoc = {
     ...current,
     cycle: patch.cycle?.trim() || current.cycle,
@@ -184,6 +202,7 @@ export function writeCycle(config: AppConfig, id: string, patch: CyclePatch, opt
     updatedAt: now,
     blocks: current.blocks.map((block) => ({ ...block })),
     sections: { ...current.sections },
+    extra: { ...(current.extra || {}) },
   };
 
   for (const section of CYCLE_SECTIONS) {
@@ -258,6 +277,7 @@ export function parseCycleMarkdown(markdown: string, id: string): CycleDoc {
     updatedAt: asString(meta.updated_at),
     sections,
     blocks,
+    extra: pickExtraFrontmatter(meta),
   };
   if (error) doc.frontmatterError = error;
   return doc;
@@ -282,6 +302,12 @@ export function serializeCycleMarkdown(doc: CycleDoc): string {
   if (doc.runId) meta.run_id = doc.runId;
   if (doc.updatedAt) meta.updated_at = doc.updatedAt;
   meta.sections = sections;
+  // Same reason unknown headings are carried through: the file is meant to be
+  // hand-edited, and a parser that preserves the body while quietly dropping
+  // frontmatter keys is forgiving in one half and destructive in the other.
+  for (const [key, value] of Object.entries(doc.extra || {})) {
+    if (!(key in meta)) meta[key] = value;
+  }
 
   // flowLevel 2 keeps each section's metadata on one line, so a human reading
   // the file sees ownership at a glance instead of a 9-line nested map.
@@ -297,6 +323,17 @@ export function serializeCycleMarkdown(doc: CycleDoc): string {
 
 // --- internals ---------------------------------------------------------------
 
+const KNOWN_FRONTMATTER_KEYS = new Set(['cycle', 'mode', 'run_id', 'updated_at', 'sections']);
+
+/** Everything in the frontmatter that is not one of ours. */
+function pickExtraFrontmatter(meta: Record<string, unknown>): Record<string, unknown> {
+  const extra: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(meta)) {
+    if (!KNOWN_FRONTMATTER_KEYS.has(key)) extra[key] = value;
+  }
+  return extra;
+}
+
 function emptyCycleDoc(id: string): CycleDoc {
   const parsed = parseCycleId(id);
   return {
@@ -308,6 +345,7 @@ function emptyCycleDoc(id: string): CycleDoc {
     updatedAt: '',
     sections: {},
     blocks: [],
+    extra: {},
   };
 }
 

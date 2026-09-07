@@ -353,6 +353,52 @@ test('an empty repository path falls back to the bundled default vault', () => {
   assert.equal(cyclesDir(AppConfigSchema.parse(parsed)), path.resolve('memory-vault', 'default', '20_CYCLES'));
 });
 
+/**
+ * Two follow-up decisions on LEO-276, both about the same principle: a file that
+ * is meant to be hand-edited must never lose what the parser did not understand.
+ * These files live in an *untracked* vault directory — `git status` reports
+ * `?? 10_OKR/` — so there is no version history to recover from.
+ */
+
+test('a write is refused when the frontmatter could not be parsed', () => {
+  const { config, vault } = tempConfig();
+  fs.mkdirSync(path.join(vault, '20_CYCLES'), { recursive: true });
+  const file = path.join(vault, '20_CYCLES', `${ID}.md`);
+  const broken = ['---', 'cycle: 8.24-9.6', 'sections: [unclosed', '---', '', '## retro', '手写内容不能丢'].join('\n');
+  fs.writeFileSync(file, broken);
+
+  assert.throws(
+    () => writeSection(config, ID, 'review', 'AI 写的', 'ai'),
+    /frontmatter could not be parsed/,
+    'writing over unparseable frontmatter would discard every key it held',
+  );
+  assert.equal(fs.readFileSync(file, 'utf8'), broken, 'the file must be byte-identical after a refused write');
+});
+
+test('a readable file still writes normally — the guard is not blanket', () => {
+  const { config } = tempConfig();
+  writeSection(config, ID, 'retro', '状态：还行', 'user');
+  const doc = writeSection(config, ID, 'review', 'AI 写的', 'ai');
+  assert.equal(doc.sections.retro?.content, '状态：还行');
+  assert.equal(doc.sections.review?.source, 'ai');
+});
+
+test('unknown frontmatter keys survive a write, like unknown headings do', () => {
+  const { config, vault } = tempConfig();
+  fs.mkdirSync(path.join(vault, '20_CYCLES'), { recursive: true });
+  const file = path.join(vault, '20_CYCLES', `${ID}.md`);
+  fs.writeFileSync(
+    file,
+    ['---', 'cycle: 8.24-9.6', 'mode: biweekly', 'obsidian_tags: [复盘, 2026Q3]', 'my_own_field: 保留我', '---', '', '## retro', '手写'].join('\n'),
+  );
+
+  writeSection(config, ID, 'review', 'AI 写的', 'ai');
+  const after = yaml.load(fs.readFileSync(file, 'utf8').split('---')[1]) as Record<string, unknown>;
+  assert.deepEqual(after.obsidian_tags, ['复盘', '2026Q3'], 'a key we never defined must not be dropped');
+  assert.equal(after.my_own_field, '保留我');
+  assert.equal(after.cycle, '8.24-9.6', 'and our own keys still work');
+});
+
 async function run(): Promise<void> {
   let passed = 0;
   let failed = 0;
