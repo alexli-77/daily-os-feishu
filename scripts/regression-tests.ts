@@ -138,6 +138,10 @@ try {
     'scripts/tests/cycles-page.test.ts',
     // LEO-280 history migration: run selection, both table layouts, idempotency.
     'scripts/tests/cycle-migration.test.ts',
+    // LEO-284/285 cycle sync + read-only teammate view: degradation when the
+    // remote is unreachable, the cheap poll, cache layout, and the two layers
+    // that keep a teammate's cycle out of the local vault.
+    'scripts/tests/team-sync.test.ts',
   ]);
   console.log('Regression tests passed.');
 } finally {
