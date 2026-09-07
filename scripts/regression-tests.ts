@@ -134,6 +134,8 @@ try {
     'scripts/tests/split-confirm.test.ts',
     // LEO-276 cycle files: round-trip fidelity, per-section ownership, atomicity.
     'scripts/tests/cycle-file.test.ts',
+    // LEO-277 Cycles console page: listing, per-section save, write guardrails.
+    'scripts/tests/cycles-page.test.ts',
     // LEO-280 history migration: run selection, both table layouts, idempotency.
     'scripts/tests/cycle-migration.test.ts',
   ]);
