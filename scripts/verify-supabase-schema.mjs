@@ -18,6 +18,14 @@
  *   SUPABASE_TEST_OTHER_TEAM_ID   uuid of a team A does not belong to. Without
  *                                 it the cross-team read assertion is skipped
  *                                 rather than silently passing.
+ *   SUPABASE_TEST_C_EMAIL         a third account that belongs to NO team, used
+ *   SUPABASE_TEST_C_PASSWORD      to exercise create_team / join_team / leave_team
+ *                                 (LEO-283). Without it those checks are skipped.
+ *   SUPABASE_TEST_ALLOW_TEAM_CREATE=1
+ *                                 also run create_team's success path. Off by
+ *                                 default because `teams` has no delete policy,
+ *                                 so every run would leave an orphan team row
+ *                                 that no client can remove.
  *
  * When the required variables are missing the script exits 0 and prints exactly
  * which ones were absent. It never reports success for checks it did not run.
@@ -94,6 +102,17 @@ async function rest(token, path, init = {}) {
     body = text;
   }
   return { status: res.status, ok: res.ok, body };
+}
+
+/** Call a security definer RPC. Returns the same shape as rest(). */
+async function rpc(token, name, args) {
+  return rest(token, `rpc/${name}`, { method: 'POST', body: JSON.stringify(args) });
+}
+
+/** The message a failed RPC came back with, whatever shape PostgREST used. */
+function rpcMessage(res) {
+  if (res.body && typeof res.body === 'object') return String(res.body.message || res.body.hint || '');
+  return String(res.body || '');
 }
 
 /** A write is "blocked" when RLS rejects it or when it silently matches no row. */
@@ -405,6 +424,172 @@ async function main() {
     );
   }
 
+  // --- LEO-283: the team lifecycle RPCs ------------------------------------
+  //
+  // These are `security definer`, so they run as the function owner and RLS
+  // does not constrain them. Everything that keeps them safe is written inside
+  // the function body, which means the assertions below are the only thing
+  // standing between a change to that body and a cross-team data leak.
+
+  // A is already in a team, so both of these must be refused whatever else is
+  // true. This is the anti-hopping guard: it is what stops a member of team A
+  // who obtains team B's invite code from walking across.
+  const hopAttempt = await rpc(tokenA, 'join_team', { code: `verify-not-a-real-code-${Date.now()}` });
+  check(
+    'join_team refuses a caller who is already in a team',
+    !hopAttempt.ok && /already belongs to a team/i.test(rpcMessage(hopAttempt)),
+    `status ${hopAttempt.status} ${rpcMessage(hopAttempt)}`,
+  );
+  const secondTeam = await rpc(tokenA, 'create_team', { team_name: `verify-should-not-exist-${Date.now()}` });
+  check(
+    'create_team refuses a caller who is already in a team',
+    !secondTeam.ok && /already belongs to a team/i.test(rpcMessage(secondTeam)),
+    `status ${secondTeam.status} ${rpcMessage(secondTeam)}`,
+  );
+  const teamsAfterHop = await rest(tokenA, 'members?select=team_id&user_id=eq.' + uidA);
+  check(
+    'a refused join/create left user A in their original team',
+    Array.isArray(teamsAfterHop.body) && teamsAfterHop.body[0]?.team_id === teamA,
+    `${Array.isArray(teamsAfterHop.body) ? teamsAfterHop.body[0]?.team_id : 'n/a'} vs ${teamA}`,
+  );
+
+  const teamRowA = await rest(tokenA, `teams?select=id,invite_code&id=eq.${teamA}`);
+  const inviteCodeA = Array.isArray(teamRowA.body) ? teamRowA.body[0]?.invite_code : null;
+  check('user A can read their own team invite code', Boolean(inviteCodeA));
+  check(
+    'the invite code is long enough to be unguessable',
+    typeof inviteCodeA === 'string' && inviteCodeA.length >= 24,
+    `length ${typeof inviteCodeA === 'string' ? inviteCodeA.length : 'n/a'}`,
+  );
+
+  const hasC = Boolean(process.env.SUPABASE_TEST_C_EMAIL && process.env.SUPABASE_TEST_C_PASSWORD);
+  if (hasC && inviteCodeA) {
+    const tokenC = await signIn(process.env.SUPABASE_TEST_C_EMAIL, process.env.SUPABASE_TEST_C_PASSWORD);
+    const meC = await rest(tokenC, 'members?select=user_id,team_id,member_id');
+    const c = Array.isArray(meC.body) ? meC.body[0] : null;
+    const uidC = c?.user_id;
+    const memberIdC = c?.member_id;
+
+    if (!uidC || c?.team_id) {
+      skip('join_team lifecycle', 'user C must exist and belong to no team; it currently has team_id set');
+    } else {
+      // Give C a label nobody in A's team is using, so a join can only fail for
+      // the reason under test rather than on unique (team_id, member_id).
+      const labelC = `verify-c-${Date.now().toString(36)}`;
+      await rest(tokenC, `members?user_id=eq.${uidC}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ member_id: labelC }),
+      });
+
+      const badCode = await rpc(tokenC, 'join_team', { code: `definitely-not-a-code-${Date.now()}` });
+      check(
+        'join_team rejects a wrong invite code explicitly',
+        !badCode.ok && /invalid invite code/i.test(rpcMessage(badCode)),
+        `status ${badCode.status} ${rpcMessage(badCode)}`,
+      );
+      const stillNull = await rest(tokenC, `members?select=team_id&user_id=eq.${uidC}`);
+      check(
+        'a rejected join_team is not a silent success',
+        Array.isArray(stillNull.body) && stillNull.body[0]?.team_id === null,
+        `team_id ${Array.isArray(stillNull.body) ? stillNull.body[0]?.team_id : 'n/a'}`,
+      );
+      const emptyCode = await rpc(tokenC, 'join_team', { code: '   ' });
+      check(
+        'join_team rejects an empty invite code',
+        !emptyCode.ok && /invite code is required/i.test(rpcMessage(emptyCode)),
+        `status ${emptyCode.status} ${rpcMessage(emptyCode)}`,
+      );
+      const emptyName = await rpc(tokenC, 'create_team', { team_name: '  ' });
+      check(
+        'create_team rejects an empty team name',
+        !emptyName.ok && /team name is required/i.test(rpcMessage(emptyName)),
+        `status ${emptyName.status} ${rpcMessage(emptyName)}`,
+      );
+
+      const joined = await rpc(tokenC, 'join_team', { code: inviteCodeA });
+      check('join_team accepts the real invite code', joined.ok && joined.body === teamA, `status ${joined.status} ${rpcMessage(joined)}`);
+
+      if (joined.ok) {
+        const cInTeam = await rest(tokenC, `members?select=team_id&user_id=eq.${uidC}`);
+        check(
+          'join_team actually moved the caller into the team',
+          Array.isArray(cInTeam.body) && cInTeam.body[0]?.team_id === teamA,
+        );
+        const cReads = await rest(tokenC, 'members?select=user_id');
+        check(
+          'after joining, C reads the whole team roster',
+          Array.isArray(cReads.body) && cReads.body.some((r) => r.user_id === uidA),
+          `rows ${Array.isArray(cReads.body) ? cReads.body.length : 'n/a'}`,
+        );
+        const joinTwice = await rpc(tokenC, 'join_team', { code: inviteCodeA });
+        check(
+          'join_team refuses a second join even with the same code',
+          !joinTwice.ok && /already belongs to a team/i.test(rpcMessage(joinTwice)),
+          `status ${joinTwice.status} ${rpcMessage(joinTwice)}`,
+        );
+
+        const left = await rpc(tokenC, 'leave_team', {});
+        check('leave_team succeeds', left.ok, `status ${left.status} ${rpcMessage(left)}`);
+        const cAfterLeave = await rest(tokenC, `members?select=team_id&user_id=eq.${uidC}`);
+        check(
+          'after leaving, C has no team',
+          Array.isArray(cAfterLeave.body) && cAfterLeave.body[0]?.team_id === null,
+        );
+        const cReadsNothing = await rest(tokenC, 'cycles?select=cycle_id');
+        check(
+          'after leaving, C reads no cycles at all',
+          Array.isArray(cReadsNothing.body) && cReadsNothing.body.length === 0,
+          `rows ${Array.isArray(cReadsNothing.body) ? cReadsNothing.body.length : 'n/a'}`,
+        );
+        const rotateOutside = await rpc(tokenC, 'rotate_invite_code', {});
+        check(
+          'rotate_invite_code refuses a caller with no team',
+          !rotateOutside.ok && /does not belong to a team/i.test(rpcMessage(rotateOutside)),
+          `status ${rotateOutside.status} ${rpcMessage(rotateOutside)}`,
+        );
+      } else {
+        skip('join_team actually moved the caller into the team', 'the join itself failed');
+        skip('leave_team succeeds', 'the join itself failed');
+      }
+
+      if (process.env.SUPABASE_TEST_ALLOW_TEAM_CREATE === '1') {
+        const createdName = `verify-team-${Date.now().toString(36)}`;
+        const created = await rpc(tokenC, 'create_team', { team_name: createdName });
+        check('create_team returns a team uuid', created.ok && typeof created.body === 'string', `status ${created.status} ${rpcMessage(created)}`);
+        if (created.ok) {
+          // The property that no combination of policies could give us: the
+          // creator is inside the team, in the same transaction as the insert.
+          const cAfterCreate = await rest(tokenC, `members?select=team_id&user_id=eq.${uidC}`);
+          check(
+            'create_team puts the creator inside the new team',
+            Array.isArray(cAfterCreate.body) && cAfterCreate.body[0]?.team_id === created.body,
+          );
+          const ownTeam = await rest(tokenC, 'teams?select=id,invite_code');
+          const firstCode = Array.isArray(ownTeam.body) ? ownTeam.body[0]?.invite_code : null;
+          check('the new team has an invite code', typeof firstCode === 'string' && firstCode.length >= 24);
+          const rotated = await rpc(tokenC, 'rotate_invite_code', {});
+          check('rotate_invite_code returns a different code', rotated.ok && rotated.body !== firstCode, `status ${rotated.status}`);
+          await rpc(tokenC, 'leave_team', {});
+          console.log(`NOTE: left behind team "${createdName}" — teams has no delete policy, remove it in the dashboard.`);
+        }
+      } else {
+        skip('create_team returns a team uuid', 'SUPABASE_TEST_ALLOW_TEAM_CREATE is not 1; it would leave an undeletable team row');
+        skip('create_team puts the creator inside the new team', 'SUPABASE_TEST_ALLOW_TEAM_CREATE is not 1');
+        skip('rotate_invite_code returns a different code', 'SUPABASE_TEST_ALLOW_TEAM_CREATE is not 1');
+      }
+
+      // Restore C's label so the script stays re-runnable.
+      if (memberIdC) {
+        await rest(tokenC, `members?user_id=eq.${uidC}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ member_id: memberIdC }),
+        });
+      }
+    }
+  } else {
+    skip('join_team lifecycle', 'SUPABASE_TEST_C_EMAIL / SUPABASE_TEST_C_PASSWORD are not set, so no teamless account exists to join with');
+  }
+
   // --- anon key with no session -------------------------------------------
   const anonRead = await fetch(`${BASE}/rest/v1/cycles?select=cycle_id`, {
     headers: { apikey: ANON, authorization: `Bearer ${ANON}` },
@@ -415,6 +600,22 @@ async function main() {
     !anonRead.ok || (Array.isArray(anonBody) && anonBody.length === 0),
     `status ${anonRead.status}`,
   );
+
+  // EXECUTE is revoked from PUBLIC and granted only to `authenticated`, so an
+  // unauthenticated caller must not even reach the auth.uid() check inside.
+  for (const [name, args] of [
+    ['create_team', { team_name: 'anon should not get here' }],
+    ['join_team', { code: 'anon should not get here' }],
+    ['leave_team', {}],
+    ['rotate_invite_code', {}],
+  ]) {
+    const anonRpc = await fetch(`${BASE}/rest/v1/rpc/${name}`, {
+      method: 'POST',
+      headers: { apikey: ANON, authorization: `Bearer ${ANON}`, 'content-type': 'application/json' },
+      body: JSON.stringify(args),
+    });
+    check(`anon key without a session cannot execute ${name}`, !anonRpc.ok, `status ${anonRpc.status}`);
+  }
 
   // --- cleanup -------------------------------------------------------------
   if (insertOwn.ok) {

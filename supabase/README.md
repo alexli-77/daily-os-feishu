@@ -80,66 +80,81 @@ produce the same schema.
 
 ## Creating the first team and its members
 
-Team creation and team assignment are **console operations**. There is
-deliberately no client-facing path for them: a policy that let a user set their
-own `members.team_id` would let anyone join any team by guessing a UUID, which
-would defeat the cross-team read protection. See the open question at the bottom.
+Since LEO-283 this is **self-service, from the Daily OS console** (Setup → Team).
+It is not a console-only SQL operation any more, and it is deliberately still not
+an ordinary table write — see "Why joining is an RPC" below.
 
-1. Each person signs up normally (email + password). Pass a starting label in
-   the signup metadata so the trigger can pick it up:
+1. Each person signs up from Setup → Team (email + password + display name).
+   The display name is passed as signup metadata:
 
    ```json
    { "member_id": "leon", "display_name": "Leon" }
    ```
 
-   With `supabase-js` that is the `options.data` field of `signUp`. If the
-   metadata is missing, the trigger falls back to the email local part.
+   If the metadata is missing, the trigger falls back to the email local part.
 
    The user controls this metadata, and that is fine. `member_id` is a label,
    grants nothing, and is not a key — the account's identity is the uuid auth
    assigns. The worst a chosen value can do is collide with a teammate's label
-   at step 4 and raise a unique violation, which is a rejected statement rather
-   than something to clean up. Either person can then just rename.
+   when joining and raise a unique violation, which is a rejected statement
+   rather than something to clean up. Either person can then just rename.
 
-2. Confirm the `members` rows exist (the `on_auth_user_created` trigger creates
-   them automatically), and note the uuids:
-
-   ```sql
-   select user_id, member_id, display_name, team_id from public.members;
-   ```
-
-3. Create the team, in the SQL Editor. Address people by `user_id`, not by
-   label:
+2. The first person clicks **创建团队**. That calls:
 
    ```sql
-   insert into public.teams (name, invite_code, created_by)
-   values ('daily-os', 'pick-a-long-random-string', '<leon-user-id-uuid>')
-   returning id;
+   select public.create_team('daily-os');   -- returns the new team uuid
    ```
 
-4. Put both people in it:
+3. They copy the invite code the panel shows and send it to the second person,
+   who pastes it into **用邀请码加入**:
 
    ```sql
-   update public.members
-      set team_id = (select id from public.teams where invite_code = 'pick-a-long-random-string')
-    where user_id in ('<leon-user-id-uuid>', '<penguin-user-id-uuid>');
+   select public.join_team('<invite code>'); -- returns the team uuid
    ```
 
-   `members` has `unique (team_id, member_id)`, so two people cannot end up
-   showing the same label inside one team. If this statement fails with a unique
-   violation, rename one of them first — that is now a one-line update with no
-   consequences elsewhere.
+4. Leaving and rotating the invite code are the same shape:
 
-Adding a third person later is the same kind of console operation. **Renaming is
-not**: anyone can change their own `member_id` from the client at any time, and
+   ```sql
+   select public.leave_team();
+   select public.rotate_invite_code();       -- returns the new code
+   ```
+
+Adding a third person later is just another invite code. **Renaming** stays a
+plain client update: anyone can change their own `member_id` at any time, and
 their cycles follow them, because those rows are filed under `owner`.
+
+### Why joining is an RPC and not a policy
+
+Neither operation can be expressed as a client write under the policies below,
+and that is the design, not a gap:
+
+* **Creating** a team needs two writes — insert into `teams`, then set the
+  creator's `members.team_id`. Adding an insert policy to `teams` does not help,
+  because the second write is exactly what RLS pins: the creator would end up
+  with a team they cannot join. Both halves have to happen in one transaction as
+  a privileged role.
+* **Joining** needs to change `members.team_id`, which is the input to
+  `current_team_id()` and therefore to every read policy. Any policy permissive
+  enough to allow a real join is permissive enough to let someone who guesses a
+  team uuid read that team's cycles. The invite code is what tells the two cases
+  apart, and a policy cannot check a code the client is also free to write around.
+
+The four functions are `security definer` with `set search_path = public,
+pg_temp` (an unpinned search_path on a definer function lets the caller swap in
+their own `members` table), take no "on behalf of" argument — the subject is
+always `auth.uid()` — and have `EXECUTE` revoked from `PUBLIC` and granted only
+to `authenticated`. `join_team` acts only while the caller's `team_id is null`,
+so it cannot be used to hop between teams, and it locks the caller's own row
+before checking, so two concurrent calls cannot both see "no team yet". Invite
+codes come from `gen_random_uuid()` (pg_strong_random, 128 bits, no ordering),
+never from a sequence or anything derived from the team name.
 
 ## What the policies guarantee
 
 | Table | Read | Write |
 | --- | --- | --- |
-| `teams` | Only your own team's row. | Nobody. Console only. |
-| `members` | Your own row, plus everyone in your team. | Your own row: `member_id` and `display_name` are yours to change. `team_id` is pinned. No deletes. |
+| `teams` | Only your own team's row. | Nobody, directly. `create_team()` / `rotate_invite_code()` only. |
+| `members` | Your own row, plus everyone in your team. | Your own row: `member_id` and `display_name` are yours to change. `team_id` is pinned — only `join_team()` / `leave_team()` move it. No deletes. |
 | `cycles` | Every row belonging to your team. | Only rows where `owner = auth.uid()` **and** `team_id` is your team. |
 
 Both conditions on `cycles` writes are load-bearing, and they cover different
@@ -199,6 +214,14 @@ export SUPABASE_TEST_B_PASSWORD="..."
 # Without it the cross-team read check is skipped, not passed.
 export SUPABASE_TEST_OTHER_TEAM_ID="<uuid of a second team>"
 
+# Optional: a third account that belongs to NO team. Without it the whole
+# create_team / join_team / leave_team lifecycle is skipped, not passed.
+export SUPABASE_TEST_C_EMAIL="spare@example.com"
+export SUPABASE_TEST_C_PASSWORD="..."
+# Optional: also verify create_team's success path. Off by default because
+# `teams` has no delete policy, so each run leaves an orphan team row behind.
+export SUPABASE_TEST_ALLOW_TEAM_CREATE=1
+
 npm run verify:supabase
 ```
 
@@ -217,7 +240,18 @@ It checks that:
 - A cannot move themselves into another team, nor edit B's `members` row;
 - A reads nothing from a foreign team, and cannot insert or move a cycle into one
   (all three only when `SUPABASE_TEST_OTHER_TEAM_ID` is set);
-- a bare anon key with no session reads nothing.
+- A, who is already in a team, is refused by both `join_team` and `create_team`,
+  and is still in their original team afterwards — the anti-hopping guard;
+- the invite code A can read is at least 24 characters;
+- with `SUPABASE_TEST_C_*` set: a wrong invite code is an explicit error and
+  **leaves `team_id` null** rather than silently succeeding, an empty code and an
+  empty team name are refused, the real code joins and makes the whole roster
+  readable, a second join is refused, `leave_team` puts C back to reading
+  nothing, and `rotate_invite_code` is refused for someone with no team;
+- with `SUPABASE_TEST_ALLOW_TEAM_CREATE=1`: `create_team` returns a uuid **and
+  leaves the creator inside that team**, and rotating changes the code;
+- a bare anon key with no session reads nothing, and cannot execute any of the
+  four RPCs.
 
 **When the required variables are absent the script exits 0 and prints `SKIPPED`
 with the exact list of missing variables.** A skip is not a pass — nothing about
@@ -230,10 +264,18 @@ user A's own data and neither touches user B, but point the script at a scratch
 project if that bothers you. If it dies between the two rename steps, A is left
 with a `-renamed-<suffix>` label; set it back by hand.
 
-## Open question for LEO-282 (auth)
+## Open questions left after LEO-282/283
 
-Team joining is console-only today. When self-service signup arrives, the right
-shape is probably a `security definer` RPC — `join_team(invite_code)` — that
-sets `members.team_id` once, for the caller, only while it is still null. That
-keeps the `team_id` pin in RLS intact while giving `teams.invite_code` (which is
-currently unused) a purpose. It is deliberately not built yet.
+* **Nothing rate-limits `join_team`.** A wrong code is rejected, but a caller can
+  try again immediately. 128 bits of entropy makes that hopeless in practice; if
+  it ever stops feeling hopeless, the fix is a counter table keyed by
+  `auth.uid()`, not a shorter code.
+* **`leave_team()` leaves your cycles behind.** They stay readable by the team
+  you left, because they are that team's shared history. Deleting them on the
+  way out is a destructive default; deleting them by hand first
+  (`cycles_delete_own` allows it) is the deliberate one.
+* **`rotate_invite_code()` may be called by any member of the team**, not only by
+  `created_by`. For two people that is the right trade; a bigger team probably
+  wants it restricted to the creator, which is a one-line change to the function.
+* **Email confirmation.** If the Supabase project has it enabled, sign-up returns
+  no session and the console says so rather than pretending to be logged in.

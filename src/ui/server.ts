@@ -64,6 +64,19 @@ import {
   stopWebChatSession,
   type WebChatEvent,
 } from './chat.js';
+import { looksLikeServiceRoleKey } from '../team/session.js';
+import {
+  createTeam,
+  joinTeam,
+  leaveTeam,
+  readTeamUiState,
+  refreshTeam,
+  rotateInviteCode,
+  signIn,
+  signOut,
+  signUp,
+  type TeamActionResult,
+} from '../team/team.js';
 import { runManager } from '../service/run-manager.js';
 import { scanAndIndex } from '../storage/artifacts.js';
 import { listRecentWorkflowRuns, markWorkflowRunFailed } from '../workflows/run-ledger.js';
@@ -379,6 +392,11 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
     if (request.method === 'POST' && url.pathname === '/api/okr') return sendJson(response, await saveOkr(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/okr/format') return sendJson(response, formatOkr(await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/cycles/section') return sendJson(response, await saveCycleSection(options, await readJson(request)));
+    // Team / Supabase (LEO-282/283). Writes, so the member gate above already
+    // rejects the member role; nothing here is on the member whitelist.
+    if (request.method === 'POST' && url.pathname.startsWith('/api/team/')) {
+      return sendJson(response, await teamAction(options, url.pathname.slice('/api/team/'.length), await readJson(request)));
+    }
     if (request.method === 'POST' && url.pathname === '/api/config') return sendJson(response, await saveConfig(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/env') return sendJson(response, await saveEnv(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/action') return sendJson(response, await runAction(options, await readJson(request)));
@@ -847,6 +865,9 @@ async function buildState(options: UiServerOptions): Promise<Record<string, unkn
     strategy: readStrategyState(config),
     okr: readOkrEditorState(config),
     cycles: readCyclesState(config),
+    // Local disk read only — see readTeamUiState. Nothing in /api/state may
+    // depend on Supabase being reachable.
+    team: readTeamUiState(config),
     todoInbox: {
       enabled: config.todo_inbox.enabled,
       open: openTodoInboxItems(config),
@@ -1078,6 +1099,69 @@ async function saveCycleSection(options: UiServerOptions, body: unknown): Promis
   };
 }
 
+/**
+ * Team / Supabase actions (LEO-282/283).
+ *
+ * Deliberately its own endpoint family rather than /api/action: the bodies carry
+ * passwords and invite codes, and /api/action writes its request into the UI log.
+ * Only the action name and any error message are logged here — never the body,
+ * never a token, never a password.
+ *
+ * Every branch returns a plain { ok, text|error } result and the rebuilt state.
+ * A remote failure is data, not an exception: the console keeps working.
+ */
+async function teamAction(options: UiServerOptions, action: string, body: unknown): Promise<Record<string, unknown>> {
+  const request = readRecord(body);
+  const env = readEnvFile(options.envPath);
+  applyEnv(env);
+  const config = loadConfig(options.configPath);
+
+  const run = async (): Promise<TeamActionResult> => {
+    switch (action) {
+      case 'signup':
+        return signUp(config, {
+          email: String(request.email || ''),
+          password: String(request.password || ''),
+          displayName: String(request.displayName || ''),
+          memberId: String(request.memberId || ''),
+        });
+      case 'signin':
+        return signIn(config, { email: String(request.email || ''), password: String(request.password || '') });
+      case 'signout':
+        return signOut(config);
+      case 'create':
+        return createTeam(config, String(request.name || ''));
+      case 'join':
+        return joinTeam(config, String(request.code || ''));
+      case 'leave':
+        return leaveTeam(config);
+      case 'rotate-code':
+        return rotateInviteCode(config);
+      case 'refresh':
+        return refreshTeam(config);
+      default:
+        return { ok: false, error: `Unknown team action: ${action || '(empty)'}` };
+    }
+  };
+
+  let result: TeamActionResult;
+  try {
+    result = await run();
+  } catch (error) {
+    // Nothing above is supposed to throw; if it does, it still must not take
+    // the console down with a 500.
+    result = { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+  appendUiLog({
+    event: 'action',
+    level: result.ok ? 'info' : 'error',
+    status: result.ok ? 'success' : 'error',
+    action: `team_${action}`,
+    detail: result.error || '',
+  });
+  return { ...result, state: await buildState(options) };
+}
+
 function isTodoInboxType(value: string): value is 'todo' | 'reminder' | 'time_boundary' | 'note' {
   return value === 'todo' || value === 'reminder' || value === 'time_boundary' || value === 'note';
 }
@@ -1088,6 +1172,13 @@ function isTodoInboxStatus(value: string): value is 'open' | 'done' | 'deferred'
 
 async function saveConfig(options: UiServerOptions, body: unknown): Promise<Record<string, unknown>> {
   const config = AppConfigSchema.parse(readRecord(body).config);
+  // The service_role key carries BYPASSRLS: with it in a laptop's config every
+  // policy in supabase/migrations is a no-op and any teammate can read and
+  // overwrite everyone's rows. The two keys sit next to each other in the
+  // Supabase dashboard, so refuse the wrong one at the point it is pasted.
+  if (looksLikeServiceRoleKey(config.team.supabase_anon_key.trim())) {
+    throw new Error('这看起来是 service_role key。它会绕过所有 RLS 策略，绝不能放在客户端；请改用 anon key。');
+  }
   fs.mkdirSync(path.dirname(path.resolve(options.configPath)), { recursive: true });
   fs.writeFileSync(path.resolve(options.configPath), `${yaml.dump(config, { lineWidth: 120, noRefs: true })}`, 'utf8');
   return { ok: true, state: await buildState(options) };
@@ -2217,6 +2308,59 @@ npm run service:install</code></pre>
               <label>Feedback prefix<input id="feedback-prefix" /></label>
               <label>Feedback poll limit<input id="feedback-poll-limit" type="number" min="1" max="100" /></label>
             </div>
+            <fieldset class="wide-fieldset" id="team-fieldset">
+              <legend>Team（Supabase 只读同步）</legend>
+              <p class="hint">本地 markdown 永远是真相源。Supabase 只是一个中转，让队友<strong>只读</strong>看到你的周期（weekly / retro / review）。没配置、没登录、断网时，Cycles 和其它本地功能全部照常工作。</p>
+              <div class="grid">
+                <label>Supabase URL<input id="team-supabase-url" placeholder="https://xxxxxxxx.supabase.co" autocomplete="off" /></label>
+                <label>Supabase anon key<input id="team-supabase-anon-key" autocomplete="off" placeholder="eyJhbGciOi..." /><span class="hint">只能填 <code>anon</code> key（它本来就是公开的）。<code>service_role</code> key 会绕过所有 RLS 策略，保存时会被拒绝。</span></label>
+              </div>
+              <p class="hint">改完这两项要先点右上角的 <strong>Save</strong> 写进 config.yaml，下面的登录才会生效。</p>
+              <p class="hint status-line" id="team-status"></p>
+
+              <div id="team-auth-block" hidden>
+                <div class="grid">
+                  <label>邮箱<input id="team-email" type="email" autocomplete="username" /></label>
+                  <label>密码<input id="team-password" type="password" autocomplete="current-password" /></label>
+                  <label>显示名<input id="team-display-name" placeholder="Leon" autocomplete="off" /><span class="hint">只有注册时用得上：它同时作为团队里的显示标签，之后可以改。</span></label>
+                </div>
+                <div class="source-row">
+                  <button type="button" data-action="team_signin">登录</button>
+                  <button type="button" class="secondary compact" data-action="team_signup">注册新账号</button>
+                </div>
+                <p class="hint">密码只发给你自己的 Supabase 项目，不写日志、不落盘；本地只保存刷新令牌（0600），所以重启服务不用重新登录。</p>
+              </div>
+
+              <div id="team-join-block" hidden>
+                <p class="hint">已登录为 <span id="team-identity"></span>，还没有加入任何团队。</p>
+                <div class="grid">
+                  <label>新建团队<input id="team-new-name" placeholder="daily-os" autocomplete="off" /></label>
+                  <label>用邀请码加入<input id="team-invite-input" placeholder="粘贴队友给你的邀请码" autocomplete="off" /></label>
+                </div>
+                <div class="source-row">
+                  <button type="button" data-action="team_create">创建团队</button>
+                  <button type="button" data-action="team_join">加入团队</button>
+                  <button type="button" class="secondary compact" data-action="team_signout">退出登录</button>
+                </div>
+              </div>
+
+              <div id="team-info-block" hidden>
+                <p class="hint">团队：<strong id="team-name"></strong>　你：<span id="team-identity-joined"></span></p>
+                <ul class="hint" id="team-members"></ul>
+                <div class="form-field">
+                  <label for="team-invite-code">邀请码</label>
+                  <div class="path-control"><input id="team-invite-code" readonly /><button type="button" class="secondary compact" data-action="team_copy_code">复制</button></div>
+                </div>
+                <p class="hint">邀请码是别人进入这个团队的唯一凭据，只发给队友本人。重新生成后旧邀请码立即失效。</p>
+                <div class="source-row">
+                  <button type="button" class="secondary compact" data-action="team_refresh">刷新团队信息</button>
+                  <button type="button" class="secondary compact" data-action="team_rotate_code">重新生成邀请码</button>
+                  <button type="button" class="secondary compact" data-action="team_leave">退出团队</button>
+                  <button type="button" class="secondary compact" data-action="team_signout">退出登录</button>
+                </div>
+                <p class="hint">退出团队只影响以后：已经同步上去的周期仍留在原团队里。</p>
+              </div>
+            </fieldset>
             <fieldset class="wide-fieldset">
               <legend>决策校准</legend>
               <p class="hint">创建或复用一个飞书私有群，用来和用户一起磨合 Daily OS 的决策方式。Mac UI 只负责配置；规则沟通发生在飞书里。</p>
@@ -3465,6 +3609,9 @@ function render() {
   renderStrategy(state.strategy);
   renderCycles(state.cycles);
   renderOkr(state.okr);
+  set('team-supabase-url', (config.team && config.team.supabase_url) || '');
+  set('team-supabase-anon-key', (config.team && config.team.supabase_anon_key) || '');
+  renderTeam(state.team);
   set('env-CODEX_BIN', state.env.CODEX_BIN || 'codex');
   set('env-CODEX_HOME', state.env.CODEX_HOME || '');
   set('env-CLAUDE_BIN', state.env.CLAUDE_BIN || 'claude');
@@ -3974,6 +4121,9 @@ async function saveAll() {
   next.sources.apple_calendar_snapshot.enabled = isChecked('source-apple-calendar');
   next.sources.local_files.enabled = isChecked('local-files-enabled');
   next.sources.local_files.files = parseFiles(value('local-files'));
+  next.team = next.team || { supabase_url: '', supabase_anon_key: '' };
+  next.team.supabase_url = value('team-supabase-url').trim();
+  next.team.supabase_anon_key = value('team-supabase-anon-key').trim();
   next.memory.repository_path = value('memory-repository-path');
   next.memory.long_term_path = value('memory-long-term-path') || './data/memory/long-term.md';
   next.memory.daily_dir = value('memory-daily-dir') || './data/memory/daily';
@@ -4080,7 +4230,140 @@ function secretValue(key) {
   return input.value;
 }
 
+// --- Team (LEO-282/283) ----------------------------------------------------
+// The panel renders entirely from state.team, which the server builds from the
+// local session file. Nothing here runs on page load, so an unreachable
+// Supabase can only ever make a button fail, never the console.
+function renderTeam(team) {
+  const info = team || {};
+  const configured = Boolean(info.configured);
+  const signedIn = Boolean(info.signedIn);
+  const joined = Boolean(info.teamId);
+
+  const authBlock = $('team-auth-block');
+  const joinBlock = $('team-join-block');
+  const infoBlock = $('team-info-block');
+  if (authBlock) authBlock.hidden = !configured || signedIn;
+  if (joinBlock) joinBlock.hidden = !configured || !signedIn || joined;
+  if (infoBlock) infoBlock.hidden = !configured || !signedIn || !joined;
+
+  const status = $('team-status');
+  if (status && !status.dataset.sticky) {
+    status.textContent = !configured
+      ? '尚未配置 Supabase。团队功能关闭，本地功能全部照常。'
+      : !signedIn
+        ? '已配置 Supabase，尚未登录。'
+        : !joined
+          ? '已登录，尚未加入团队。'
+          : '已加入团队' + (info.updatedAt ? '（团队信息读取于 ' + info.updatedAt + '）' : '') + '。';
+  }
+
+  const who = (info.displayName || info.memberId || '') + (info.email ? ' <' + info.email + '>' : '');
+  const identity = $('team-identity');
+  if (identity) identity.textContent = who;
+  const identityJoined = $('team-identity-joined');
+  if (identityJoined) identityJoined.textContent = who;
+  const name = $('team-name');
+  if (name) name.textContent = info.teamName || '(未命名)';
+  set('team-invite-code', info.inviteCode || '');
+
+  const list = $('team-members');
+  if (list) {
+    const members = Array.isArray(info.members) ? info.members : [];
+    list.innerHTML = members.length
+      ? members
+          .map((member) => {
+            const label = escapeHtml(member.displayName || member.memberId || '');
+            const short = escapeHtml(member.memberId || '');
+            const self = member.userId && member.userId === info.userId ? '（你）' : '';
+            return '<li>' + label + ' · ' + short + self + '</li>';
+          })
+          .join('')
+      : '<li>还没有读到成员列表，点「刷新团队信息」。</li>';
+  }
+}
+
+const TEAM_ENDPOINTS = {
+  team_signin: 'signin',
+  team_signup: 'signup',
+  team_signout: 'signout',
+  team_create: 'create',
+  team_join: 'join',
+  team_leave: 'leave',
+  team_rotate_code: 'rotate-code',
+  team_refresh: 'refresh',
+};
+
+function teamRequestBody(action) {
+  if (action === 'team_signin') return { email: value('team-email'), password: value('team-password') };
+  if (action === 'team_signup') {
+    return { email: value('team-email'), password: value('team-password'), displayName: value('team-display-name') };
+  }
+  if (action === 'team_create') return { name: value('team-new-name') };
+  if (action === 'team_join') return { code: value('team-invite-input') };
+  return {};
+}
+
+async function handleTeamAction(action) {
+  const status = $('team-status');
+  if (action === 'team_copy_code') {
+    const code = value('team-invite-code');
+    if (!code) return;
+    try {
+      await navigator.clipboard.writeText(code);
+      showToast('邀请码已复制', 'success');
+    } catch (error) {
+      const input = $('team-invite-code');
+      if (input) input.select();
+      showToast('自动复制失败，请手动复制选中的邀请码', 'error', false);
+    }
+    return;
+  }
+  if (action === 'team_leave' && !window.confirm('退出团队后就看不到队友的周期了（已同步的内容仍留在原团队）。确定退出？')) return;
+  if (action === 'team_rotate_code' && !window.confirm('重新生成后旧邀请码立即失效。确定？')) return;
+
+  const endpoint = TEAM_ENDPOINTS[action];
+  if (!endpoint) return;
+  if (status) {
+    status.dataset.sticky = '1';
+    status.textContent = '处理中…';
+  }
+  // Not post(): a failed team action still returns fresh state (a rejected
+  // refresh token clears the session), and the panel must re-render from it
+  // instead of throwing the state away.
+  let data;
+  try {
+    const response = await apiFetch('/api/team/' + endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(teamRequestBody(action)),
+    });
+    data = await response.json();
+  } catch (error) {
+    data = { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+  if (data && data.state) {
+    state = data.state;
+    render();
+  }
+  const message = data && data.ok ? data.text || '完成' : (data && data.error) || '操作失败';
+  if (status) {
+    delete status.dataset.sticky;
+    status.textContent = message;
+  }
+  showToast(message, data && data.ok ? 'success' : 'error', Boolean(data && data.ok));
+  if (data && data.ok) {
+    set('team-password', '');
+    if (action === 'team_join') set('team-invite-input', '');
+    if (action === 'team_create') set('team-new-name', '');
+  }
+}
+
 async function runAction(action) {
+  if (action.indexOf('team_') === 0) {
+    await handleTeamAction(action);
+    return;
+  }
   if (action === 'strategy_reload') {
     await loadState();
     showToast('Review strategy reloaded', 'success');

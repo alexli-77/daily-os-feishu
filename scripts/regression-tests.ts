@@ -138,6 +138,9 @@ try {
     'scripts/tests/cycles-page.test.ts',
     // LEO-280 history migration: run selection, both table layouts, idempotency.
     'scripts/tests/cycle-migration.test.ts',
+    // LEO-282/283 Supabase auth + team: offline-first degradation, token refresh,
+    // invite-code rejection, no team hopping, role gate.
+    'scripts/tests/team-auth.test.ts',
   ]);
   console.log('Regression tests passed.');
 } finally {
