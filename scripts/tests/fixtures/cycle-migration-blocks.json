@@ -1,0 +1,893 @@
+[
+  {
+    "block_id": "Txt0002Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0001Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "🐶 重点OKR",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Cel0001Fixture",
+    "block_type": 32,
+    "parent_id": "SelfTableFixture",
+    "children": [
+      "Txt0002Fixture"
+    ]
+  },
+  {
+    "block_id": "Txt0004Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0003Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "retro",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Cel0003Fixture",
+    "block_type": 32,
+    "parent_id": "SelfTableFixture",
+    "children": [
+      "Txt0004Fixture"
+    ]
+  },
+  {
+    "block_id": "Txt0006Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0005Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "8.24-9.6 要务",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Cel0005Fixture",
+    "block_type": 32,
+    "parent_id": "SelfTableFixture",
+    "children": [
+      "Txt0006Fixture"
+    ]
+  },
+  {
+    "block_id": "Txt0008Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0007Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "retro",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Cel0007Fixture",
+    "block_type": 32,
+    "parent_id": "SelfTableFixture",
+    "children": [
+      "Txt0008Fixture"
+    ]
+  },
+  {
+    "block_id": "Txt0010Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0009Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "8.10-8.23 要务",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Cel0009Fixture",
+    "block_type": 32,
+    "parent_id": "SelfTableFixture",
+    "children": [
+      "Txt0010Fixture"
+    ]
+  },
+  {
+    "block_id": "Txt0012Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0011Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "工作-技术专家。季度验证下一站方案。",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Cel0011Fixture",
+    "block_type": 32,
+    "parent_id": "SelfTableFixture",
+    "children": [
+      "Txt0012Fixture"
+    ]
+  },
+  {
+    "block_id": "Cel0013Fixture",
+    "block_type": 32,
+    "parent_id": "SelfTableFixture",
+    "children": []
+  },
+  {
+    "block_id": "Txt0015Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0014Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "规划中的要务，不从表格读",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Cel0014Fixture",
+    "block_type": 32,
+    "parent_id": "SelfTableFixture",
+    "children": [
+      "Txt0015Fixture"
+    ]
+  },
+  {
+    "block_id": "Txt0017Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0016Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "状态：还行",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Txt0018Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0016Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "做得好：坚持了两周",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Txt0019Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0016Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "🕙review",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Txt0020Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0016Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "AI 写的 8.10-8.23 复盘。",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Cel0016Fixture",
+    "block_type": 32,
+    "parent_id": "SelfTableFixture",
+    "children": [
+      "Txt0017Fixture",
+      "Txt0018Fixture",
+      "Txt0019Fixture",
+      "Txt0020Fixture"
+    ]
+  },
+  {
+    "block_id": "Txt0022Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0021Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "八月上半月要务一 MIT",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Txt0023Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0021Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "八月上半月要务二",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Cel0021Fixture",
+    "block_type": 32,
+    "parent_id": "SelfTableFixture",
+    "children": [
+      "Txt0022Fixture",
+      "Txt0023Fixture"
+    ]
+  },
+  {
+    "block_id": "Txt0025Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0024Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "金钱-家庭 CFO。以",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        },
+        {
+          "mention_doc": {
+            "title": "家庭理财计划",
+            "token": "FixtureDocToken",
+            "obj_type": 22,
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        },
+        {
+          "text_run": {
+            "content": "为核心。",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Cel0024Fixture",
+    "block_type": 32,
+    "parent_id": "SelfTableFixture",
+    "children": [
+      "Txt0025Fixture"
+    ]
+  },
+  {
+    "block_id": "Cel0026Fixture",
+    "block_type": 32,
+    "parent_id": "SelfTableFixture",
+    "children": []
+  },
+  {
+    "block_id": "Cel0027Fixture",
+    "block_type": 32,
+    "parent_id": "SelfTableFixture",
+    "children": []
+  },
+  {
+    "block_id": "Cel0028Fixture",
+    "block_type": 32,
+    "parent_id": "SelfTableFixture",
+    "children": []
+  },
+  {
+    "block_id": "Txt0030Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0029Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "八月上半月要务三",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Cel0029Fixture",
+    "block_type": 32,
+    "parent_id": "SelfTableFixture",
+    "children": [
+      "Txt0030Fixture"
+    ]
+  },
+  {
+    "block_id": "SelfTableFixture",
+    "block_type": 31,
+    "parent_id": "DocRootFixture",
+    "children": [
+      "Cel0001Fixture",
+      "Cel0003Fixture",
+      "Cel0005Fixture",
+      "Cel0007Fixture",
+      "Cel0009Fixture",
+      "Cel0011Fixture",
+      "Cel0013Fixture",
+      "Cel0014Fixture",
+      "Cel0016Fixture",
+      "Cel0021Fixture",
+      "Cel0024Fixture",
+      "Cel0026Fixture",
+      "Cel0027Fixture",
+      "Cel0028Fixture",
+      "Cel0029Fixture"
+    ],
+    "table": {
+      "cells": [
+        "Cel0001Fixture",
+        "Cel0003Fixture",
+        "Cel0005Fixture",
+        "Cel0007Fixture",
+        "Cel0009Fixture",
+        "Cel0011Fixture",
+        "Cel0013Fixture",
+        "Cel0014Fixture",
+        "Cel0016Fixture",
+        "Cel0021Fixture",
+        "Cel0024Fixture",
+        "Cel0026Fixture",
+        "Cel0027Fixture",
+        "Cel0028Fixture",
+        "Cel0029Fixture"
+      ],
+      "property": {
+        "row_size": 3,
+        "column_size": 5,
+        "column_width": [
+          200,
+          200,
+          200,
+          200,
+          200
+        ],
+        "header_row": true
+      }
+    }
+  },
+  {
+    "block_id": "Txt0032Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0031Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "🐧 重点OKR",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Cel0031Fixture",
+    "block_type": 32,
+    "parent_id": "PartnerTableFixture",
+    "children": [
+      "Txt0032Fixture"
+    ]
+  },
+  {
+    "block_id": "Txt0034Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0033Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "8.24-9.6 要务",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Cel0033Fixture",
+    "block_type": 32,
+    "parent_id": "PartnerTableFixture",
+    "children": [
+      "Txt0034Fixture"
+    ]
+  },
+  {
+    "block_id": "Txt0036Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0035Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "retro",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Cel0035Fixture",
+    "block_type": 32,
+    "parent_id": "PartnerTableFixture",
+    "children": [
+      "Txt0036Fixture"
+    ]
+  },
+  {
+    "block_id": "Txt0038Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0037Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "8.10-8.23 要务",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Cel0037Fixture",
+    "block_type": 32,
+    "parent_id": "PartnerTableFixture",
+    "children": [
+      "Txt0038Fixture"
+    ]
+  },
+  {
+    "block_id": "Txt0040Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0039Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "retro",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Cel0039Fixture",
+    "block_type": 32,
+    "parent_id": "PartnerTableFixture",
+    "children": [
+      "Txt0040Fixture"
+    ]
+  },
+  {
+    "block_id": "Txt0042Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0041Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "工作-UX designer。投递北美本地工作。",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Cel0041Fixture",
+    "block_type": 32,
+    "parent_id": "PartnerTableFixture",
+    "children": [
+      "Txt0042Fixture"
+    ]
+  },
+  {
+    "block_id": "Txt0044Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0043Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "伙伴要务一 MIT",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Txt0045Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0043Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "伙伴要务二",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Cel0043Fixture",
+    "block_type": 32,
+    "parent_id": "PartnerTableFixture",
+    "children": [
+      "Txt0044Fixture",
+      "Txt0045Fixture"
+    ]
+  },
+  {
+    "block_id": "Txt0047Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0046Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "伙伴的 8.24-9.6 retro",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Cel0046Fixture",
+    "block_type": 32,
+    "parent_id": "PartnerTableFixture",
+    "children": [
+      "Txt0047Fixture"
+    ]
+  },
+  {
+    "block_id": "Txt0049Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0048Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "伙伴要务三",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Cel0048Fixture",
+    "block_type": 32,
+    "parent_id": "PartnerTableFixture",
+    "children": [
+      "Txt0049Fixture"
+    ]
+  },
+  {
+    "block_id": "Txt0051Fixture",
+    "block_type": 2,
+    "parent_id": "Cel0050Fixture",
+    "text": {
+      "elements": [
+        {
+          "text_run": {
+            "content": "伙伴的 8.10-8.23 retro",
+            "text_element_style": {
+              "bold": false,
+              "inline_code": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false
+            }
+          }
+        }
+      ],
+      "style": {}
+    }
+  },
+  {
+    "block_id": "Cel0050Fixture",
+    "block_type": 32,
+    "parent_id": "PartnerTableFixture",
+    "children": [
+      "Txt0051Fixture"
+    ]
+  },
+  {
+    "block_id": "PartnerTableFixture",
+    "block_type": 31,
+    "parent_id": "DocRootFixture",
+    "children": [
+      "Cel0031Fixture",
+      "Cel0033Fixture",
+      "Cel0035Fixture",
+      "Cel0037Fixture",
+      "Cel0039Fixture",
+      "Cel0041Fixture",
+      "Cel0043Fixture",
+      "Cel0046Fixture",
+      "Cel0048Fixture",
+      "Cel0050Fixture"
+    ],
+    "table": {
+      "cells": [
+        "Cel0031Fixture",
+        "Cel0033Fixture",
+        "Cel0035Fixture",
+        "Cel0037Fixture",
+        "Cel0039Fixture",
+        "Cel0041Fixture",
+        "Cel0043Fixture",
+        "Cel0046Fixture",
+        "Cel0048Fixture",
+        "Cel0050Fixture"
+      ],
+      "property": {
+        "row_size": 2,
+        "column_size": 5,
+        "column_width": [
+          200,
+          200,
+          200,
+          200,
+          200
+        ],
+        "header_row": true
+      }
+    }
+  }
+]
