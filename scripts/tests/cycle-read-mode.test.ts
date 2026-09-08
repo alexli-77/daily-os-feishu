@@ -73,7 +73,7 @@ async function testRendering(): Promise<void> {
   const tasks = render('priorities', PRIORITIES);
   check('an OKR heading becomes a group title', tasks.includes('工作 · 技术专家') && tasks.includes('cy-group-title'), tasks.slice(0, 120));
   check('both groups are rendered', tasks.includes('金钱 · 家庭理财规划师'));
-  check('bullets become list items, without their dash', tasks.includes('<li class="cy-task">') && !tasks.includes('>- '), tasks.slice(0, 200));
+  check('bullets become list items, without their dash', tasks.includes('<li class="cy-task ') && !tasks.includes('>- '), tasks.slice(0, 200));
   check('MIT becomes a badge', tasks.includes('<span class="cy-badge">MIT</span>'));
   check('the MIT marker is not also left in the text', !/MIT<\/span><span>[^<]*MIT/.test(tasks) && !tasks.includes('**MIT**'), tasks);
   check('a Linear id becomes a link', tasks.includes('href="https://linear.app/') && tasks.includes('>LEO-102</a>'), tasks.slice(-260));
@@ -179,14 +179,57 @@ async function testRendering(): Promise<void> {
 
   page.setState({ cycles: { dir: '/tmp/v/20_CYCLES', items: [cycle] }, team: null });
   page.render();
-  page.clickZoom('retro');
-  check('zooming a section being read enlarges the reading view', page.el('cycle-modal-read').hidden === false && page.el('cycle-modal-text').hidden === true);
-  check('the enlarged view has the rendered content', page.el('cycle-modal-read').innerHTML.includes('做的好'), page.el('cycle-modal-read').innerHTML.slice(0, 120));
-  page.pressKey('Escape');
-  page.clickMode('retro');
-  page.clickZoom('retro');
-  check('zooming a section being edited enlarges the editor', page.el('cycle-modal-text').hidden === false && page.el('cycle-modal-read').hidden === true);
-  page.pressKey('Escape');
+
+  // --- per-item status (green / yellow / red) ---------------------------------
+  // A cycle id of its own: drafts are keyed by id, and the assertions above left
+  // an edited 要务 under the other one.
+  const statusCycle = { ...cycle, id: '2026-04-06_4.6-4.19', startDate: '2026-04-06', cycle: '4.6-4.19',
+    sections: { 要务: { content: PRIORITIES, source: 'planner', updatedAt: '2026-04-06T00:00:00.000Z' } } };
+  page.setState({ cycles: { dir: '/tmp/v/20_CYCLES', items: [statusCycle] }, team: null });
+  page.render();
+  const dots = () => [...String(page.el('cycle-read-priorities').innerHTML).matchAll(/data-cycle-task="(\d+)" data-cycle-status="([a-z]*)"/g)].map((m) => [m[1], m[2]]);
+  check('every task row offers three status controls', dots().length === 3 * 3, String(dots().length));
+  check('an unmarked row offers all three states', dots().slice(0, 3).map((d) => d[1]).join(',') === 'done,partial,missed', dots().slice(0, 3).join('|'));
+
+  const firstLine = Number(dots()[0][0]);
+  page.clickTask(firstLine, 'done');
+  check('marking done rewrites that line in the markdown', page.el('cycle-md-priorities').value.split('\n')[firstLine].endsWith('✅'), page.el('cycle-md-priorities').value.split('\n')[firstLine]);
+  check('and only that line', page.el('cycle-md-priorities').value.split('\n').filter((l: string) => /[✅🚧❌]/u.test(l)).length === 1);
+  check('the rendered row is coloured', page.el('cycle-read-priorities').innerHTML.includes('cy-task cy-task-done'));
+  check('the marker is not also left in the sentence', !page.el('cycle-read-priorities').innerHTML.includes('✅'), page.el('cycle-read-priorities').innerHTML.slice(0, 300));
+  check('the active dot now clears instead of re-setting', dots()[0][1] === '', dots()[0].join('|'));
+  check('the change is unsaved, so the save row comes back in read mode', page.el('cycle-actions-priorities').hidden === false);
+  check('and it says so', page.el('cycle-status-priorities').textContent.includes('还没保存'), page.el('cycle-status-priorities').textContent);
+
+  page.clickTask(firstLine, 'partial');
+  check('switching to partial replaces the marker rather than appending', page.el('cycle-md-priorities').value.split('\n')[firstLine].endsWith('🚧'));
+  check('only one marker survives the switch', (page.el('cycle-md-priorities').value.split('\n')[firstLine].match(/[✅🚧❌]/gu) || []).length === 1, page.el('cycle-md-priorities').value.split('\n')[firstLine]);
+
+  page.clickTask(firstLine, 'missed');
+  check('red is written as ❌', page.el('cycle-md-priorities').value.split('\n')[firstLine].endsWith('❌'));
+  page.clickTask(firstLine, '');
+  check('clearing removes the marker entirely', !/[✅🚧❌]/u.test(page.el('cycle-md-priorities').value.split('\n')[firstLine]), page.el('cycle-md-priorities').value.split('\n')[firstLine]);
+
+  // MIT and Linear ids must survive being marked, since the marker is appended
+  // to the same line they live on.
+  const mitLine = page.el('cycle-md-priorities').value.split('\n').findIndex((l: string) => l.includes('**MIT**'));
+  page.clickTask(mitLine, 'done');
+  const marked = page.el('cycle-md-priorities').value.split('\n')[mitLine];
+  check('MIT emphasis survives a status change', marked.includes('**MIT**'), marked);
+  check('the row still shows its MIT badge', page.el('cycle-read-priorities').innerHTML.includes('cy-badge'), marked);
+  const leoLine = page.el('cycle-md-priorities').value.split('\n').findIndex((l: string) => l.includes('LEO-102'));
+  page.clickTask(leoLine, 'missed');
+  check('a Linear id survives a status change', page.el('cycle-md-priorities').value.split('\n')[leoLine].includes('LEO-102'));
+  check('and is still a link', page.el('cycle-read-priorities').innerHTML.includes('>LEO-102</a>'));
+
+  // A marker already in the file is read back, not duplicated.
+  const preMarked = { ...cycle, id: '2026-05-01_5.1-5.14', startDate: '2026-05-01', cycle: '5.1-5.14',
+    sections: { 要务: { content: '### 组\n- 已经做完的事 ✅\n- 做了一半 🚧\n- 完全没动 ❌', source: 'planner', updatedAt: '2026-05-01T00:00:00.000Z' } } };
+  page.setState({ cycles: { dir: '/tmp/v/20_CYCLES', items: [preMarked] }, team: null });
+  page.render();
+  const html = page.el('cycle-read-priorities').innerHTML;
+  check('markers already in the file are read back', ['cy-task-done', 'cy-task-partial', 'cy-task-missed'].every((c) => html.includes(c)), html.slice(0, 200));
+  check('and are not shown twice', !html.includes('✅') && !html.includes('🚧') && !html.includes('❌'), html.slice(0, 200));
 }
 
 // --- 2. the review endpoint ----------------------------------------------------
@@ -314,7 +357,7 @@ async function loadCyclesPage() {
     render: api.renderCyclesPage,
     clickMode: (key: string) => clickOn('cycle-cards', '[data-cycle-mode]', { cycleMode: key }),
     clickCycle: (id: string) => clickOn('cycle-list', '[data-cycle-id]', { cycleId: id }),
-    clickZoom: (key: string) => clickOn('cycle-cards', '[data-cycle-zoom]', { cycleZoom: key }),
+    clickTask: (line: number, status: string) => clickOn('cycle-cards', '[data-cycle-task]', { cycleTask: String(line), cycleStatus: status }),
     pressKey: (key: string) => { for (const handler of documentListeners.keydown || []) handler({ key, preventDefault() {} }); },
     fire: (id: string, type: string) => { for (const handler of get(id).listeners[type] || []) handler({ target: get(id) }); },
   };
