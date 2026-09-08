@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { writeFileAtomic } from '../utils/atomic-write.js';
 import { randomAvatarSeed } from './avatar.js';
-import { dbCountUsers, dbFindUser, dbInsertUser, dbLoadUsers, dbUpdateUserPassword } from '../storage/db.js';
+import { dbCountUsers, dbFindUser, dbInsertUser, dbLoadUsers, dbSetUserAvatarSeed, dbUpdateUserPassword, dbUsersMissingAvatarSeed } from '../storage/db.js';
 
 /**
  * Local login + role store for the LEO-210 web admin console.
@@ -193,12 +193,25 @@ export function setPassword(username: string, password: string): UserRecord {
  * caller can surface it once (console + ui.json).
  */
 export function ensureAuthInitialized(): AuthInitResult {
+  backfillAvatarSeeds();
   if (dbCountUsers() > 0) return { createdAdmin: false, adminUsername: 'admin' };
   const initialPassword = crypto.randomBytes(12).toString('base64url');
   const { salt, hash } = hashPassword(initialPassword);
   const admin: UserRecord = { username: 'admin', role: 'admin', salt, hash, email: '', avatar_seed: randomAvatarSeed(), created_at: nowIso(), updated_at: nowIso() };
   dbInsertUser(admin);
   return { createdAdmin: true, adminUsername: 'admin', initialPassword };
+}
+
+/**
+ * Give an avatar to accounts that existed before the column did.
+ *
+ * The ADD COLUMN migration fills old rows with '', and the renderer falls back
+ * to the username for those — which draws something, so nothing looks broken,
+ * but it is the exact behaviour the stored seed exists to avoid: an avatar
+ * derived from a name changes when the name does.
+ */
+function backfillAvatarSeeds(): void {
+  for (const username of dbUsersMissingAvatarSeed()) dbSetUserAvatarSeed(username, randomAvatarSeed());
 }
 
 // --- sessions ---------------------------------------------------------------

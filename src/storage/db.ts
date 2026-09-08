@@ -186,6 +186,16 @@ export function dbInsertUser(user: UserRecord): void {
     .run(user.username, user.username.toLowerCase(), user.role, user.salt, user.hash, user.email || '', user.avatar_seed || '', user.created_at, user.updated_at);
 }
 
+/** Rows that predate the avatar_seed column carry ''. */
+export function dbUsersMissingAvatarSeed(): string[] {
+  return (getDb().prepare("SELECT username FROM users WHERE avatar_seed = '' OR avatar_seed IS NULL").all() as Array<{ username: string }>)
+    .map((row) => row.username);
+}
+
+export function dbSetUserAvatarSeed(username: string, seed: string): void {
+  getDb().prepare('UPDATE users SET avatar_seed = ? WHERE username_lower = ?').run(seed, username.toLowerCase());
+}
+
 export function dbUpdateUserPassword(username: string, salt: string, hash: string, updatedAt: string): number {
   return getDb()
     .prepare('UPDATE users SET salt = ?, hash = ?, updated_at = ? WHERE username_lower = ?')
