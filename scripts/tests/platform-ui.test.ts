@@ -155,6 +155,26 @@ async function main(): Promise<void> {
     const pageText = await authedPage.text();
     check('dashboard with admin session -> 200 html', authedPage.status === 200 && pageText.includes('Recent runs'), String(authedPage.status));
 
+    // --- Console UI: avatar dropdown, profile page, font-size preference ----
+    check('topbar renders the avatar dropdown menu', pageText.includes('data-usermenu') && pageText.includes('data-usermenu-toggle'), 'usermenu missing');
+    check('avatar hover tooltip present', pageText.includes('打开用户导航栏'));
+    check('dropdown has 个人信息 / 设置 / 退出', pageText.includes('>个人信息<') && pageText.includes('>设置<') && pageText.includes('data-logout'));
+    check('Config link removed from the top nav bar', !pageText.includes('>Config</a>'), 'top nav still has Config');
+    check('head applies the saved font preference early', pageText.includes('daily_os_font'));
+
+    const profilePage = await fetch(`${base}/profile`, { headers: { cookie: adminCookie } });
+    const profileText = await profilePage.text();
+    check('profile page renders for the signed-in user', profilePage.status === 200 && profileText.includes('admin') && profileText.includes('角色'), String(profilePage.status));
+
+    const configPage = await fetch(`${base}/console`, { headers: { cookie: adminCookie } });
+    const configText = await configPage.text();
+    check('Config Setup has the font-size control', configPage.status === 200 && configText.includes('font-size-control') && configText.includes('界面字体'), String(configPage.status));
+
+    const cssText = await (await fetch(`${base}/assets/app.css`)).text();
+    check('app.css scales the UI via data-font zoom', cssText.includes('data-font') && cssText.includes('zoom'), 'no zoom rule');
+    const jsText = await (await fetch(`${base}/assets/app.js`)).text();
+    check('app.js wires the font preference', jsText.includes('daily_os_font'), 'no font wiring');
+
     const todayConfig = loadConfig('config/config.yaml');
     todayConfig.sources.linear.workspace = '';
     writeLatestWorkflowOutput(
