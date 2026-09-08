@@ -410,7 +410,10 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
     if (request.method === 'GET' && url.pathname === '/api/state') return sendJson(response, await buildState(options));
     if (request.method === 'GET' && url.pathname === '/api/logs') return sendJson(response, { ok: true, logs: readUiLogs() });
     if (request.method === 'GET' && url.pathname === '/api/env-secret') {
-      const reveal = url.searchParams.get('reveal') === '1';
+      // LEO-288: revealing plaintext is admin-only. This is a GET, so the member
+      // write-gate above never covered it — a member (or any signed-in stranger)
+      // could otherwise read .env secrets. Non-admins get presence + masked only.
+      const reveal = url.searchParams.get('reveal') === '1' && auth.role === 'admin';
       return sendJson(response, readSecret(options, url.searchParams.get('key') || '', { reveal, loopback: isLoopbackRequest }));
     }
     if (request.method === 'POST' && url.pathname === '/api/capture') return sendJson(response, await captureTodo(options, await readJson(request)));

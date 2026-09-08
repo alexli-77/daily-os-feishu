@@ -144,12 +144,16 @@ async function main(): Promise<void> {
     check('the email is stored', stored?.email === GOOD.email, String(stored?.email));
     check('the password is not stored in plaintext', !JSON.stringify(stored).includes(GOOD.password));
     check('an avatar seed is assigned', Boolean(stored?.avatar_seed));
-    // Per-device install: whoever registers on a machine owns that machine's
-    // config, and the server only ever listens on 127.0.0.1.
-    check('a new account is an admin', stored?.role === 'admin', String(stored?.role));
+    // LEO-288: the first account on a fresh install is the owner (admin)…
+    check('the first account is the owner (admin)', stored?.role === 'admin', String(stored?.role));
 
-    const secondSeed = auth.findUser('admin')?.avatar_seed;
-    check('the bootstrap admin got a seed too', Boolean(secondSeed), 'blank seed renders as a shared avatar');
+    // …and everyone who signs up after is a member, never admin — a stranger who
+    // reaches the sign-up form must not land as owner.
+    const second = await register({ username: 'mallory', email: 'mallory@example.com', password: GOOD.password });
+    check('a later sign-up is a member, not admin', second.status === 200 && auth.findUser('mallory')?.role === 'member', String(auth.findUser('mallory')?.role));
+
+    const secondSeed = auth.findUser('mallory')?.avatar_seed;
+    check('the second account also gets a seed', Boolean(secondSeed), 'blank seed renders as a shared avatar');
     check('two accounts do not share an avatar', stored?.avatar_seed !== secondSeed);
 
     // An account that predates the avatar_seed column carries ''. The renderer
