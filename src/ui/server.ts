@@ -22,6 +22,7 @@ import { appVersion } from '../utils/version.js';
 import { startDecisionOnboarding } from '../decision/onboarding.js';
 import { ensureDecisionPolicyFiles } from '../decision/policy.js';
 import { BIWEEKLY_STRATEGY_FILE, defaultBiweeklyStrategy, expandPath } from '../skills/runner.js';
+import { readSkillRepoState, updateSkillRepo } from '../skills/update.js';
 import { readOkrEditorState, writeOkrFile } from '../okr/editor.js';
 import { normalizeOkrMarkdown } from '../okr/normalize.js';
 import type { OkrLevel } from '../okr/editor.js';
@@ -377,6 +378,7 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
     if (request.method === 'GET' && url.pathname === '/api/schedules/logs') return sendScheduleLogs(response, url);
     if (request.method === 'POST' && url.pathname === '/api/artifacts/reindex') return sendJson(response, reindexArtifacts());
     if (request.method === 'POST' && url.pathname === '/api/admin/users') return sendJson(response, adminUsers(auth, await readJson(request)));
+    if (request.method === 'POST' && url.pathname === '/api/skills/update') return sendJson(response, await updateSkill(options, auth));
 
     // Web console chat (LEO-236).
     if (request.method === 'GET' && url.pathname === '/api/chat/sessions') return sendJson(response, chatSessions(options));
@@ -714,6 +716,18 @@ function reindexArtifacts(): Record<string, unknown> {
   return { ok: true, ...result };
 }
 
+/**
+ * Pull the weekly-review skill repo. Admin-only: it mutates a checkout that the
+ * Claude CLI also reads through `~/.claude/skills/weekly-review`, so a member
+ * pressing it would change what everyone's next run executes.
+ */
+async function updateSkill(options: UiServerOptions, auth: AuthContext): Promise<Record<string, unknown>> {
+  if (auth.role !== 'admin') return { ok: false, error: 'Admin role required.' };
+  const config = loadConfig(options.configPath);
+  const result = await updateSkillRepo(config);
+  return { ...result, state: await readSkillRepoState(config) };
+}
+
 function adminUsers(auth: AuthContext, body: unknown): Record<string, unknown> {
   if (auth.role !== 'admin') return { ok: false, error: 'Admin role required.' };
   const request = readRecord(body);
@@ -883,6 +897,9 @@ async function buildState(options: UiServerOptions): Promise<Record<string, unkn
     backgroundSuggestions: readBackgroundSuggestionsState(config),
     decisionPolicy: readDecisionPolicyState(config),
     strategy: readStrategyState(config),
+    // Local git reads only — no fetch. This runs on every console load, and the
+    // page must not wait on the network to render.
+    skillRepo: await readSkillRepoState(config),
     okr: readOkrEditorState(config),
     cycles: readCyclesState(config),
     // Two halves of the same feature, merged under one key so neither silently
@@ -2327,6 +2344,17 @@ npm run service:install</code></pre>
               <label>Feedback prefix<input id="feedback-prefix" /></label>
               <label>Feedback poll limit<input id="feedback-poll-limit" type="number" min="1" max="100" /></label>
             </div>
+            <fieldset class="wide-fieldset" id="skill-repo-fieldset">
+              <legend>weekly-review skill</legend>
+              <p class="hint"><code>~/.claude/skills/weekly-review</code> 是指向 life-review-os 检出目录的符号链接，Daily OS 也在同一个目录里执行它。所以这里点一次更新，Claude CLI 和 Daily OS 同时生效——没有需要拷贝或同步的第二份。</p>
+              <p class="hint status-line mono" id="skill-repo-status"></p>
+              <p class="hint" id="skill-repo-blocked" hidden></p>
+              <div class="panel-actions">
+                <button type="button" class="secondary" id="skill-repo-update">更新 skill（git pull）</button>
+                <span class="save-status" aria-live="polite" id="skill-repo-result"></span>
+              </div>
+              <pre class="mono small" id="skill-repo-commits" hidden></pre>
+            </fieldset>
             <fieldset class="wide-fieldset" id="team-fieldset">
               <legend>Team（Supabase 只读同步）</legend>
               <p class="hint">本地 markdown 永远是真相源。Supabase 只是一个中转，让队友<strong>只读</strong>看到你的周期（weekly / retro / review）。没配置、没登录、断网时，Cycles 和其它本地功能全部照常工作。</p>
@@ -3425,6 +3453,7 @@ $('config-form').addEventListener('submit', async (event) => {
   }
 });
 
+$('skill-repo-update')?.addEventListener('click', () => updateSkillRepo());
 $('refresh-logs').addEventListener('click', () => loadLogs());
 $('clear-logs').addEventListener('click', () => clearLogs());
 
@@ -3547,6 +3576,7 @@ function render() {
   renderDecisionPolicy(state.decisionPolicy);
   renderStrategy(state.strategy);
   renderOkr(state.okr);
+  renderSkillRepo(state.skillRepo);
   set('team-supabase-url', (config.team && config.team.supabase_url) || '');
   set('team-supabase-anon-key', (config.team && config.team.supabase_anon_key) || '');
   renderTeam(state.team);
@@ -4061,6 +4091,57 @@ function secretValue(key) {
 
 // --- Team (LEO-282/283) ----------------------------------------------------
 // The panel renders entirely from state.team, which the server builds from the
+// The skill lives in a git checkout that ~/.claude/skills/weekly-review points
+// at, so updating it is a pull. The button is disabled whenever the repo cannot
+// be fast-forwarded, and says why, rather than failing after the click.
+function renderSkillRepo(repo) {
+  var status = $('skill-repo-status');
+  var blocked = $('skill-repo-blocked');
+  var button = $('skill-repo-update');
+  if (!status || !button) return;
+  repo = repo || {};
+  if (!repo.isGitRepo) {
+    status.textContent = repo.workdir || '(未配置 weekly-review skill)';
+    button.disabled = true;
+  } else {
+    var parts = [repo.branch + ' @ ' + repo.commit, repo.subject];
+    if (repo.behind > 0) parts.push('落后远端 ' + repo.behind + ' 个提交');
+    else if (repo.behind === 0) parts.push('与上次 fetch 时的远端一致');
+    status.textContent = parts.filter(Boolean).join('  ·  ');
+    button.disabled = Boolean(repo.blocked);
+  }
+  if (blocked) {
+    blocked.hidden = !repo.blocked;
+    blocked.textContent = repo.blocked || '';
+  }
+}
+
+async function updateSkillRepo() {
+  var button = $('skill-repo-update');
+  var result = $('skill-repo-result');
+  var commits = $('skill-repo-commits');
+  if (!button) return;
+  button.disabled = true;
+  if (result) result.textContent = '正在 fetch + pull…';
+  if (commits) commits.hidden = true;
+  try {
+    const response = await fetch('/api/skills/update', { method: 'POST' });
+    const data = await response.json();
+    if (result) result.textContent = data.ok ? data.message : (data.error || data.message || '更新失败');
+    if (commits && data.commits && data.commits.length) {
+      commits.textContent = data.commits.join('\n');
+      commits.hidden = false;
+    }
+    // The button's own enabled state comes from the refreshed repo state, so a
+    // repo that just became dirty or diverged stays disabled with a reason.
+    if (data.state) renderSkillRepo(data.state);
+    else button.disabled = false;
+  } catch (error) {
+    if (result) result.textContent = '更新失败：' + error;
+    button.disabled = false;
+  }
+}
+
 // local session file. Nothing here runs on page load, so an unreachable
 // Supabase can only ever make a button fail, never the console.
 function renderTeam(team) {
