@@ -200,6 +200,81 @@ test('updating a non-repo fails cleanly', async () => {
   assert.equal(result.commits.length, 0);
 });
 
+// --- where the CLI looks for the skill ----------------------------------------
+
+/** Run `fn` with `$HOME` pointed at a throwaway directory. */
+async function withHome(fn: (home: string) => Promise<void>): Promise<void> {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-os-skillhome-'));
+  CREATED.push(home);
+  const previous = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    await fn(home);
+  } finally {
+    if (previous === undefined) delete process.env.HOME;
+    else process.env.HOME = previous;
+  }
+}
+
+function linkSkill(home: string, cliHome: string, workdir: string): void {
+  const dir = path.join(home, cliHome, 'skills');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.symlinkSync(workdir, path.join(dir, 'weekly-review'));
+}
+
+test('both Claude and Codex skill directories are reported, not just Claude', async () => {
+  await withHome(async (home) => {
+    const { workdir } = await repoWithOrigin();
+    const state = await readSkillRepoState(configFor(workdir));
+    assert.deepEqual(state.installs.map((link) => link.cli), ['claude', 'codex']);
+    assert.equal(state.installs[0].path, path.join(home, '.claude', 'skills', 'weekly-review'));
+    assert.equal(state.installs[1].path, path.join(home, '.codex', 'skills', 'weekly-review'));
+  });
+});
+
+test('a Codex-only install is recognised as linked', async () => {
+  // Regression: the install path was hardcoded to ~/.claude, so a Codex user's
+  // skill directory was never looked at and always reported as absent.
+  await withHome(async (home) => {
+    const { workdir } = await repoWithOrigin();
+    linkSkill(home, '.codex', workdir);
+    const state = await readSkillRepoState(configFor(workdir));
+    const codex = state.installs.find((link) => link.cli === 'codex')!;
+    const claude = state.installs.find((link) => link.cli === 'claude')!;
+    assert.equal(codex.linked, true, 'the Codex entry resolves to the workdir');
+    assert.equal(claude.linked, false, 'nothing is installed for Claude');
+    assert.equal(claude.target, '', 'a missing directory reports no target');
+    assert.equal(state.installPath, codex.path, 'the linked entry is the one surfaced');
+    assert.equal(state.installTarget, fs.realpathSync(workdir));
+  });
+});
+
+test('an entry that is a copy rather than a symlink is reported as not linked', async () => {
+  // The case that motivated this: a copied skill directory means Update changes
+  // nothing the CLI loads, and that has to be visible rather than silently fine.
+  await withHome(async (home) => {
+    const { workdir } = await repoWithOrigin();
+    const copy = path.join(home, '.codex', 'skills', 'weekly-review');
+    fs.mkdirSync(copy, { recursive: true });
+    fs.writeFileSync(path.join(copy, 'SKILL.md'), '# a copy\n', 'utf8');
+    const state = await readSkillRepoState(configFor(workdir));
+    const codex = state.installs.find((link) => link.cli === 'codex')!;
+    assert.equal(codex.target, fs.realpathSync(copy), 'the directory exists');
+    assert.equal(codex.linked, false, 'but it is not the checkout being updated');
+    assert.equal(state.blocked, '', 'an unlinked copy does not block the git update itself');
+  });
+});
+
+test('with nothing installed anywhere, state still reports a usable default path', async () => {
+  await withHome(async (home) => {
+    const { workdir } = await repoWithOrigin();
+    const state = await readSkillRepoState(configFor(workdir));
+    assert.ok(state.installs.every((link) => !link.linked && link.target === ''));
+    assert.equal(state.installPath, path.join(home, '.claude', 'skills', 'weekly-review'));
+    assert.equal(state.installTarget, '');
+  });
+});
+
 async function run(): Promise<void> {
   let passed = 0;
   let failed = 0;

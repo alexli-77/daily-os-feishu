@@ -7,11 +7,15 @@ import { runCommand } from '../utils/command.js';
 /**
  * Updating the weekly-review skill from the console.
  *
- * The skill is not a copied bundle. `~/.claude/skills/weekly-review` is a
- * symlink to the life-review-os checkout, and that checkout is also the
- * `workdir` this app shells into. So "update the skill" is one operation on one
- * directory — `git pull --ff-only` — and both the Claude CLI and Daily OS see
- * the result immediately. There is nothing to copy and nothing to keep in sync.
+ * The skill is not a copied bundle. The CLI's skill entry is a symlink to the
+ * life-review-os checkout, and that checkout is also the `workdir` this app
+ * shells into. So "update the skill" is one operation on one directory —
+ * `git pull --ff-only` — and both the CLI and Daily OS see the result
+ * immediately. There is nothing to copy and nothing to keep in sync.
+ *
+ * Which CLI is a per-install question: Claude Code reads `~/.claude/skills`,
+ * Codex reads `~/.codex/skills`, and both are supported skill providers. So the
+ * install location is discovered rather than assumed — see `skillInstallLinks()`.
  *
  * Two rules make the button safe to press without reading the code first:
  *
@@ -22,10 +26,29 @@ import { runCommand } from '../utils/command.js';
  *     gitignored, so untracked files are deliberately not counted.
  */
 
+/** One CLI's skill directory entry for this skill. */
+export interface SkillInstallLink {
+  /** Which CLI's skill directory this is, e.g. `claude` or `codex`. */
+  cli: string;
+  path: string;
+  /** Where `path` resolves to, or '' when it does not exist. */
+  target: string;
+  /** True when this CLI's entry resolves to the workdir Daily OS updates. */
+  linked: boolean;
+}
+
 export interface SkillRepoState {
   skillId: string;
   workdir: string;
-  /** Where the Claude CLI looks, and what it resolves to when it is a symlink. */
+  /**
+   * Every known CLI skill directory for this skill, so the console can say which
+   * CLI actually sees the checkout being updated.
+   */
+  installs: SkillInstallLink[];
+  /**
+   * The CLI entry pointing at `workdir`; falls back to the first that exists,
+   * then to the first known location. Kept for callers that predate `installs`.
+   */
   installPath: string;
   installTarget: string;
   available: boolean;
@@ -55,8 +78,51 @@ export interface SkillUpdateResult {
 const SKILL_ID = 'weekly-review';
 const GIT_TIMEOUT_MS = 120000;
 
-export function skillInstallPath(skillId = SKILL_ID): string {
-  return path.join(os.homedir(), '.claude', 'skills', skillId);
+/**
+ * CLI skill directories this app knows about. Both Claude Code and Codex are
+ * supported skill providers (`skills.registry[].provider`), and each reads its
+ * own directory, so neither can be assumed.
+ */
+const CLI_SKILL_HOMES: ReadonlyArray<{ cli: string; home: string }> = [
+  { cli: 'claude', home: '.claude' },
+  { cli: 'codex', home: '.codex' },
+];
+
+function realpathOrEmpty(target: string): string {
+  try {
+    return fs.realpathSync(target);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Where each supported CLI would look for this skill, and whether that entry
+ * resolves to `workdir` — the checkout Daily OS actually updates. An entry that
+ * is a copy rather than a symlink comes back `linked: false`, which is the
+ * signal that pressing Update will not change what the CLI loads.
+ */
+export function skillInstallLinks(workdir = '', skillId = SKILL_ID): SkillInstallLink[] {
+  const resolvedWorkdir = workdir ? realpathOrEmpty(workdir) : '';
+  return CLI_SKILL_HOMES.map(({ cli, home }) => {
+    const installPath = path.join(os.homedir(), home, 'skills', skillId);
+    const target = realpathOrEmpty(installPath);
+    return {
+      cli,
+      path: installPath,
+      target,
+      linked: Boolean(target) && Boolean(resolvedWorkdir) && target === resolvedWorkdir,
+    };
+  });
+}
+
+/**
+ * The single install path worth showing: the one linked to `workdir`, else the
+ * first that exists at all, else the first known location.
+ */
+export function skillInstallPath(skillId = SKILL_ID, workdir = ''): string {
+  const links = skillInstallLinks(workdir, skillId);
+  return (links.find((link) => link.linked) || links.find((link) => link.target) || links[0]).path;
 }
 
 function workdirFor(config: AppConfig): string {
@@ -76,18 +142,14 @@ async function git(cwd: string, args: string[]): Promise<{ ok: boolean; out: str
 /** Local-only: never touches the network, so the console can render it on every load. */
 export async function readSkillRepoState(config: AppConfig): Promise<SkillRepoState> {
   const workdir = workdirFor(config);
-  const installPath = skillInstallPath();
-  let installTarget = '';
-  try {
-    installTarget = fs.realpathSync(installPath);
-  } catch {
-    installTarget = '';
-  }
+  const installs = skillInstallLinks(workdir);
+  const primary = installs.find((link) => link.linked) || installs.find((link) => link.target) || installs[0];
   const state: SkillRepoState = {
     skillId: SKILL_ID,
     workdir,
-    installPath,
-    installTarget,
+    installs,
+    installPath: primary.path,
+    installTarget: primary.target,
     available: Boolean(workdir) && fs.existsSync(workdir),
     isGitRepo: false,
     branch: '',
