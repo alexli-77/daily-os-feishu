@@ -23,6 +23,7 @@ import { startDecisionOnboarding } from '../decision/onboarding.js';
 import { ensureDecisionPolicyFiles } from '../decision/policy.js';
 import { BIWEEKLY_STRATEGY_FILE, defaultBiweeklyStrategy, expandPath } from '../skills/runner.js';
 import { readSkillRepoState, updateSkillRepo } from '../skills/update.js';
+import { generateCycleReview } from '../skills/life-review-os.js';
 import { readOkrEditorState, writeOkrFile } from '../okr/editor.js';
 import { normalizeOkrMarkdown } from '../okr/normalize.js';
 import type { OkrLevel } from '../okr/editor.js';
@@ -411,6 +412,7 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
     // pair of disk reads.
     if (request.method === 'GET' && url.pathname === '/api/cycles/state') return sendJson(response, await readCyclesPageState(options));
     if (request.method === 'POST' && url.pathname === '/api/cycles/section') return sendJson(response, await saveCycleSection(options, await readJson(request)));
+    if (request.method === 'POST' && url.pathname === '/api/cycles/review') return sendJson(response, await generateCycleReviewSection(options, await readJson(request)));
     // Team / Supabase (LEO-282/283/284/285). Writes, so the member gate above
     // already rejects the member role; nothing here is on the member whitelist.
     // /api/team/sync is matched first: the prefix handler below would otherwise
@@ -1123,6 +1125,45 @@ async function readCyclesPageState(options: UiServerOptions): Promise<Record<str
  * The user is always the author here: whatever they type is `source: 'user'`,
  * which is what stops a later planner run from overwriting it.
  */
+/**
+ * Draft the review for one local cycle, using life-review-os's own rules.
+ *
+ * Nothing is written: the prose comes back to the page as an unsaved draft. A
+ * generated opinion about a cycle the user lived through is theirs to read and
+ * edit before it becomes part of their record, so it goes through the same save
+ * button as anything they typed.
+ */
+async function generateCycleReviewSection(options: UiServerOptions, body: unknown): Promise<Record<string, unknown>> {
+  const request = readRecord(body);
+  const env = readEnvFile(options.envPath);
+  applyEnv(env);
+  const config = loadConfig(options.configPath);
+
+  // Same guard as the save path: a request naming an owner must name the
+  // signed-in account. Generating for a teammate would read their cached cycle
+  // and hand it back as something to save into this vault.
+  await assertLocalCycleWriteTarget(config, request.owner ?? request.ownerId);
+
+  const id = String(request.id || '').trim();
+  if (!parseCycleId(id)) throw new Error(`Invalid cycle id: ${id || '(empty)'}`);
+  const cycle = readCycle(config, id);
+  if (!cycle) throw new Error(`Cycle not found: ${id}`);
+
+  const priorities = cycle.sections['要务']?.content || '';
+  const retro = cycle.sections.retro?.content || '';
+  if (!priorities.trim() && !retro.trim()) {
+    throw new Error(`周期 ${cycle.cycle || id} 既没有要务也没有 retro，没有可以复盘的内容。先写 retro 再生成。`);
+  }
+
+  const review = await generateCycleReview(config, 'weekly-review', {
+    cycle: cycle.cycle || id,
+    mode: cycle.mode || 'biweekly',
+    priorities,
+    retro,
+  });
+  return { ok: true, id, review: review.text, chars: review.chars, hadRetro: Boolean(retro.trim()) };
+}
+
 async function saveCycleSection(options: UiServerOptions, body: unknown): Promise<Record<string, unknown>> {
   const request = readRecord(body);
   const env = readEnvFile(options.envPath);

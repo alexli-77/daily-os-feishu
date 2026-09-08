@@ -638,6 +638,7 @@ async function main(): Promise<void> {
 
     // Own view: exactly as before this change.
     check('my own view shows the editors', page.el('cycle-cards').hidden === false);
+    page.editMode('retro');
     check('my own view keeps the save buttons', page.el('cycle-actions-retro').hidden === false);
     check('my own view is editable', page.el('cycle-md-retro').readOnly !== true);
     check('my own view shows no read-only banner', page.el('cycle-readonly').hidden === true);
@@ -671,6 +672,7 @@ async function main(): Promise<void> {
     page.click('cycle-members', '');
     check('switching back restores my own cycle', page.el('cycle-md-priorities').value === '- 我的要务', page.el('cycle-md-priorities').value);
     check('my unsaved draft survived the round trip', page.el('cycle-md-retro').value === '还没保存的 retro', page.el('cycle-md-retro').value);
+    page.editMode('retro');
     check('the save controls come back', page.el('cycle-actions-retro').hidden === false);
     check('the read-only banner goes away', page.el('cycle-readonly').hidden === true);
 
@@ -688,6 +690,7 @@ async function main(): Promise<void> {
     page.render();
     check('signed out, no owner is selectable', !page.el('cycle-members').innerHTML.includes('data-owner-id'), page.el('cycle-members').innerHTML);
     check('signed out, the reason is shown', page.el('cycle-team-status').textContent.includes('尚未登录'), page.el('cycle-team-status').textContent);
+    page.editMode('retro');
     check('signed out, my own editors are untouched', page.el('cycle-cards').hidden === false && page.el('cycle-actions-retro').hidden === false);
     check('signed out, my own cycle still renders', page.el('cycle-md-priorities').value === '- 我的要务', page.el('cycle-md-priorities').value);
 
@@ -795,6 +798,7 @@ async function loadCyclesPage() {
      return {
        renderCycles: () => renderCyclesPage(),
        selectCycleOwner,
+       toggleCycleMode,
        // The page keeps { cycles, team }; the console kept the team view one
        // level deeper. Adapt here so the assertions read the same as before.
        setState: (next) => { cyclesData = { cycles: next.cycles, team: next.team && next.team.view }; },
@@ -815,7 +819,7 @@ async function loadCyclesPage() {
     windowStub.clearTimeout,
     windowStub.setInterval,
     windowStub.clearInterval,
-  ) as { renderCycles: () => void; selectCycleOwner: (ownerId: string) => void; setState: (next: unknown) => void };
+  ) as { renderCycles: () => void; selectCycleOwner: (ownerId: string) => void; toggleCycleMode: (key: string) => void; setState: (next: unknown) => void };
 
   return {
     el: get,
@@ -823,6 +827,14 @@ async function loadCyclesPage() {
     render: api.renderCycles,
     /** The switcher is delegated; call the handler the way a click would. */
     click: (_containerId: string, ownerId: string) => api.selectCycleOwner(ownerId),
+    /**
+     * A section with content opens in read mode, which has no save row. These
+     * assertions are about whether my own cards *can* be written, so put the
+     * card into edit mode first.
+     */
+    editMode: (key: string) => {
+      if (get('cycle-md-' + key).hidden) api.toggleCycleMode(key);
+    },
     fire: (id: string, type: string) => {
       for (const handler of get(id).listeners[type] || []) handler({ target: get(id) });
     },
