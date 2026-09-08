@@ -4209,6 +4209,12 @@ function renderSkillRepo(repo) {
     var parts = [repo.branch + ' @ ' + repo.commit, repo.subject];
     if (repo.behind > 0) parts.push('落后远端 ' + repo.behind + ' 个提交');
     else if (repo.behind === 0) parts.push('与上次 fetch 时的远端一致');
+    // Which CLI actually loads this checkout. Without it, Update can report
+    // success while the CLI keeps loading an unrelated copy of the skill.
+    var linked = (repo.installs || []).filter(function (link) { return link.linked; });
+    parts.push(linked.length
+      ? linked.map(function (link) { return link.cli; }).join(' / ') + ' CLI 已链接'
+      : '没有 CLI 链接到这个目录');
     status.textContent = parts.filter(Boolean).join('  ·  ');
     button.disabled = Boolean(repo.blocked);
   }
