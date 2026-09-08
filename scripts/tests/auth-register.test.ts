@@ -132,6 +132,20 @@ async function main(): Promise<void> {
     const secondSeed = auth.findUser('admin')?.avatar_seed;
     check('the bootstrap admin got a seed too', Boolean(secondSeed), 'blank seed renders as a shared avatar');
     check('two accounts do not share an avatar', stored?.avatar_seed !== secondSeed);
+
+    // An account that predates the avatar_seed column carries ''. The renderer
+    // falls back to the username for those, so nothing looks broken — which is
+    // precisely why this needs asserting: a name-derived avatar changes when
+    // the name does, and the stored seed exists to stop that.
+    const { dbSetUserAvatarSeed, dbUsersMissingAvatarSeed } = await import('../../src/storage/db.js');
+    dbSetUserAvatarSeed('leon', '');
+    check('an account with no seed is detected', dbUsersMissingAvatarSeed().includes('leon'));
+    auth.ensureAuthInitialized();
+    const backfilled = auth.findUser('leon')?.avatar_seed;
+    check('startup backfills a seed for it', Boolean(backfilled), 'still empty after ensureAuthInitialized');
+    check('and leaves no account without one', dbUsersMissingAvatarSeed().length === 0, dbUsersMissingAvatarSeed().join(','));
+    auth.ensureAuthInitialized();
+    check('a second start does not reroll it', auth.findUser('leon')?.avatar_seed === backfilled, 'the avatar would change on every restart');
   } finally {
     await controls.stop();
     process.chdir(originalCwd);
