@@ -646,10 +646,15 @@ function renderCyclesPage(ctx: PageContext): string {
             <h3 id="cycle-title-${card.key}">${escapeHtml(card.title)}<span class="tag" id="cycle-template-${card.key}" hidden>模板</span></h3>
             <p class="muted small" id="cycle-meta-${card.key}"></p>
           </div>
-          <button type="button" class="secondary compact" data-cycle-zoom="${card.key}" id="cycle-zoom-${card.key}">放大</button>
+          <div class="cycle-head-actions">
+            <button type="button" class="secondary compact" data-cycle-mode="${card.key}" id="cycle-mode-${card.key}">编辑</button>
+            <button type="button" class="secondary compact" data-cycle-zoom="${card.key}" id="cycle-zoom-${card.key}">放大</button>
+          </div>
         </div>
+        <div class="cycle-read" id="cycle-read-${card.key}" hidden></div>
         <textarea id="cycle-md-${card.key}" spellcheck="false" placeholder="${escapeHtml(card.placeholder)}"></textarea>
         <div class="cycle-card-actions" id="cycle-actions-${card.key}">
+          ${card.key === 'review' ? '<button type="button" class="secondary" id="cycle-generate-review">用 AI 生成 review</button>' : ''}
           <button type="button" id="cycle-save-${card.key}" data-cycle-save="${card.key}">${escapeHtml(card.save)}</button>
         </div>
         <p class="muted small" id="cycle-status-${card.key}"></p>
@@ -691,6 +696,7 @@ function renderCyclesPage(ctx: PageContext): string {
         <div><h3 id="cycle-modal-title"></h3><p class="muted small" id="cycle-modal-meta"></p></div>
         <button type="button" class="secondary compact" id="cycle-modal-close">关闭 (Esc)</button>
       </div>
+      <div class="cycle-read" id="cycle-modal-read" hidden></div>
       <textarea id="cycle-modal-text" spellcheck="false"></textarea>
       <div class="cycle-card-actions" id="cycle-modal-actions">
         <button type="button" id="cycle-modal-save">保存</button>
@@ -698,6 +704,7 @@ function renderCyclesPage(ctx: PageContext): string {
       <p class="muted small" id="cycle-modal-status"></p>
     </div>
   </div>
+  <script>window.__LINEAR_WS__=${JSON.stringify(ctx.config.sources.linear.workspace)};</script>
   <script>${CYCLES_JS}</script>`;
 }
 
@@ -741,6 +748,26 @@ var selectedOwnerId = '';
 var selectedCycleByOwner = new Map();
 var cycleModalKey = '';
 var cycleModalReturn = null;
+// Sections the user has explicitly switched, slug -> 'read' | 'edit'.
+//
+// Only explicit choices go in here. A section nobody has touched defaults per
+// cycle: read when it has something to read, edit when it is empty. Storing the
+// auto-default too would make one empty section sticky — open a cycle whose
+// review is blank, and every cycle after it would show raw markdown.
+var cycleModes = new Map();
+
+function cycleModeFor(key, hasContent) {
+  if (cycleModes.has(key)) return cycleModes.get(key);
+  // A pre-filled retro scaffold counts as text but not as content: reading an
+  // empty template is pointless, and typing into it is the only reason it is
+  // there. Anything actually written opens for reading.
+  if (key === 'retro' && cycleTemplatedNow) return 'edit';
+  return hasContent ? 'read' : 'edit';
+}
+
+// Whether the retro currently in the textarea is the untouched scaffold. Set by
+// the render pass, which is the only place that knows.
+var cycleTemplatedNow = false;
 
 function cycleEl(id) { return document.getElementById(id); }
 function cycleSetText(id, text) { var el = cycleEl(id); if (el) el.textContent = text; }
@@ -754,6 +781,164 @@ function cycleEscapeHtml(value) {
 function cycleTime(value) {
   var date = new Date(value);
   return isNaN(date.getTime()) ? (value || '') : date.toLocaleString();
+}
+
+// --- read mode ---------------------------------------------------------------
+//
+// These sections are markdown in a fixed shape, not free-form documents, so a
+// full markdown parser would be both overkill and a liability. What matters is
+// that every input line ends up somewhere in the output: a section that fails
+// to match its expected shape falls back to plain paragraphs rather than
+// rendering empty. Losing a line of someone's retro to a parser is worse than
+// showing it unstyled.
+
+/** Inline: **bold**, and a bare Linear id becomes a link. */
+function cycleInline(text) {
+  var html = cycleEscapeHtml(text);
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  var ws = (typeof window !== 'undefined' && window.__LINEAR_WS__) || '';
+  html = html.replace(/\b([A-Z][A-Z0-9]*-\d+)\b/g, function (match, id) {
+    var href = ws
+      ? 'https://linear.app/' + encodeURIComponent(ws) + '/issue/' + encodeURIComponent(id)
+      : 'https://linear.app/issue/' + encodeURIComponent(id);
+    return '<a class="tag tag-link" href="' + href + '" target="_blank" rel="noopener">' + id + '</a>';
+  });
+  return html;
+}
+
+function cycleParagraphs(lines) {
+  var out = '';
+  for (var i = 0; i < lines.length; i += 1) {
+    var line = lines[i].trim();
+    if (line) out += '<p>' + cycleInline(line) + '</p>';
+  }
+  return out;
+}
+
+/** 要务: "### OKR row" groups of "- item", with **MIT** lifted into a badge. */
+function cycleRenderPriorities(text) {
+  var lines = String(text).split('\n');
+  var groups = [];
+  var current = null;
+  var loose = [];
+  for (var i = 0; i < lines.length; i += 1) {
+    var line = lines[i].trim();
+    if (!line) continue;
+    var heading = line.match(/^#{1,6}\s+(.*)$/);
+    if (heading) {
+      current = { title: heading[1], items: [] };
+      groups.push(current);
+      continue;
+    }
+    var bullet = line.match(/^[-*+]\s+(.*)$/);
+    var body = bullet ? bullet[1] : line;
+    if (current) current.items.push(body);
+    else loose.push(body);
+  }
+  if (groups.length === 0 && loose.length === 0) return '';
+
+  var html = loose.length ? '<ul class="cy-tasks">' + cycleTaskItems(loose) + '</ul>' : '';
+  for (var g = 0; g < groups.length; g += 1) {
+    html += '<div class="cy-group"><h4 class="cy-group-title">' + cycleInline(groups[g].title) + '</h4>';
+    html += groups[g].items.length
+      ? '<ul class="cy-tasks">' + cycleTaskItems(groups[g].items) + '</ul>'
+      : '<p class="muted small">这一行下没有条目。</p>';
+    html += '</div>';
+  }
+  return html;
+}
+
+function cycleTaskItems(items) {
+  var html = '';
+  for (var i = 0; i < items.length; i += 1) {
+    var text = items[i];
+    // MIT is emphasis in the file and a badge here; strip it wherever it sits
+    // so it cannot show up twice.
+    var mit = /\*\*MIT\*\*|(^|\s)MIT(\s|$)/.test(text);
+    var body = text.replace(/\*\*MIT\*\*/g, '').replace(/(^|\s)MIT(?=\s|$)/g, '$1').trim();
+    html += '<li class="cy-task">' + (mit ? '<span class="cy-badge">MIT</span>' : '') + '<span>' + cycleInline(body) + '</span></li>';
+  }
+  return html;
+}
+
+// The same three headings life-review-os splits a retro on. Kept loose about the
+// emoji and about 做得好 / 做的好 for exactly the reason it is: both spellings
+// are in the real files.
+//
+// The character class has to admit more than Extended_Pictographic. The real
+// files use 👍🏻 and 💪🏻, and a skin-tone modifier (U+1F3FB) is Emoji_Modifier,
+// not Extended_Pictographic — so matching only the latter recognised 😄状态 and
+// silently swallowed the other two sections into it.
+var CYCLE_EMOJI_PREFIX = '^\\s*[\\p{Extended_Pictographic}\\p{Emoji_Modifier}\\uFE0F\\u200D]*\\s*';
+var CYCLE_RETRO_HEADINGS = [
+  { key: 'status', label: '状态', icon: '😄', test: new RegExp(CYCLE_EMOJI_PREFIX + '状态\\s*[:：]?\\s*$', 'u') },
+  { key: 'good', label: '做的好', icon: '👍🏻', test: new RegExp(CYCLE_EMOJI_PREFIX + '做[得的]好\\s*[:：]?\\s*$', 'u') },
+  { key: 'improve', label: '待改进', icon: '💪🏻', test: new RegExp(CYCLE_EMOJI_PREFIX + '待改进\\s*[:：]?\\s*$', 'u') },
+];
+
+/** retro: the Feishu column layout — three sections, with 状态 as field rows. */
+function cycleRenderRetro(text) {
+  var lines = String(text).split('\n');
+  var sections = [];
+  var current = null;
+  var preamble = [];
+  for (var i = 0; i < lines.length; i += 1) {
+    var line = lines[i];
+    var matched = null;
+    for (var h = 0; h < CYCLE_RETRO_HEADINGS.length; h += 1) {
+      if (CYCLE_RETRO_HEADINGS[h].test.test(line)) { matched = CYCLE_RETRO_HEADINGS[h]; break; }
+    }
+    if (matched) {
+      current = { def: matched, lines: [] };
+      sections.push(current);
+      continue;
+    }
+    if (current) current.lines.push(line);
+    else preamble.push(line);
+  }
+  // No recognised heading at all: this retro predates the template, or was
+  // written free-form. Show it rather than showing nothing.
+  if (sections.length === 0) return cycleParagraphs(lines);
+
+  var html = cycleParagraphs(preamble);
+  for (var s = 0; s < sections.length; s += 1) {
+    var section = sections[s];
+    html += '<div class="cy-retro-section"><h4 class="cy-group-title">' + section.def.icon + ' ' + cycleEscapeHtml(section.def.label) + '</h4>';
+    html += section.def.key === 'status' ? cycleRenderStatus(section.lines) : cycleParagraphs(section.lines);
+    html += '</div>';
+  }
+  return html;
+}
+
+/**
+ * The 状态 block is "情绪：正常" style field lines plus free text. A field whose
+ * value is empty is still shown: an unanswered 精力 is information.
+ */
+function cycleRenderStatus(lines) {
+  var rows = '';
+  var rest = [];
+  for (var i = 0; i < lines.length; i += 1) {
+    var line = lines[i].trim();
+    if (!line) continue;
+    var field = line.match(/^([^:：]{1,14})[:：]\s*(.*)$/);
+    if (field && !/[。！？]/.test(field[1])) {
+      var value = field[2].trim();
+      rows += '<div class="cy-field"><dt>' + cycleEscapeHtml(field[1].trim()) + '</dt><dd>' +
+        (value ? cycleInline(value) : '<span class="muted">（未填）</span>') + '</dd></div>';
+      continue;
+    }
+    rest.push(line);
+  }
+  return (rows ? '<dl class="cy-fields">' + rows + '</dl>' : '') + cycleParagraphs(rest);
+}
+
+/** Render one section for reading. '' means "nothing to show". */
+function cycleRenderSection(key, text) {
+  var value = String(text == null ? '' : text).trim();
+  if (!value) return '';
+  if (key === 'priorities') return cycleRenderPriorities(value) || cycleParagraphs(value.split('\n'));
+  if (key === 'retro') return cycleRenderRetro(value);
+  return cycleParagraphs(value.split('\n'));
 }
 function cycleSectionName(key) {
   for (var i = 0; i < CYCLE_SECTION_KEYS.length; i += 1) if (CYCLE_SECTION_KEYS[i][0] === key) return CYCLE_SECTION_KEYS[i][1];
@@ -956,6 +1141,7 @@ function renderCycleDetail(item, member, team) {
     else cycleSetValue('cycle-md-' + key, templated ? CYCLE_RETRO_TEMPLATE : content);
     var templateTag = cycleEl('cycle-template-' + key);
     if (templateTag) templateTag.hidden = !templated;
+    if (key === 'retro') cycleTemplatedNow = templated;
     // A missing key and an empty string mean different things: never written vs.
     // written and then cleared.
     cycleSetText('cycle-meta-' + key, stored
@@ -975,8 +1161,53 @@ function renderCycleDetail(item, member, team) {
     // control to click at all. The server rejects the write regardless.
     var actions = cycleEl('cycle-actions-' + key);
     if (actions) actions.hidden = readOnly;
+    applyCycleMode(key);
   });
+  var generate = cycleEl('cycle-generate-review');
+  // Generating a review rewrites a section of a file, so it is offered only for
+  // my own cycles, and only when that file can be written at all.
+  if (generate) generate.disabled = broken || readOnly || !selectedCycleId;
   if (cycleModalKey) syncCycleModal();
+}
+
+/**
+ * Show either the rendered view or the textarea for one section.
+ *
+ * The read view is built from the textarea's *current* value rather than from
+ * the stored section, so switching to it mid-edit shows what would be saved,
+ * not what is on disk.
+ */
+function applyCycleMode(key) {
+  var textarea = cycleEl('cycle-md-' + key);
+  var read = cycleEl('cycle-read-' + key);
+  var toggle = cycleEl('cycle-mode-' + key);
+  var value = textarea ? textarea.value : '';
+  var rendered = cycleRenderSection(key, value);
+  var mode = cycleModeFor(key, Boolean(value.trim()));
+  if (mode === 'read' && !rendered) mode = 'edit';
+  if (read) {
+    read.hidden = mode !== 'read';
+    if (mode === 'read') read.innerHTML = rendered;
+  }
+  if (textarea) textarea.hidden = mode === 'read';
+  // The save row is hidden while reading as well as for a teammate. Both mean
+  // the same thing here — there is nothing this view can write — and expressing
+  // it as one property keeps "is the save control reachable" a single question.
+  var actions = cycleEl('cycle-actions-' + key);
+  if (actions) actions.hidden = (textarea ? textarea.readOnly : false) || mode === 'read';
+  if (toggle) {
+    toggle.textContent = mode === 'read' ? '编辑' : '阅读';
+    // Nothing to read yet, so the toggle would only bounce back.
+    toggle.disabled = !rendered;
+  }
+}
+
+function toggleCycleMode(key) {
+  var textarea = cycleEl('cycle-md-' + key);
+  var current = cycleModeFor(key, Boolean(textarea && textarea.value.trim()));
+  cycleModes.set(key, current === 'read' ? 'edit' : 'read');
+  applyCycleMode(key);
+  if (cycleModalKey === key) syncCycleModal();
 }
 
 function selectCycle(id) {
@@ -1045,6 +1276,43 @@ async function runCycleSave(key) {
   }
 }
 
+/**
+ * Ask life-review-os to draft the review for the selected cycle.
+ *
+ * The result lands in the textarea as an unsaved draft, never straight into the
+ * file. It is a generated opinion about a cycle the user lived through — they
+ * get to read it, edit it and decide, the same as any other section.
+ */
+async function runCycleReviewGeneration() {
+  var button = cycleEl('cycle-generate-review');
+  if (!selectedCycleId || selectedOwnerId) return;
+  var previous = button ? button.textContent : '';
+  if (button) { button.disabled = true; button.textContent = '生成中…（约 1-2 分钟）'; }
+  cycleSetText('cycle-status-review', '正在用 life-review-os 的复盘规则生成…');
+  try {
+    const response = await fetch('/api/cycles/review', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: selectedCycleId }),
+    });
+    const data = await response.json();
+    if (!data.ok) throw new Error(data.error || '生成失败');
+    cycleModes.set('review', 'edit');
+    cycleSetValue('cycle-md-review', data.review || '');
+    cycleDrafts.set(selectedCycleId + '::review', data.review || '');
+    applyCycleMode('review');
+    if (cycleModalKey === 'review') syncCycleModal();
+    cycleSetText('cycle-status-review', '已生成 ' + String(data.review || '').length + ' 字，还没保存——看过之后点「保存 review」。');
+    cycleToast('review 草稿已生成');
+  } catch (error) {
+    var message = error && error.message ? error.message : String(error);
+    cycleSetText('cycle-status-review', '生成失败：' + message);
+    cycleToast('生成失败：' + message);
+  } finally {
+    if (button) { button.disabled = false; button.textContent = previous || '用 AI 生成 review'; }
+  }
+}
+
 // --- zoom dialog -------------------------------------------------------------
 
 /**
@@ -1080,6 +1348,19 @@ function syncCycleModal() {
   if (actions) actions.hidden = Boolean(textarea.readOnly);
   var save = cycleEl('cycle-modal-save');
   if (save) { save.disabled = Boolean(textarea.readOnly || textarea.disabled); save.textContent = '保存' + cycleSectionName(key); }
+  // The dialog mirrors the card's mode for the same reason it mirrors its
+  // read-only state: zooming a section you are reading should enlarge what you
+  // were reading, not drop you into raw markdown.
+  var rendered = cycleRenderSection(key, textarea.value);
+  var mode = cycleModeFor(key, Boolean(textarea.value.trim()));
+  if (mode === 'read' && !rendered) mode = 'edit';
+  var read = cycleEl('cycle-modal-read');
+  if (read) {
+    read.hidden = mode !== 'read';
+    if (mode === 'read') read.innerHTML = rendered;
+  }
+  if (modalText) modalText.hidden = mode === 'read';
+  if (actions) actions.hidden = Boolean(textarea.readOnly) || mode === 'read';
 }
 
 function closeCycleModal() {
@@ -1127,8 +1408,12 @@ if (cycleEl('cycle-members')) cycleEl('cycle-members').addEventListener('click',
   if (button) selectCycleOwner(button.dataset.ownerId || '');
 });
 if (cycleEl('cycle-cards')) cycleEl('cycle-cards').addEventListener('click', function (event) {
+  var mode = event.target.closest ? event.target.closest('[data-cycle-mode]') : null;
+  if (mode) { toggleCycleMode(mode.dataset.cycleMode); return; }
   var zoom = event.target.closest ? event.target.closest('[data-cycle-zoom]') : null;
   if (zoom) { openCycleModal(zoom.dataset.cycleZoom); return; }
+  var generate = event.target.closest ? event.target.closest('#cycle-generate-review') : null;
+  if (generate) { void runCycleReviewGeneration(); return; }
   var save = event.target.closest ? event.target.closest('[data-cycle-save]') : null;
   if (save) void runCycleSave(save.dataset.cycleSave);
 });
@@ -1596,6 +1881,20 @@ button.danger{background:var(--danger);border-color:var(--danger)}
 .cycle-cards[hidden]{display:none}
 .cycle-card textarea,.cycle-modal-card textarea{width:100%;font:inherit;padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--surface);resize:vertical}
 .cycle-card textarea{min-height:11rem}
+.cycle-head-actions{display:flex;gap:6px;align-items:center}
+.cycle-read{font-size:13px;line-height:1.7}
+.cycle-read p{margin:0 0 8px}
+.cycle-read>:last-child{margin-bottom:0}
+.cy-group,.cy-retro-section{margin:0 0 14px}
+.cy-group:last-child,.cy-retro-section:last-child{margin-bottom:0}
+.cy-group-title{margin:0 0 6px;font-size:13px;font-weight:600;color:var(--text)}
+.cy-tasks{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.cy-task{display:flex;gap:8px;align-items:baseline;padding-left:10px;border-left:2px solid var(--border);overflow-wrap:anywhere}
+.cy-badge{flex:none;font-size:10px;font-weight:700;letter-spacing:.04em;padding:1px 6px;border-radius:6px;background:var(--danger);color:#fff}
+.cy-fields{margin:0 0 8px;display:grid;grid-template-columns:auto 1fr;gap:2px 12px}
+.cy-field{display:contents}
+.cy-fields dt{color:var(--muted);font-size:12px}
+.cy-fields dd{margin:0;overflow-wrap:anywhere}
 /* Read-only is not broken, so it borrows the muted surface rather than the
    danger colours: nothing is wrong, this is just someone else's file. */
 .cycle-card textarea[readonly],.cycle-modal-card textarea[readonly]{background:var(--surface-2)}

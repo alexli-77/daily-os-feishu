@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -134,6 +135,47 @@ function reviewPreview(writeback: LifeReviewOsWriteback): { text: string; retroH
   return { text, retroHeader: stringValue(review.source_task_header) || stringValue(review.target_retro_header) || 'retro' };
 }
 
+export interface CycleReviewInput {
+  cycle: string;
+  mode: string;
+  priorities: string;
+  retro: string;
+  context?: string;
+}
+
+/**
+ * Draft a review for one already-finished cycle.
+ *
+ * The full biweekly reviews a cycle it reads out of Feishu; this asks for the
+ * same thing about a cycle whose text we already hold locally, without
+ * re-planning and without a Feishu round trip. The rules and the style contract
+ * live in life-review-os, so the prompt is built there — this only carries the
+ * content across and hands back the prose.
+ *
+ * The payload goes through a temp file, not argv: a retro is multi-line and can
+ * run to thousands of characters.
+ */
+export async function generateCycleReview(config: AppConfig, skillId: string, input: CycleReviewInput): Promise<{ text: string; chars: number }> {
+  const entry = skillEntry(config, skillId);
+  const file = path.join(os.tmpdir(), `daily-os-review-${crypto.randomUUID()}.json`);
+  fs.writeFileSync(file, JSON.stringify(input), 'utf8');
+  try {
+    // Same ceiling as a full run's provider call: this is one model round trip,
+    // and the drafting model is the same slow one.
+    const parsed = await callLifeReviewOs(entry, ['review-cycle', '--input', file, '--json'], 'review-cycle', 1500000);
+    const review = parsed.review && typeof parsed.review === 'object' ? (parsed.review as Record<string, unknown>) : {};
+    const text = stringValue(review.text).trim();
+    if (!text) throw new Error('life-review-os returned an empty review.');
+    return { text, chars: text.length };
+  } finally {
+    try {
+      fs.unlinkSync(file);
+    } catch {
+      // A leftover temp file is not worth failing a successful review over.
+    }
+  }
+}
+
 export async function executeLifeReviewOsWriteback(config: AppConfig, skillId: string, runId: string): Promise<LifeReviewOsWritebackResult> {
   const entry = skillEntry(config, skillId);
   const parsed = await callLifeReviewOs(entry, ['writeback', '--run-id', runId, '--json'], 'writeback');
@@ -212,9 +254,9 @@ function assertWritebackReady(writeback: LifeReviewOsWriteback): void {
   }
 }
 
-async function callLifeReviewOs(entry: SkillEntry, args: string[], label: string): Promise<Record<string, unknown>> {
+async function callLifeReviewOs(entry: SkillEntry, args: string[], label: string, timeoutMs = 300000): Promise<Record<string, unknown>> {
   const cli = requireLifeReviewOsCli(entry);
-  const result = await runCommand('node', [cli, ...args], { cwd: lifeReviewOsRoot(cli), timeoutMs: 300000 });
+  const result = await runCommand('node', [cli, ...args], { cwd: lifeReviewOsRoot(cli), timeoutMs });
   return parseLifeReviewOsJson(result.stdout, result.stderr, label, result.ok);
 }
 
