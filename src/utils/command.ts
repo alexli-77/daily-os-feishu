@@ -42,6 +42,13 @@ export function runCommand(
       const detail = timedOut ? `${stderr}\n[timeout] killed after ${options.timeoutMs}ms (SIGTERM)`.trim() : stderr;
       resolve({ ok: code === 0 && !timedOut, code, stdout, stderr: detail, timedOut });
     });
+    // A child that exits before draining stdin makes this write fail with
+    // EPIPE. Nothing listens on the stdin stream, so that becomes an uncaught
+    // exception and takes the whole process down — the outcome is already
+    // covered by the 'error' and 'close' handlers above, which resolve with
+    // whatever the child managed to produce. Swallow it here so a short-lived
+    // child cannot kill its caller.
+    child.stdin.on('error', () => {});
     child.stdin.end(options.input ?? '');
   });
 }
