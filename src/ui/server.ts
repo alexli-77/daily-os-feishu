@@ -27,6 +27,8 @@ import { normalizeOkrMarkdown } from '../okr/normalize.js';
 import type { OkrLevel } from '../okr/editor.js';
 import { CYCLE_SECTIONS, cycleFilePath, cyclesDir, listCycles, parseCycleId, readCycle, writeSection } from '../cycles/file.js';
 import type { CycleSection } from '../cycles/file.js';
+import { assertLocalCycleWriteTarget, pushLocalCycle, readTeamViewState, startTeamSync, syncTeamOnce } from '../team/sync.js';
+import type { TeamSyncLoop } from '../team/sync.js';
 import { collectProgressCandidates, formatProgressCandidates } from '../progress/capture.js';
 import { analyzeChatContext, formatChatContextAnalysis } from '../chat/context-analysis.js';
 import { readBackgroundSuggestionsState } from '../service/background-suggestions.js';
@@ -100,6 +102,9 @@ const ENV_KEYS = [...PLAIN_ENV_KEYS, ...SECRET_ENV_KEYS];
 // Local-only auth token generated per server start. All /api/* routes require it,
 // and it is written into ui.json (for mac-companion) and injected into the served HTML.
 let runtimeToken = '';
+// The 60s cycle-sync poll (LEO-284). Owned by the running server so it starts
+// and stops with it; null when no server is up.
+let teamSyncLoop: TeamSyncLoop | null = null;
 const HTML_TOKEN_PLACEHOLDER = '__UI_TOKEN_PLACEHOLDER__';
 const HTML_VERSION_PLACEHOLDER = '__UI_VERSION_PLACEHOLDER__';
 const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
@@ -203,6 +208,12 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerC
   }
   console.log('Press Ctrl+C to stop.');
 
+  // Cycle sync polls while the console runs. Config is re-read each tick so a
+  // change in Setup takes effect without a restart. With no Supabase, no login
+  // or no team it short-circuits before any network call, so this is a no-op
+  // for every single-user install.
+  teamSyncLoop = startTeamSync(() => loadConfig(options.configPath));
+
   if (isPublicBind(options.host) || !LOOPBACK_HOSTNAMES.has(extractHostname(options.host))) {
     console.warn('');
     console.warn('  ****************************************************************');
@@ -224,6 +235,8 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerC
     url,
     token,
     stop: async () => {
+      teamSyncLoop?.stop();
+      teamSyncLoop = null;
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
           if (error) reject(error);
@@ -392,8 +405,11 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
     if (request.method === 'POST' && url.pathname === '/api/okr') return sendJson(response, await saveOkr(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/okr/format') return sendJson(response, formatOkr(await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/cycles/section') return sendJson(response, await saveCycleSection(options, await readJson(request)));
-    // Team / Supabase (LEO-282/283). Writes, so the member gate above already
-    // rejects the member role; nothing here is on the member whitelist.
+    // Team / Supabase (LEO-282/283/284/285). Writes, so the member gate above
+    // already rejects the member role; nothing here is on the member whitelist.
+    // /api/team/sync is matched first: the prefix handler below would otherwise
+    // swallow it and dispatch 'sync' as an unknown team action.
+    if (request.method === 'POST' && url.pathname === '/api/team/sync') return sendJson(response, await runTeamSync(options));
     if (request.method === 'POST' && url.pathname.startsWith('/api/team/')) {
       return sendJson(response, await teamAction(options, url.pathname.slice('/api/team/'.length), await readJson(request)));
     }
@@ -865,9 +881,13 @@ async function buildState(options: UiServerOptions): Promise<Record<string, unkn
     strategy: readStrategyState(config),
     okr: readOkrEditorState(config),
     cycles: readCyclesState(config),
-    // Local disk read only — see readTeamUiState. Nothing in /api/state may
-    // depend on Supabase being reachable.
-    team: readTeamUiState(config),
+    // Two halves of the same feature, merged under one key so neither silently
+    // overwrites the other: identity/team membership at the top level, and the
+    // sync + read-only view state under `view`.
+    //
+    // Local disk read only — see readTeamUiState / readTeamViewState. Nothing in
+    // /api/state may depend on Supabase being reachable.
+    team: { ...readTeamUiState(config), view: await readTeamViewState(config) },
     todoInbox: {
       enabled: config.todo_inbox.enabled,
       open: openTodoInboxItems(config),
@@ -1074,6 +1094,14 @@ async function saveCycleSection(options: UiServerOptions, body: unknown): Promis
   applyEnv(env);
   const config = loadConfig(options.configPath);
 
+  // LEO-285: the page can be showing a teammate's cycles, and that view is
+  // read-only. The buttons are hidden there, but hiding is not enforcement — a
+  // stale tab or a hand-made request would otherwise write a teammate's text
+  // into the local vault as the local user's own. A request that names an owner
+  // must name the signed-in account; one that names none targets 20_CYCLES,
+  // which belongs to whoever is at this machine.
+  await assertLocalCycleWriteTarget(config, request.owner ?? request.ownerId);
+
   const id = String(request.id || '').trim();
   if (!parseCycleId(id)) throw new Error(`Invalid cycle id: ${id || '(empty)'}`);
   const section = String(request.section || '') as CycleSection;
@@ -1091,10 +1119,21 @@ async function saveCycleSection(options: UiServerOptions, body: unknown): Promis
   }
 
   const doc = writeSection(config, id, section, String(request.content ?? ''), 'user');
+
+  // Upload after the file is on disk, and never let it change the outcome of
+  // the save. The local write is the thing that succeeded; sync is a transport
+  // that retries on the next poll. Awaited only so the state we return already
+  // reflects the attempt.
+  const sync = await pushLocalCycle(config, id).catch((error: unknown) => ({
+    status: 'error' as const,
+    reason: error instanceof Error ? error.message : String(error),
+  }));
+
   return {
     ok: true,
     text: `已保存 ${section} → ${cycleFilePath(config, id)}`,
     savedAt: doc.sections[section]?.updatedAt || '',
+    sync: { status: sync.status, reason: sync.reason },
     state: await buildState(options),
   };
 }
@@ -1160,6 +1199,21 @@ async function teamAction(options: UiServerOptions, action: string, body: unknow
     detail: result.error || '',
   });
   return { ...result, state: await buildState(options) };
+}
+
+/**
+ * Run a sync tick now (the console's 同步 button). Reports the outcome rather
+ * than throwing: "could not reach Supabase" is a status to display, not a
+ * failed console operation.
+ */
+async function runTeamSync(options: UiServerOptions): Promise<Record<string, unknown>> {
+  const env = readEnvFile(options.envPath);
+  applyEnv(env);
+  const config = loadConfig(options.configPath);
+  // Go through the loop when there is one, so a manual click cannot overlap a
+  // scheduled tick and double-push.
+  const result = teamSyncLoop ? await teamSyncLoop.runNow() : await syncTeamOnce(config);
+  return { ok: true, sync: result, state: await buildState(options) };
 }
 
 function isTodoInboxType(value: string): value is 'todo' | 'reminder' | 'time_boundary' | 'note' {
@@ -2179,17 +2233,25 @@ npm run service:install</code></pre>
                 <p class="hint" id="cycles-dir"></p>
               </div>
               <div class="panel-actions">
+                <button type="button" class="secondary compact" data-action="team_sync">同步队友</button>
                 <button type="button" class="secondary compact" data-action="cycles_reload">Refresh</button>
               </div>
             </div>
+            <div class="cycle-members" id="cycle-members" role="group" aria-label="成员切换" hidden></div>
+            <p class="hint" id="cycle-team-status"></p>
             <div class="cycles-empty" id="cycles-empty" hidden>
               <h3>还没有任何周期文件</h3>
               <p class="hint">跑一次双周复盘（<code>npm run weekly</code>）之后，上面这个目录里会出现 <code>&lt;开始日期&gt;_&lt;周期标签&gt;.md</code>，例如 <code>2026-08-24_8.24-9.6.md</code>。也可以先手动建一个同名文件，再回来点 Refresh。</p>
+            </div>
+            <div class="cycles-empty" id="cycles-team-empty" hidden>
+              <h3 id="cycles-team-empty-title">还没有同步到这位队友的周期</h3>
+              <p class="hint" id="cycles-team-empty-hint"></p>
             </div>
             <div class="cycles-page" id="cycles-page">
               <aside class="cycle-list" id="cycle-list" aria-label="周期列表"></aside>
               <div class="cycle-detail">
                 <p class="hint" id="cycle-file-path"></p>
+                <div class="cycle-readonly" id="cycle-readonly" role="status" hidden></div>
                 <div class="cycle-warning" id="cycle-frontmatter-error" role="alert" hidden></div>
                 <section class="decision-editor" aria-labelledby="cycle-title-priorities">
                   <div>
@@ -2197,7 +2259,7 @@ npm run service:install</code></pre>
                     <p class="hint" id="cycle-meta-priorities"></p>
                   </div>
                   <textarea id="cycle-md-priorities" spellcheck="false" placeholder="- **MIT** 这个周期最重要的一件事"></textarea>
-                  <div class="panel-actions"><button type="button" id="cycle-save-priorities" data-action="cycle_save_priorities">保存要务</button></div>
+                  <div class="panel-actions" id="cycle-actions-priorities"><button type="button" id="cycle-save-priorities" data-action="cycle_save_priorities">保存要务</button></div>
                   <p class="hint" id="cycle-status-priorities"></p>
                 </section>
                 <section class="decision-editor" aria-labelledby="cycle-title-retro">
@@ -2206,7 +2268,7 @@ npm run service:install</code></pre>
                     <p class="hint" id="cycle-meta-retro"></p>
                   </div>
                   <textarea id="cycle-md-retro" spellcheck="false" placeholder="这个周期实际发生了什么、哪里没做到"></textarea>
-                  <div class="panel-actions"><button type="button" id="cycle-save-retro" data-action="cycle_save_retro">保存 retro</button></div>
+                  <div class="panel-actions" id="cycle-actions-retro"><button type="button" id="cycle-save-retro" data-action="cycle_save_retro">保存 retro</button></div>
                   <p class="hint" id="cycle-status-retro"></p>
                 </section>
                 <section class="decision-editor" aria-labelledby="cycle-title-review">
@@ -2215,7 +2277,7 @@ npm run service:install</code></pre>
                     <p class="hint" id="cycle-meta-review"></p>
                   </div>
                   <textarea id="cycle-md-review" spellcheck="false" placeholder="对这个周期的评价与下一步建议"></textarea>
-                  <div class="panel-actions"><button type="button" id="cycle-save-review" data-action="cycle_save_review">保存 review</button></div>
+                  <div class="panel-actions" id="cycle-actions-review"><button type="button" id="cycle-save-review" data-action="cycle_save_review">保存 review</button></div>
                   <p class="hint" id="cycle-status-review"></p>
                 </section>
               </div>
@@ -3279,6 +3341,37 @@ legend {
   border-radius: .5rem;
   padding: 1.2rem;
 }
+.cycle-members {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem;
+  margin-bottom: .6rem;
+}
+.cycle-member {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #fbfcfb;
+  color: var(--text);
+  padding: .3rem .8rem;
+  font-size: .82rem;
+  cursor: pointer;
+}
+.cycle-member.active {
+  border-color: var(--accent);
+  background: var(--surface);
+  font-weight: 600;
+}
+/* Read-only is a different thing from broken, so it does not borrow the danger
+   colours: nothing is wrong, this is just someone else's file. */
+.cycle-readonly {
+  border: 1px solid var(--border);
+  border-radius: .45rem;
+  background: #f5f7fa;
+  color: var(--muted);
+  padding: .55rem .85rem;
+  font-size: .85rem;
+}
+.cycle-readonly[hidden], .cycle-members[hidden] { display: none; }
 /* An explicit display value outranks the UA rule for [hidden], and these two
    panels are toggled against each other. */
 .cycles-page[hidden], .cycles-empty[hidden] { display: none; }
@@ -3444,6 +3537,14 @@ const CYCLE_SECTION_KEYS = [['priorities', '要务'], ['retro', 'retro'], ['revi
 // one and come back, and your draft is still there. Only Refresh discards.
 const cycleDrafts = new Map();
 let selectedCycleId = '';
+// Whose cycles the page is showing: '' is me, otherwise a teammate's owner
+// uuid. Uuid, never member_id — the label is renameable and the cache is not
+// filed under it (LEO-284).
+let selectedOwnerId = '';
+// Selected cycle per owner, so switching to a teammate and back lands on the
+// cycle you were reading — and, because drafts are keyed by cycle id, on your
+// unsaved text as well.
+const selectedCycleByOwner = new Map();
 
 $('cycle-list')?.addEventListener('click', (event) => {
   const item = event.target.closest('[data-cycle-id]');
@@ -3451,8 +3552,19 @@ $('cycle-list')?.addEventListener('click', (event) => {
   selectCycle(item.dataset.cycleId);
 });
 
+$('cycle-members')?.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-owner-id]');
+  if (!button) return;
+  selectCycleOwner(button.dataset.ownerId || '');
+});
+
 CYCLE_SECTION_KEYS.forEach((pair) => {
   $('cycle-md-' + pair[0])?.addEventListener('input', () => {
+    // Teammate views are read-only, so there is nothing to draft. It also keeps
+    // the draft map single-owner: a teammate's cycle id can be identical to one
+    // of mine, and two people's unsaved text under one key is a way to lose a
+    // retro.
+    if (selectedOwnerId) return;
     if (selectedCycleId) cycleDrafts.set(selectedCycleId + '::' + pair[0], value('cycle-md-' + pair[0]));
   });
 });
@@ -3607,7 +3719,7 @@ function render() {
   renderTodoInbox(openTodos);
   renderDecisionPolicy(state.decisionPolicy);
   renderStrategy(state.strategy);
-  renderCycles(state.cycles);
+  renderCycles(state.cycles, state.team && state.team.view);
   renderOkr(state.okr);
   set('team-supabase-url', (config.team && config.team.supabase_url) || '');
   set('team-supabase-anon-key', (config.team && config.team.supabase_anon_key) || '');
@@ -3873,14 +3985,52 @@ function cycleSectionName(key) {
   return '';
 }
 
-function renderCycles(cycles) {
+function teamMemberById(ownerId) {
+  const members = (state && state.team && state.team.view && state.team.view.members) || [];
+  for (let i = 0; i < members.length; i += 1) if (members[i].userId === ownerId) return members[i];
+  return null;
+}
+
+function renderCycles(cycles, team) {
   if (!cycles) return;
-  const items = cycles.items || [];
+  const teamState = team || (state && state.team && state.team.view) || null;
+  renderCycleMembers(teamState);
+  renderTeamSyncStatus(teamState);
+
+  // A teammate who is no longer in the state (signed out, cache cleared, team
+  // changed) falls back to my own cycles instead of rendering a blank page.
+  let member = selectedOwnerId ? teamMemberById(selectedOwnerId) : null;
+  if (selectedOwnerId && !member) {
+    selectedOwnerId = '';
+    member = null;
+  }
+  const viewingSelf = !selectedOwnerId;
+  const items = viewingSelf ? cycles.items || [] : member.cycles || [];
+
   const dir = $('cycles-dir');
-  if (dir) dir.textContent = cycles.dir ? 'Cycles dir: ' + cycles.dir : '';
+  if (dir) {
+    dir.textContent = viewingSelf
+      ? cycles.dir ? 'Cycles dir: ' + cycles.dir : ''
+      : teamState && teamState.cacheDir ? '只读缓存: ' + teamState.cacheDir + '/' + selectedOwnerId : '';
+  }
+
   const empty = $('cycles-empty');
+  const teamEmpty = $('cycles-team-empty');
   const page = $('cycles-page');
-  if (empty) empty.hidden = items.length > 0;
+  if (empty) empty.hidden = !viewingSelf || items.length > 0;
+  if (teamEmpty) {
+    teamEmpty.hidden = viewingSelf || items.length > 0;
+    if (!teamEmpty.hidden) {
+      const title = $('cycles-team-empty-title');
+      if (title) title.textContent = '还没有同步到 ' + (member.label || '这位队友') + ' 的周期';
+      const hint = $('cycles-team-empty-hint');
+      if (hint) {
+        hint.textContent = (teamState && teamState.syncedAt)
+          ? '上次同步于 ' + formatClientTime(teamState.syncedAt) + '，那时对方还没有写过任何周期文件。'
+          : '还没有成功同步过。确认双方都已登录同一个团队，再点「同步队友」。';
+      }
+    }
+  }
   if (page) page.hidden = items.length === 0;
   if (items.length === 0) {
     selectedCycleId = '';
@@ -3888,8 +4038,50 @@ function renderCycles(cycles) {
   }
   // Newest cycle by default, and keep the current pick across re-renders.
   if (!items.some((item) => item.id === selectedCycleId)) selectedCycleId = items[0].id;
+  selectedCycleByOwner.set(selectedOwnerId, selectedCycleId);
   renderCycleList(items);
-  renderCycleDetail(items.find((item) => item.id === selectedCycleId));
+  renderCycleDetail(items.find((item) => item.id === selectedCycleId), member, teamState);
+}
+
+function renderCycleMembers(team) {
+  const box = $('cycle-members');
+  if (!box) return;
+  const members = (team && team.members) || [];
+  // One-person teams get no switcher: a control with a single option is noise.
+  const show = Boolean(team && team.status === 'ready' && members.length > 0);
+  box.hidden = !show;
+  if (!show) {
+    selectedOwnerId = '';
+    box.innerHTML = '';
+    return;
+  }
+  const selfLabel = (team.self && (team.self.displayName || team.self.memberId)) || '';
+  let html = '<button type="button" class="cycle-member' + (selectedOwnerId ? '' : ' active') + '" data-owner-id="">' +
+    escapeHtml(selfLabel ? '我（' + selfLabel + '）' : '我') + '</button>';
+  members.forEach((member) => {
+    html += '<button type="button" class="cycle-member' + (member.userId === selectedOwnerId ? ' active' : '') + '"' +
+      ' data-owner-id="' + escapeAttr(member.userId) + '">' + escapeHtml(member.label || member.userId) + '</button>';
+  });
+  box.innerHTML = html;
+}
+
+function renderTeamSyncStatus(team) {
+  const line = $('cycle-team-status');
+  if (!line) return;
+  if (!team) {
+    line.textContent = '';
+    return;
+  }
+  // Not-ready is a normal state, not a failure: local editing is unaffected, so
+  // say what is off rather than showing an error.
+  if (team.status !== 'ready') {
+    line.textContent = '团队同步：' + (team.reason || '未启用') ;
+    return;
+  }
+  const parts = [team.syncedAt ? '同步于 ' + formatClientTime(team.syncedAt) : '还没有成功同步过'];
+  if (!(team.members || []).length) parts.push('团队里还没有其他成员');
+  if (team.lastError) parts.push('上次同步失败：' + team.lastError);
+  line.textContent = '团队同步：' + parts.join(' · ');
 }
 
 function renderCycleList(items) {
@@ -3908,10 +4100,20 @@ function renderCycleList(items) {
   }).join('');
 }
 
-function renderCycleDetail(item) {
+function renderCycleDetail(item, member, team) {
   if (!item) return;
+  const readOnly = Boolean(member);
   const pathHint = $('cycle-file-path');
   if (pathHint) pathHint.textContent = item.path || '';
+
+  const readOnlyBanner = $('cycle-readonly');
+  if (readOnlyBanner) {
+    readOnlyBanner.hidden = !readOnly;
+    readOnlyBanner.textContent = readOnly
+      ? '来自 ' + (member.label || '队友') + ' · 只读 · ' +
+        (team && team.syncedAt ? '同步于 ' + formatClientTime(team.syncedAt) : '同步时间未知')
+      : '';
+  }
 
   // A file whose frontmatter will not parse is read-only here: the write path
   // refuses it, so letting someone type a full retro first would just lose it.
@@ -3928,7 +4130,9 @@ function renderCycleDetail(item) {
     const key = pair[0];
     const stored = item.sections ? item.sections[pair[1]] : null;
     const draftKey = item.id + '::' + key;
-    if (cycleDrafts.has(draftKey)) set('cycle-md-' + key, cycleDrafts.get(draftKey));
+    // Drafts belong to my own files only, so a teammate view always shows what
+    // was synced, never something I happened to have typed under the same id.
+    if (!readOnly && cycleDrafts.has(draftKey)) set('cycle-md-' + key, cycleDrafts.get(draftKey));
     else set('cycle-md-' + key, stored ? stored.content || '' : '');
     const meta = $('cycle-meta-' + key);
     if (meta) {
@@ -3939,9 +4143,18 @@ function renderCycleDetail(item) {
         : '这一段还没写过（文件里没有这个小节）';
     }
     const textarea = $('cycle-md-' + key);
-    if (textarea) textarea.disabled = broken;
+    // readonly rather than disabled for a teammate: the text still has to be
+    // selectable and scrollable, it just cannot be changed.
+    if (textarea) {
+      textarea.disabled = broken;
+      textarea.readOnly = readOnly;
+    }
     const button = $('cycle-save-' + key);
-    if (button) button.disabled = broken;
+    if (button) button.disabled = broken || readOnly;
+    // The whole action row goes away in a teammate view, so there is no save
+    // control to click at all. The server rejects the write regardless.
+    const actions = $('cycle-actions-' + key);
+    if (actions) actions.hidden = readOnly;
   });
 }
 
@@ -3951,7 +4164,16 @@ function selectCycle(id) {
   // Drafts survive the switch: they are keyed by cycle, and renderCycleDetail
   // restores this cycle's own. Only Refresh and a successful save clear them.
   clearCycleStatuses();
-  renderCycles(state && state.cycles);
+  renderCycles(state && state.cycles, state && state.team && state.team.view);
+}
+
+function selectCycleOwner(ownerId) {
+  const next = ownerId || '';
+  if (next === selectedOwnerId) return;
+  selectedOwnerId = next;
+  selectedCycleId = selectedCycleByOwner.get(next) || '';
+  clearCycleStatuses();
+  renderCycles(state && state.cycles, state && state.team && state.team.view);
 }
 
 function clearCycleStatuses() {
@@ -3964,6 +4186,10 @@ function clearCycleStatuses() {
 async function saveCycleSectionFromPage(key) {
   const status = $('cycle-status-' + key);
   const section = cycleSectionName(key);
+  if (selectedOwnerId) {
+    if (status) status.textContent = '队友的周期是只读的，不能在这里保存。';
+    return;
+  }
   if (!selectedCycleId) {
     if (status) status.textContent = '还没有选中任何周期。';
     return;
@@ -4402,6 +4628,16 @@ async function runAction(action) {
     clearCycleStatuses();
     await loadState();
     showToast('Cycles reloaded', 'success');
+    return;
+  }
+  if (action === 'team_sync') {
+    // Drafts are untouched: this pulls teammates' files, it does not reload mine.
+    const result = await post('/api/team/sync', {});
+    if (result.state) state = result.state;
+    render();
+    const sync = result.sync || {};
+    if (sync.status === 'ok') showToast('已同步：拉取 ' + (sync.pulled || 0) + ' 个队友周期，上传 ' + (sync.pushed || 0) + ' 个', 'success');
+    else showToast('同步未执行：' + (sync.reason || sync.status || 'unknown'), 'error', false);
     return;
   }
   if (action === 'cycle_save_priorities' || action === 'cycle_save_retro' || action === 'cycle_save_review') {
