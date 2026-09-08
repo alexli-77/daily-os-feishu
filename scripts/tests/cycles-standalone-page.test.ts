@@ -370,6 +370,16 @@ async function testPageRendering(): Promise<void> {
   check('a written section reports its source', page.el('cycle-meta-priorities').textContent.includes('planner'), page.el('cycle-meta-priorities').textContent);
   check('every card offers its own save control', ['priorities', 'retro', 'review'].every((key) => page.el('cycle-actions-' + key).hidden === false && page.el('cycle-save-' + key).disabled === false));
   check('the heading names the selected cycle', page.el('cycle-heading').textContent.includes('9.7-9.13'), page.el('cycle-heading').textContent);
+
+  // --- retro scaffold (LEO-278) --------------------------------------------
+  // An empty retro of mine opens on the Feishu layout, so writing one here
+  // produces the three sections life-review-os parses back out.
+  const retroValue = page.el('cycle-md-retro').value;
+  check('an empty retro of mine is pre-filled with the Feishu scaffold', retroValue.includes('状态') && retroValue.includes('做的好') && retroValue.includes('待改进'), retroValue.slice(0, 80));
+  check('the scaffold keeps the 状态 sub-fields', ['情绪：', '精力：', '外部压力：', '计划外吃掉时间的事：'].every((field) => retroValue.includes(field)), retroValue.slice(0, 120));
+  check('the scaffold is flagged as a template, not as saved content', page.el('cycle-template-retro').hidden === false);
+  check('the meta line still says the section was never written', page.el('cycle-meta-retro').textContent.includes('还没写过'), page.el('cycle-meta-retro').textContent);
+  check('only retro gets a scaffold', page.el('cycle-md-review').value === '' && page.el('cycle-template-review').hidden === true, page.el('cycle-md-review').value);
   check('the file path of the selected cycle is shown', page.el('cycle-file-path').textContent.includes(`${NEW_ID}.md`), page.el('cycle-file-path').textContent);
 
   // --- drafts survive switching cycles --------------------------------------
@@ -378,10 +388,12 @@ async function testPageRendering(): Promise<void> {
   page.clickCycle(OLD_ID);
   check('clicking another cycle switches the cards', page.el('cycle-md-priorities').value === '- 老周期要务', page.el('cycle-md-priorities').value);
   check('the other cycle brings its own retro', page.el('cycle-md-retro').value === '老周期 retro', page.el('cycle-md-retro').value);
+  check('a retro that already has content gets no scaffold and no template tag', page.el('cycle-template-retro').hidden === true);
   page.el('cycle-md-review').value = '老周期的草稿';
   page.fire('cycle-md-review', 'input');
   page.clickCycle(NEW_ID);
   check('switching back restores the unsaved draft', page.el('cycle-md-retro').value === '最新周期的草稿', page.el('cycle-md-retro').value);
+  check('a draft wins over the scaffold, so half-written text is never replaced', page.el('cycle-template-retro').hidden === true);
   page.clickCycle(OLD_ID);
   check('the second cycle keeps its own draft too', page.el('cycle-md-review').value === '老周期的草稿', page.el('cycle-md-review').value);
   check('a draft never leaks into another cycle', page.el('cycle-md-retro').value === '老周期 retro', page.el('cycle-md-retro').value);
@@ -446,6 +458,9 @@ async function testPageRendering(): Promise<void> {
   check("a teammate view shows that teammate's latest cycle", page.el('cycle-md-priorities').value === '- 队友的最新要务', page.el('cycle-md-priorities').value);
   check('a teammate view has no save control at all', ['priorities', 'retro', 'review'].every((key) => page.el('cycle-actions-' + key).hidden === true && page.el('cycle-save-' + key).disabled === true));
   check('a teammate view is read-only text', ['priorities', 'retro', 'review'].every((key) => page.el('cycle-md-' + key).readOnly === true));
+  // The scaffold is a writing aid for my own retro. Pre-filling it over a
+  // teammate's synced cycle would show text they never wrote as if they had.
+  check("a teammate's empty retro gets no scaffold", !page.el('cycle-md-retro').value.includes('待改进') && page.el('cycle-template-retro').hidden === true, page.el('cycle-md-retro').value.slice(0, 60));
   check('a teammate view says whose it is', page.el('cycle-readonly').hidden === false && page.el('cycle-readonly').textContent.includes('只读'), page.el('cycle-readonly').textContent);
   check('the left panel still lists my own cycles', page.listedCycleIds().join(',') === [NEW_ID, MID_ID, OLD_ID].join(','), page.listedCycleIds().join(','));
   check('none of my cycles looks selected while a teammate is shown', !page.el('cycle-list').innerHTML.includes('aria-current'), page.el('cycle-list').innerHTML.slice(0, 160));
