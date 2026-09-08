@@ -19,6 +19,7 @@ import type { Evidence } from '../../src/workflows/types.js';
 import {
   buildScoredTodos,
   normalizeCandidates,
+  resolveDueHintMs,
   scoreAndRank,
   scoreCandidate,
   type TodoCandidate,
@@ -164,6 +165,69 @@ test('every scored candidate carries candidateId, matching what the prompt tells
   }
   // `id` must survive: dedupe, the completion ledger and carry-over all key on it.
   assert.ok(result.top.every((item) => typeof item.id === 'string' && item.id.length > 0));
+});
+
+// --- hand-captured todos ---------------------------------------------------
+
+test('resolveDueHintMs turns the capture hints users actually type into real days', () => {
+  const saturday = new Date('2026-09-05T12:00:00'); // a Saturday
+  const iso = (ms: number | null) => (ms === null ? null : new Date(ms).toISOString().slice(0, 10));
+
+  assert.equal(iso(resolveDueHintMs('今天', saturday)), '2026-09-05');
+  assert.equal(iso(resolveDueHintMs('明天', saturday)), '2026-09-06');
+  assert.equal(iso(resolveDueHintMs('后天', saturday)), '2026-09-07');
+  // Today counts as a hit: a 周六 todo written on Saturday is due today, not in a week.
+  assert.equal(iso(resolveDueHintMs('周六', saturday)), '2026-09-05');
+  assert.equal(iso(resolveDueHintMs('周日', saturday)), '2026-09-06');
+  assert.equal(iso(resolveDueHintMs('周三', saturday)), '2026-09-09');
+  assert.equal(iso(resolveDueHintMs('下周三', saturday)), '2026-09-16');
+  assert.equal(iso(resolveDueHintMs('星期六', saturday)), '2026-09-05');
+  assert.equal(iso(resolveDueHintMs('礼拜1', saturday)), '2026-09-07');
+  // An absolute date still wins, and a non-date hint stays unresolved.
+  assert.equal(iso(resolveDueHintMs('2026-12-01', saturday)), '2026-12-01');
+  assert.equal(resolveDueHintMs('有空再说', saturday), null);
+  assert.equal(resolveDueHintMs(undefined, saturday), null);
+});
+
+test('a hand-captured todo reaches the shortlist instead of scoring zero', () => {
+  // Reported case: "周六下午6-8PM去MBPC打球" captured on a Saturday scored 0 and was
+  // cut before the model ever saw it, so no prompt rule could rescue it.
+  const saturday = new Date('2026-09-05T12:00:00');
+  const evidence: Evidence = {
+    generated_at: saturday.toISOString(),
+    date: '2026-09-05',
+    sources: {
+      todo_inbox: {
+        state: 'available',
+        data: { open: [{ id: 'mbpc', text: '周六下午6-8PM去MBPC打球', created_at: saturday.toISOString(), due_hint: '周六' }] },
+      },
+    },
+  };
+  const candidate = normalizeCandidates({ config, evidence, date: '2026-09-05', now: saturday })[0];
+  assert.equal(candidate.dueDate, '2026-09-05', 'the 周六 hint resolves to a real date');
+
+  const { score, breakdown } = scoreCandidate(candidate, DEFAULT_SCORER_WEIGHTS, saturday);
+  assert.equal(breakdown.manualCapture, 20, 'writing it down by hand is itself a signal');
+  // The urgency tiers compare against midnight, so a same-day due date reads as
+  // `overdue` rather than `dueWithin24h` once the day has started. Both tiers
+  // rank it urgently, and the card renders "今天截止" from the date string, so
+  // this is recorded rather than changed here — moving the boundary would also
+  // re-tier every Linear issue due today.
+  assert.equal(breakdown.overdue, 35);
+  assert.equal(breakdown.dueWithin24h, undefined);
+  assert.equal(score, 55);
+  // The point of the fix: it is no longer 0, so it survives the top-N cut.
+  assert.ok(score > 0);
+});
+
+test('manual capture is a floor, not a trump card: an overdue delivery still outranks it', () => {
+  const now = new Date('2026-09-05T12:00:00');
+  const captured: TodoCandidate = { id: 'todo_inbox:x', title: '买咖啡豆', source: 'todo_inbox' };
+  const overdue: TodoCandidate = { id: 'linear:L-1', title: 'L-1 ship it', source: 'linear', dueDate: '2026-09-01', priority: 'High (2)' };
+  const ranked = scoreAndRank([captured, overdue], { weights: DEFAULT_SCORER_WEIGHTS, now });
+  assert.deepEqual(ranked.map((item) => item.id), ['linear:L-1', 'todo_inbox:x']);
+  // ...but a bare captured note still clears the old zero, so it can be seen at all.
+  assert.equal(ranked[1].score, 20);
 });
 
 test('scoreAndRank orders by score and returns top-N with sequential ranks', () => {
