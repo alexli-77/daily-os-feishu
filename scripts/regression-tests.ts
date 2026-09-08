@@ -136,8 +136,15 @@ try {
     'scripts/tests/cycle-file.test.ts',
     // LEO-277 Cycles console page: listing, per-section save, write guardrails.
     'scripts/tests/cycles-page.test.ts',
+    // LEO-286 Cycles as its own platform page: routing + nav, the console no
+    // longer carrying it, and the shipped script's cards, ordering, drafts and
+    // zoom dialog driven against a DOM stub.
+    'scripts/tests/cycles-standalone-page.test.ts',
     // LEO-280 history migration: run selection, both table layouts, idempotency.
     'scripts/tests/cycle-migration.test.ts',
+    // Standalone /okr page: two columns, every empty/malformed state, and the
+    // Config-side OKR / strategy / decision-policy editors it was split from.
+    'scripts/tests/okr-page.test.ts',
     // LEO-282/283 Supabase auth + team: offline-first degradation, token refresh,
     // invite-code rejection, no team hopping, role gate.
     'scripts/tests/team-auth.test.ts',

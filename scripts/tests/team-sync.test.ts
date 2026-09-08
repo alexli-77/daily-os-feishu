@@ -583,10 +583,10 @@ async function main(): Promise<void> {
     }
   }
 
-  // --- 8. the shipped console script ----------------------------------------
+  // --- 8. the shipped /cycles script ----------------------------------------
 
   async function testConsoleRendering(): Promise<void> {
-    console.log('\n--- console rendering ---');
+    console.log('\n--- cycles page rendering ---');
     const page = await loadCyclesPage();
 
     const teamState = {
@@ -637,7 +637,7 @@ async function main(): Promise<void> {
     page.render();
 
     // Own view: exactly as before this change.
-    check('my own view shows the editors', page.el('cycles-page').hidden === false);
+    check('my own view shows the editors', page.el('cycle-cards').hidden === false);
     check('my own view keeps the save buttons', page.el('cycle-actions-retro').hidden === false);
     check('my own view is editable', page.el('cycle-md-retro').readOnly !== true);
     check('my own view shows no read-only banner', page.el('cycle-readonly').hidden === true);
@@ -658,7 +658,11 @@ async function main(): Promise<void> {
     const banner = page.el('cycle-readonly');
     check('the teammate view is labelled', banner.hidden === false && banner.textContent.includes('企鹅') && banner.textContent.includes('只读'), banner.textContent);
     check('the banner reports when it was synced', banner.textContent.includes('同步于'), banner.textContent);
-    check('the teammate view shows the cache dir, not my vault', page.el('cycles-dir').textContent.includes(MATE_ID), page.el('cycles-dir').textContent);
+    check(
+      'the teammate view shows the cache dir, not my vault',
+      page.el('cycle-file-path').textContent.includes(MATE_ID) && !page.el('cycle-file-path').textContent.includes('20_CYCLES'),
+      page.el('cycle-file-path').textContent,
+    );
 
     // Typing in a read-only view must not create a draft under a colliding id.
     page.el('cycle-md-retro').value = '试图改队友的';
@@ -674,23 +678,26 @@ async function main(): Promise<void> {
     page.setState({ cycles: myCycles, team: { view: { ...teamState, members: [{ ...teamState.members[0], cycles: [] }] } } });
     page.render();
     page.click('cycle-members', MATE_ID);
-    check('an empty teammate gets an explicit empty state', page.el('cycles-team-empty').hidden === false);
-    check('the empty state names the teammate', page.el('cycles-team-empty-title').textContent.includes('企鹅'), page.el('cycles-team-empty-title').textContent);
+    check('an empty teammate gets an explicit empty state', page.el('cycle-detail-empty').hidden === false);
+    check('the empty state names the teammate', page.el('cycle-detail-empty').textContent.includes('企鹅'), page.el('cycle-detail-empty').textContent);
     check('the empty state is not the "no cycle files at all" one', page.el('cycles-empty').hidden === true);
-    check('the editors are hidden rather than showing a blank form', page.el('cycles-page').hidden === true);
+    check('the editors are hidden rather than showing a blank form', page.el('cycle-cards').hidden === true);
 
     // Not signed in: no switcher, and a line saying why.
     page.setState({ cycles: myCycles, team: { view: { ...teamState, status: 'signed_out', reason: '尚未登录团队账号，同步已暂停，本地读写不受影响。', members: [] } } });
     page.render();
-    check('signed out, the switcher is hidden', page.el('cycle-members').hidden === true);
+    check('signed out, no owner is selectable', !page.el('cycle-members').innerHTML.includes('data-owner-id'), page.el('cycle-members').innerHTML);
     check('signed out, the reason is shown', page.el('cycle-team-status').textContent.includes('尚未登录'), page.el('cycle-team-status').textContent);
-    check('signed out, my own editors are untouched', page.el('cycles-page').hidden === false && page.el('cycle-actions-retro').hidden === false);
+    check('signed out, my own editors are untouched', page.el('cycle-cards').hidden === false && page.el('cycle-actions-retro').hidden === false);
     check('signed out, my own cycle still renders', page.el('cycle-md-priorities').value === '- 我的要务', page.el('cycle-md-priorities').value);
 
     // No team yet.
     page.setState({ cycles: myCycles, team: { view: { ...teamState, status: 'no_team', reason: '账号还没有加入团队，暂时看不到队友的周期，本地读写不受影响。', members: [] } } });
     page.render();
-    check('with no team, the switcher is hidden and explained', page.el('cycle-members').hidden === true && page.el('cycle-team-status').textContent.includes('团队'));
+    check(
+      'with no team, the switcher is empty and explained',
+      !page.el('cycle-members').innerHTML.includes('data-owner-id') && page.el('cycle-team-status').textContent.includes('团队'),
+    );
 
     // A failed sync while signed in still shows the teammate, flagged.
     page.setState({ cycles: myCycles, team: { view: { ...teamState, lastError: 'fetch failed' } } });
@@ -701,13 +708,13 @@ async function main(): Promise<void> {
 }
 
 /**
- * The shipped console script, evaluated against a DOM stub — the same technique
+ * The shipped /cycles script, evaluated against a DOM stub — the same technique
  * as console-model-picker.test.ts, and for the same reason: read-only rendering
  * is behaviour, and asserting it against the real script is the only way to
  * catch a save control that stays clickable.
  */
 async function loadCyclesPage() {
-  const { JS } = await import('../../src/ui/server.js');
+  const { CYCLES_JS } = await import('../../src/ui/pages.js');
 
   interface StubElement {
     id: string;
@@ -784,11 +791,13 @@ async function loadCyclesPage() {
     'clearTimeout',
     'setInterval',
     'clearInterval',
-    `${JS}
+    `${CYCLES_JS}
      return {
-       renderCycles: () => renderCycles(state && state.cycles, state && state.team && state.team.view),
+       renderCycles: () => renderCyclesPage(),
        selectCycleOwner,
-       setState: (next) => { state = next; },
+       // The page keeps { cycles, team }; the console kept the team view one
+       // level deeper. Adapt here so the assertions read the same as before.
+       setState: (next) => { cyclesData = { cycles: next.cycles, team: next.team && next.team.view }; },
      };`,
   );
   const api = factory(
@@ -798,7 +807,9 @@ async function loadCyclesPage() {
     windowStub.history,
     storageStub,
     storageStub,
-    () => Promise.resolve({ json: () => Promise.resolve({}) }),
+    // The script kicks off a load on evaluation. Never resolving it keeps the
+    // fixtures the test sets below from being raced by a stub response.
+    () => new Promise(() => {}),
     { clipboard: {} },
     windowStub.setTimeout,
     windowStub.clearTimeout,
