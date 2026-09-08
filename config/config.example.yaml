@@ -316,6 +316,15 @@ sources:
       - name: "custom"
         path: "./data/snapshots/custom.txt"
 
+team:
+  # Optional Supabase project used only as a transport so teammates can read
+  # each other's cycle files (LEO-282/283). Leave both empty to run solo: every
+  # local feature works unchanged without it.
+  # supabase_anon_key must be the *anon* (publishable) key. The service_role key
+  # bypasses row level security and is rejected here on purpose.
+  supabase_url: ""
+  supabase_anon_key: ""
+
 memory:
   # Daily OS working memory repository.
   # Empty means use the generic repository shipped at ./memory-vault/default.

@@ -549,6 +549,17 @@ export const AppConfigSchema = z.object({
       files: z.array(z.object({ name: z.string(), path: z.string() })).default([]),
     }),
   }),
+  // LEO-282/283: the Supabase project two laptops share so they can read each
+  // other's cycles. Both fields empty means "no team", and every team feature
+  // stays dark — local markdown is the source of truth either way.
+  // The anon key belongs here; service_role must never appear (it bypasses RLS,
+  // see supabase/README.md).
+  team: z
+    .object({
+      supabase_url: z.string().default(''),
+      supabase_anon_key: z.string().default(''),
+    })
+    .default({ supabase_url: '', supabase_anon_key: '' }),
   memory: z.object({
     repository_path: z.string().default(''),
     long_term_path: z.string().default('./data/memory/long-term.md'),
