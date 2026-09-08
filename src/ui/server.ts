@@ -50,6 +50,7 @@ import {
   destroySession,
   ensureAuthInitialized,
   findUser,
+  findUserByEmail,
   getSession,
   listUsers,
   parseCookies,
@@ -58,7 +59,7 @@ import {
   verifyPassword,
   type Role,
 } from './auth.js';
-import { PLATFORM_PAGES, renderLoginPage, renderWelcomePage, renderPlatformPage, type PageContext } from './pages.js';
+import { PLATFORM_PAGES, renderWelcomePage, renderPlatformPage, type PageContext } from './pages.js';
 import {
   createWebChatSession,
   deleteWebChatSession,
@@ -359,15 +360,18 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
       }
     }
 
-    // Login page (public) + logged-in redirect target.
+    // Signing in is a dialog on the welcome page, not a page of its own. /login
+    // stays routed so an old bookmark or a stale tab still lands somewhere that
+    // can actually sign you in.
     if (request.method === 'GET' && url.pathname === '/login') {
-      if (auth.authenticated) return redirect(response, '/dashboard');
-      return send(response, 200, renderLoginPage(), 'text/html; charset=utf-8');
+      return redirect(response, auth.authenticated ? '/dashboard' : '/?signin=1');
     }
 
     // Server-rendered console pages require an authenticated session or token.
     if (request.method === 'GET' && PLATFORM_PAGES.has(url.pathname)) {
-      if (!auth.authenticated) return redirect(response, '/login');
+      // `signin=1` tells the welcome page to open the dialog on the sign-in
+      // form rather than on sign-up: whoever was bounced here has an account.
+      if (!auth.authenticated) return redirect(response, '/?signin=1');
       const ctx = buildPageContext(auth, url, options);
       return send(response, 200, renderPlatformPage(url.pathname, ctx), 'text/html; charset=utf-8');
     }
@@ -559,9 +563,11 @@ async function handleLogin(request: http.IncomingMessage, response: http.ServerR
   const body = readRecord(await readJson(request));
   const username = String(body.username || '').trim();
   const password = String(body.password || '');
-  if (!username || !password) return sendJson(response, { ok: false, error: 'Username and password are required.' }, 400);
+  if (!username || !password) return sendJson(response, { ok: false, error: '请填写用户名或邮箱，以及密码。' }, 400);
   const throttleKey = loginThrottleKey(request, username);
-  const user = findUser(username);
+  // Either identifier: people remember the address they signed up with more
+  // reliably than the handle they picked at the same moment.
+  const user = findUser(username) || findUserByEmail(username);
   if (!user || !verifyPassword(user, password)) {
     const failures = recordLoginFailure(throttleKey);
     const delayMs = loginFailureDelayMs(failures);

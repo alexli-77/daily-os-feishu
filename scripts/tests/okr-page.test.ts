@@ -190,8 +190,8 @@ async function main(): Promise<void> {
     // --- Reachability + nav ---------------------------------------------------
     const anon = await fetch(`${base}/okr`, { redirect: 'manual' });
     check(
-      '/okr without a session redirects to /login',
-      anon.status === 302 && anon.headers.get('location') === '/login',
+      '/okr without a session redirects to sign in',
+      anon.status === 302 && anon.headers.get('location') === '/?signin=1',
       `${anon.status} ${anon.headers.get('location')}`,
     );
 

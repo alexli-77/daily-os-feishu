@@ -94,6 +94,19 @@ export function findUser(username: string): UserRecord | undefined {
   return dbFindUser(username);
 }
 
+/**
+ * Look an account up by the address it registered with.
+ *
+ * Case-insensitive, because nobody types their own address the same way twice.
+ * Accounts created before the email column carry '', which must never match an
+ * empty or whitespace query.
+ */
+export function findUserByEmail(email: string): UserRecord | undefined {
+  const wanted = (email || '').trim().toLowerCase();
+  if (!wanted) return undefined;
+  return dbLoadUsers().find((user) => (user.email || '').trim().toLowerCase() === wanted);
+}
+
 export function listUsers(): Array<{ username: string; role: Role; created_at: string }> {
   return dbLoadUsers().map((user) => ({ username: user.username, role: user.role, created_at: user.created_at }));
 }
