@@ -12,7 +12,7 @@
  *     carries a cycles section, and the save endpoint still refuses everything
  *     it refused before (broken frontmatter, foreign owner, member role);
  *   - the rendering, driven by evaluating the *shipped* client script against a
- *     DOM stub. Card layout, ordering, draft survival and the zoom dialog are
+ *     DOM stub. Card layout, ordering and draft survival are
  *     behaviour; matching the source with a regex would prove nothing about a
  *     save button that stays clickable or a draft that quietly disappears.
  *
@@ -171,12 +171,12 @@ async function testServerRoutes(): Promise<void> {
     // --- the page exists and is in the nav -----------------------------------
     const cyclesPage = await page('/cycles');
     check('/cycles is served to a signed-in user', cyclesPage.status === 200, String(cyclesPage.status));
+    check('/cycles no longer ships a zoom dialog', !cyclesPage.html.includes('id="cycle-modal"') && !cyclesPage.html.includes('data-cycle-zoom'));
     check('/cycles renders the left panel and the three cards',
       cyclesPage.html.includes('id="cycle-list"') &&
       cyclesPage.html.includes('id="cycle-members"') &&
       ['priorities', 'retro', 'review'].every((key) => cyclesPage.html.includes(`id="cycle-card-${key}"`)),
     );
-    check('/cycles ships a zoom dialog', cyclesPage.html.includes('id="cycle-modal"') && cyclesPage.html.includes('aria-modal="true"'));
     check('/cycles marks itself active in the nav', cyclesPage.html.includes('class="nav-link active" href="/cycles"'));
 
     const dashboard = await page('/dashboard');
@@ -403,25 +403,11 @@ async function testPageRendering(): Promise<void> {
   check('a draft never leaks into another cycle', page.el('cycle-md-retro').value === '老周期 retro', page.el('cycle-md-retro').value);
   page.clickCycle(NEW_ID);
 
-  // --- zoom -----------------------------------------------------------------
-  page.el('cycle-zoom-retro').focused = false;
+  // The draft that the following assertions rely on, typed straight into the card
+  // now that there is no dialog to type it in.
   page.editMode('retro');
-  page.clickZoom('retro');
-  check('the zoom dialog opens', page.el('cycle-modal').hidden === false);
-  check('the dialog shows the section it was opened from', page.el('cycle-modal-title').textContent === 'retro', page.el('cycle-modal-title').textContent);
-  check('the dialog shows the card content', page.el('cycle-modal-text').value === '最新周期的草稿', page.el('cycle-modal-text').value);
-  check('the dialog carries the same meta line', page.el('cycle-modal-meta').textContent === page.el('cycle-meta-retro').textContent);
-  check('focus moves into the dialog', page.activeElement()?.id === 'cycle-modal-text', String(page.activeElement()?.id));
-  check('my own dialog can save', page.el('cycle-modal-actions').hidden === false && page.el('cycle-modal-save').disabled === false);
-
-  page.el('cycle-modal-text').value = '在放大视图里继续写';
-  page.fire('cycle-modal-text', 'input');
-  check('typing in the dialog writes through to the card', page.el('cycle-md-retro').value === '在放大视图里继续写', page.el('cycle-md-retro').value);
-
-  page.pressKey('Escape');
-  check('Escape closes the dialog', page.el('cycle-modal').hidden === true);
-  check('focus returns to the control that opened it', page.activeElement()?.id === 'cycle-zoom-retro', String(page.activeElement()?.id));
-  check('the text typed in the dialog is still in the card', page.el('cycle-md-retro').value === '在放大视图里继续写', page.el('cycle-md-retro').value);
+  page.el('cycle-md-retro').value = '在放大视图里继续写';
+  page.fire('cycle-md-retro', 'input');
   page.clickCycle(OLD_ID);
   page.clickCycle(NEW_ID);
   check('the dialog edit was drafted like any other typing', page.el('cycle-md-retro').value === '在放大视图里继续写', page.el('cycle-md-retro').value);
@@ -436,9 +422,6 @@ async function testPageRendering(): Promise<void> {
   check('a broken frontmatter disables every save button', ['priorities', 'retro', 'review'].every((key) => page.el('cycle-save-' + key).disabled === true));
   check('a broken frontmatter disables every editor', ['priorities', 'retro', 'review'].every((key) => page.el('cycle-md-' + key).disabled === true));
   check('the left panel flags the broken file', page.el('cycle-list').innerHTML.includes('frontmatter 解析失败'));
-  page.clickZoom('retro');
-  check('the dialog over a broken cycle cannot save either', page.el('cycle-modal-save').disabled === true);
-  page.pressKey('Escape');
 
   // --- teammates ------------------------------------------------------------
   const mateOlder = cycleFixture(OLD_ID, '2026-06-01', '6.1-6.14', { 要务: { content: '- 队友的老要务', source: 'planner', updatedAt: '2026-06-01T08:00:00.000Z' } });
@@ -470,13 +453,6 @@ async function testPageRendering(): Promise<void> {
   check('the left panel still lists my own cycles', page.listedCycleIds().join(',') === [NEW_ID, MID_ID, OLD_ID].join(','), page.listedCycleIds().join(','));
   check('none of my cycles looks selected while a teammate is shown', !page.el('cycle-list').innerHTML.includes('aria-current'), page.el('cycle-list').innerHTML.slice(0, 160));
 
-  page.clickZoom('priorities');
-  check('a teammate card still zooms', page.el('cycle-modal').hidden === false && page.el('cycle-modal-text').value === '- 队友的最新要务');
-  check('the zoomed teammate card is read-only', page.el('cycle-modal-text').readOnly === true);
-  check('the zoomed teammate card offers no save', page.el('cycle-modal-actions').hidden === true);
-  check('focus lands on the only control there is', page.activeElement()?.id === 'cycle-modal-close', String(page.activeElement()?.id));
-  page.pressKey('Escape');
-  check('Escape closes a read-only dialog too', page.el('cycle-modal').hidden === true);
 
   // Typing in a read-only view must not create a draft under a colliding id.
   page.el('cycle-md-priorities').value = '试图改队友的';
@@ -631,7 +607,6 @@ async function loadCyclesPage() {
       [...get('cycle-list').innerHTML.matchAll(/data-cycle-id="([^"]+)"/g)].map((match) => match[1]),
     clickCycle: (id: string) => clickOn('cycle-list', '[data-cycle-id]', { cycleId: id }),
     clickMember: (ownerId: string) => clickOn('cycle-members', '[data-owner-id]', { ownerId }),
-    clickZoom: (key: string) => clickOn('cycle-cards', '[data-cycle-zoom]', { cycleZoom: key }),
     clickMode: (key: string) => clickOn('cycle-cards', '[data-cycle-mode]', { cycleMode: key }),
     /** Put a card into edit mode regardless of which mode it opened in. */
     editMode: (key: string) => {

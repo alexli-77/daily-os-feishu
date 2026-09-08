@@ -648,7 +648,6 @@ function renderCyclesPage(ctx: PageContext): string {
           </div>
           <div class="cycle-head-actions">
             <button type="button" class="secondary compact" data-cycle-mode="${card.key}" id="cycle-mode-${card.key}">编辑</button>
-            <button type="button" class="secondary compact" data-cycle-zoom="${card.key}" id="cycle-zoom-${card.key}">放大</button>
           </div>
         </div>
         <div class="cycle-read" id="cycle-read-${card.key}" hidden></div>
@@ -690,20 +689,6 @@ function renderCyclesPage(ctx: PageContext): string {
       <p class="muted" id="cycle-detail-empty" hidden>左边挑一个周期，或者点一位队友看他们最新的周期。</p>
     </div>
   </section>
-  <div class="cycle-modal" id="cycle-modal" role="dialog" aria-modal="true" aria-labelledby="cycle-modal-title" hidden>
-    <div class="cycle-modal-card">
-      <div class="card-head">
-        <div><h3 id="cycle-modal-title"></h3><p class="muted small" id="cycle-modal-meta"></p></div>
-        <button type="button" class="secondary compact" id="cycle-modal-close">关闭 (Esc)</button>
-      </div>
-      <div class="cycle-read" id="cycle-modal-read" hidden></div>
-      <textarea id="cycle-modal-text" spellcheck="false"></textarea>
-      <div class="cycle-card-actions" id="cycle-modal-actions">
-        <button type="button" id="cycle-modal-save">保存</button>
-      </div>
-      <p class="muted small" id="cycle-modal-status"></p>
-    </div>
-  </div>
   <script>window.__LINEAR_WS__=${JSON.stringify(ctx.config.sources.linear.workspace)};</script>
   <script>${CYCLES_JS}</script>`;
 }
@@ -746,8 +731,6 @@ var selectedOwnerId = '';
 // cycle you were reading — and, because drafts are keyed by cycle id, on your
 // unsaved text as well.
 var selectedCycleByOwner = new Map();
-var cycleModalKey = '';
-var cycleModalReturn = null;
 // Sections the user has explicitly switched, slug -> 'read' | 'edit'.
 //
 // Only explicit choices go in here. A section nobody has touched defaults per
@@ -815,6 +798,53 @@ function cycleParagraphs(lines) {
   return out;
 }
 
+/**
+ * Per-item completion, stored in the line itself.
+ *
+ * These are the markers life-review-os already reads: it counts ✅ as done and
+ * treats ⭕ / ❌ / 🚧 as still open, and the Feishu cells have used them by hand
+ * for years. Inventing a fourth notation would mean the planner could no longer
+ * tell what got finished, so 部分 reuses 🚧 — which is exactly what it means,
+ * and which that parser already files under "not finished".
+ */
+var CYCLE_TASK_STATUSES = [
+  { key: 'done', marker: '✅', label: '完成' },
+  { key: 'partial', marker: '🚧', label: '部分' },
+  { key: 'missed', marker: '❌', label: '未做' },
+];
+// ⭕ is accepted on read because older hand-written cells use it, but it is
+// never written — one marker per state keeps round-tripping stable.
+var CYCLE_STATUS_READ = { '✅': 'done', '🚧': 'partial', '❌': 'missed', '⭕': 'missed', '⭕️': 'missed' };
+// The unicode flag is load-bearing: 🚧 is a surrogate pair, and without it the
+// character class matches its two halves separately — so a line marked 部分
+// read back as unmarked, while stripping it still happened to work.
+var CYCLE_STATUS_PATTERN = /[✅🚧❌⭕️⭕]/gu;
+
+function cycleTaskStatus(text) {
+  var found = String(text).match(CYCLE_STATUS_PATTERN);
+  return found ? CYCLE_STATUS_READ[found[found.length - 1]] || '' : '';
+}
+
+function cycleStripStatus(text) {
+  return String(text).replace(CYCLE_STATUS_PATTERN, '').replace(/\s{2,}/g, ' ').trim();
+}
+
+/**
+ * Rewrite one source line to carry the given status ('' clears it).
+ *
+ * The marker goes at the end, which is where the Feishu cells put it and where
+ * life-review-os's own writeback appends it.
+ */
+function cycleSetLineStatus(line, status) {
+  var indent = (line.match(/^\s*/) || [''])[0];
+  var body = cycleStripStatus(line);
+  if (!status) return indent + body;
+  for (var i = 0; i < CYCLE_TASK_STATUSES.length; i += 1) {
+    if (CYCLE_TASK_STATUSES[i].key === status) return indent + body + ' ' + CYCLE_TASK_STATUSES[i].marker;
+  }
+  return indent + body;
+}
+
 /** 要务: "### OKR row" groups of "- item", with **MIT** lifted into a badge. */
 function cycleRenderPriorities(text) {
   var lines = String(text).split('\n');
@@ -831,9 +861,12 @@ function cycleRenderPriorities(text) {
       continue;
     }
     var bullet = line.match(/^[-*+]\s+(.*)$/);
-    var body = bullet ? bullet[1] : line;
-    if (current) current.items.push(body);
-    else loose.push(body);
+    // The source line index travels with the item: a status click has to
+    // rewrite the line it came from, and matching on text would pick the wrong
+    // one as soon as two items read the same.
+    var item = { text: bullet ? bullet[1] : line, line: i };
+    if (current) current.items.push(item);
+    else loose.push(item);
   }
   if (groups.length === 0 && loose.length === 0) return '';
 
@@ -851,12 +884,24 @@ function cycleRenderPriorities(text) {
 function cycleTaskItems(items) {
   var html = '';
   for (var i = 0; i < items.length; i += 1) {
-    var text = items[i];
+    var text = items[i].text;
+    var status = cycleTaskStatus(text);
     // MIT is emphasis in the file and a badge here; strip it wherever it sits
-    // so it cannot show up twice.
+    // so it cannot show up twice. Same for the status marker, which becomes the
+    // dots rather than staying in the sentence.
     var mit = /\*\*MIT\*\*|(^|\s)MIT(\s|$)/.test(text);
-    var body = text.replace(/\*\*MIT\*\*/g, '').replace(/(^|\s)MIT(?=\s|$)/g, '$1').trim();
-    html += '<li class="cy-task">' + (mit ? '<span class="cy-badge">MIT</span>' : '') + '<span>' + cycleInline(body) + '</span></li>';
+    var body = cycleStripStatus(text.replace(/\*\*MIT\*\*/g, '').replace(/(^|\s)MIT(?=\s|$)/g, '$1'));
+    var dots = '';
+    for (var d = 0; d < CYCLE_TASK_STATUSES.length; d += 1) {
+      var def = CYCLE_TASK_STATUSES[d];
+      var on = status === def.key;
+      dots += '<button type="button" class="cy-dot cy-dot-' + def.key + (on ? ' on' : '') +
+        '" data-cycle-task="' + items[i].line + '" data-cycle-status="' + (on ? '' : def.key) +
+        '" aria-pressed="' + (on ? 'true' : 'false') + '" title="' + def.label + (on ? '（再点一次取消）' : '') + '">' +
+        '<span class="sr-only">' + def.label + '</span></button>';
+    }
+    html += '<li class="cy-task cy-task-' + (status || 'none') + '"><span class="cy-dots">' + dots + '</span>' +
+      (mit ? '<span class="cy-badge">MIT</span>' : '') + '<span>' + cycleInline(body) + '</span></li>';
   }
   return html;
 }
@@ -1024,7 +1069,6 @@ function renderCyclesPage() {
     var warn = cycleEl('cycle-frontmatter-error');
     if (warn) warn.hidden = true;
     renderCycleList(mine, viewingSelf);
-    closeCycleModal();
     return;
   }
   if (cards) cards.hidden = false;
@@ -1167,7 +1211,6 @@ function renderCycleDetail(item, member, team) {
   // Generating a review rewrites a section of a file, so it is offered only for
   // my own cycles, and only when that file can be written at all.
   if (generate) generate.disabled = broken || readOnly || !selectedCycleId;
-  if (cycleModalKey) syncCycleModal();
 }
 
 /**
@@ -1190,11 +1233,13 @@ function applyCycleMode(key) {
     if (mode === 'read') read.innerHTML = rendered;
   }
   if (textarea) textarea.hidden = mode === 'read';
-  // The save row is hidden while reading as well as for a teammate. Both mean
-  // the same thing here — there is nothing this view can write — and expressing
-  // it as one property keeps "is the save control reachable" a single question.
+  // The save row is hidden for a teammate, and while reading — with one
+  // exception: ticking a 要务 status is an edit made from the reading view, so
+  // once there is something unsaved the control has to come back or the change
+  // has nowhere to go.
   var actions = cycleEl('cycle-actions-' + key);
-  if (actions) actions.hidden = (textarea ? textarea.readOnly : false) || mode === 'read';
+  var readOnlyHere = textarea ? textarea.readOnly : false;
+  if (actions) actions.hidden = readOnlyHere || (mode === 'read' && !cycleSectionDirty(key));
   if (toggle) {
     toggle.textContent = mode === 'read' ? '编辑' : '阅读';
     // Nothing to read yet, so the toggle would only bounce back.
@@ -1202,12 +1247,41 @@ function applyCycleMode(key) {
   }
 }
 
+/** Has this section been changed since it was last read from disk? */
+function cycleSectionDirty(key) {
+  if (!selectedCycleId || selectedOwnerId) return false;
+  return cycleDrafts.has(selectedCycleId + '::' + key);
+}
+
+/**
+ * Tick a 要务 item green / yellow / red from the reading view.
+ *
+ * The click rewrites the markdown line it came from — the source of truth stays
+ * the file, not a parallel status store — and leaves the result as an unsaved
+ * draft. Nothing is written until 保存要务, the same as any other edit.
+ *
+ * A saved status also stops the planner from overwriting the section: the save
+ * records it as source "user", and applyCyclePlan never clobbers one of those.
+ */
+function setCycleTaskStatus(lineIndex, status) {
+  var textarea = cycleEl('cycle-md-priorities');
+  if (!textarea || textarea.readOnly || textarea.disabled) return;
+  if (!selectedCycleId || selectedOwnerId) return;
+  var index = Number(lineIndex);
+  var lines = textarea.value.split('\n');
+  if (!(index >= 0 && index < lines.length)) return;
+  lines[index] = cycleSetLineStatus(lines[index], status);
+  textarea.value = lines.join('\n');
+  cycleDrafts.set(selectedCycleId + '::priorities', textarea.value);
+  applyCycleMode('priorities');
+  cycleSetText('cycle-status-priorities', '已标记，还没保存——点「保存要务」写入文件。');
+}
+
 function toggleCycleMode(key) {
   var textarea = cycleEl('cycle-md-' + key);
   var current = cycleModeFor(key, Boolean(textarea && textarea.value.trim()));
   cycleModes.set(key, current === 'read' ? 'edit' : 'read');
   applyCycleMode(key);
-  if (cycleModalKey === key) syncCycleModal();
 }
 
 function selectCycle(id) {
@@ -1228,13 +1302,11 @@ function selectCycleOwner(ownerId) {
   selectedOwnerId = next;
   selectedCycleId = selectedCycleByOwner.get(next) || '';
   clearCycleStatuses();
-  closeCycleModal();
   renderCyclesPage();
 }
 
 function clearCycleStatuses() {
   CYCLE_SECTION_KEYS.forEach(function (pair) { cycleSetText('cycle-status-' + pair[0], ''); });
-  cycleSetText('cycle-modal-status', '');
 }
 
 async function saveCycleSection(key) {
@@ -1271,7 +1343,6 @@ async function runCycleSave(key) {
   } catch (error) {
     var message = error && error.message ? error.message : String(error);
     cycleSetText('cycle-status-' + key, message);
-    cycleSetText('cycle-modal-status', cycleModalKey === key ? message : '');
     cycleToast('保存失败：' + message);
   }
 }
@@ -1301,7 +1372,6 @@ async function runCycleReviewGeneration() {
     cycleSetValue('cycle-md-review', data.review || '');
     cycleDrafts.set(selectedCycleId + '::review', data.review || '');
     applyCycleMode('review');
-    if (cycleModalKey === 'review') syncCycleModal();
     cycleSetText('cycle-status-review', '已生成 ' + String(data.review || '').length + ' 字，还没保存——看过之后点「保存 review」。');
     cycleToast('review 草稿已生成');
   } catch (error) {
@@ -1311,90 +1381,6 @@ async function runCycleReviewGeneration() {
   } finally {
     if (button) { button.disabled = false; button.textContent = previous || '用 AI 生成 review'; }
   }
-}
-
-// --- zoom dialog -------------------------------------------------------------
-
-/**
- * The card, full size. Editable when the cycle is mine and writable, plain
- * read-only text for a teammate — the modal mirrors the card's own state rather
- * than deciding for itself, so there is one rule for "can this be written".
- */
-function openCycleModal(key) {
-  var modal = cycleEl('cycle-modal');
-  var textarea = cycleEl('cycle-md-' + key);
-  if (!modal || !textarea) return;
-  cycleModalKey = key;
-  cycleModalReturn = cycleEl('cycle-zoom-' + key);
-  modal.hidden = false;
-  syncCycleModal();
-  var target = textarea.readOnly || textarea.disabled ? cycleEl('cycle-modal-close') : cycleEl('cycle-modal-text');
-  if (target && target.focus) target.focus();
-}
-
-/** Copy the card's content and state into the open dialog. */
-function syncCycleModal() {
-  var key = cycleModalKey;
-  if (!key) return;
-  var textarea = cycleEl('cycle-md-' + key);
-  if (!textarea) return;
-  cycleSetText('cycle-modal-title', cycleSectionName(key));
-  var meta = cycleEl('cycle-meta-' + key);
-  cycleSetText('cycle-modal-meta', meta ? meta.textContent : '');
-  cycleSetValue('cycle-modal-text', textarea.value);
-  var modalText = cycleEl('cycle-modal-text');
-  if (modalText) { modalText.readOnly = textarea.readOnly; modalText.disabled = textarea.disabled; }
-  var actions = cycleEl('cycle-modal-actions');
-  if (actions) actions.hidden = Boolean(textarea.readOnly);
-  var save = cycleEl('cycle-modal-save');
-  if (save) { save.disabled = Boolean(textarea.readOnly || textarea.disabled); save.textContent = '保存' + cycleSectionName(key); }
-  // The dialog mirrors the card's mode for the same reason it mirrors its
-  // read-only state: zooming a section you are reading should enlarge what you
-  // were reading, not drop you into raw markdown.
-  var rendered = cycleRenderSection(key, textarea.value);
-  var mode = cycleModeFor(key, Boolean(textarea.value.trim()));
-  if (mode === 'read' && !rendered) mode = 'edit';
-  var read = cycleEl('cycle-modal-read');
-  if (read) {
-    read.hidden = mode !== 'read';
-    if (mode === 'read') read.innerHTML = rendered;
-  }
-  if (modalText) modalText.hidden = mode === 'read';
-  if (actions) actions.hidden = Boolean(textarea.readOnly) || mode === 'read';
-}
-
-function closeCycleModal() {
-  var modal = cycleEl('cycle-modal');
-  if (!modal || modal.hidden) { cycleModalKey = ''; return; }
-  modal.hidden = true;
-  cycleModalKey = '';
-  cycleSetText('cycle-modal-status', '');
-  // Focus goes back to the control that opened the dialog, not to the top of
-  // the document.
-  if (cycleModalReturn && cycleModalReturn.focus) cycleModalReturn.focus();
-  cycleModalReturn = null;
-}
-
-/** Keep Tab inside the dialog: three stops, wrapped by hand. */
-function cycleModalFocusables() {
-  var stops = [cycleEl('cycle-modal-close'), cycleEl('cycle-modal-text'), cycleEl('cycle-modal-save')];
-  return stops.filter(function (el) { return el && !el.hidden && !el.disabled && !(el.id === 'cycle-modal-save' && cycleEl('cycle-modal-actions') && cycleEl('cycle-modal-actions').hidden); });
-}
-
-function onCycleModalKeydown(event) {
-  if (!cycleModalKey) return;
-  if (event.key === 'Escape') { if (event.preventDefault) event.preventDefault(); closeCycleModal(); return; }
-  if (event.key !== 'Tab') return;
-  var stops = cycleModalFocusables();
-  if (!stops.length) return;
-  var index = stops.indexOf(document.activeElement);
-  var next = event.shiftKey ? index - 1 : index + 1;
-  if (index < 0) next = event.shiftKey ? stops.length - 1 : 0;
-  else if (next < 0) next = stops.length - 1;
-  else if (next >= stops.length) next = 0;
-  else return;
-  if (event.preventDefault) event.preventDefault();
-  if (stops[next] && stops[next].focus) stops[next].focus();
 }
 
 // --- wiring ------------------------------------------------------------------
@@ -1410,8 +1396,8 @@ if (cycleEl('cycle-members')) cycleEl('cycle-members').addEventListener('click',
 if (cycleEl('cycle-cards')) cycleEl('cycle-cards').addEventListener('click', function (event) {
   var mode = event.target.closest ? event.target.closest('[data-cycle-mode]') : null;
   if (mode) { toggleCycleMode(mode.dataset.cycleMode); return; }
-  var zoom = event.target.closest ? event.target.closest('[data-cycle-zoom]') : null;
-  if (zoom) { openCycleModal(zoom.dataset.cycleZoom); return; }
+  var dot = event.target.closest ? event.target.closest('[data-cycle-task]') : null;
+  if (dot) { setCycleTaskStatus(dot.dataset.cycleTask, dot.dataset.cycleStatus || ''); return; }
   var generate = event.target.closest ? event.target.closest('#cycle-generate-review') : null;
   if (generate) { void runCycleReviewGeneration(); return; }
   var save = event.target.closest ? event.target.closest('[data-cycle-save]') : null;
@@ -1427,23 +1413,8 @@ CYCLE_SECTION_KEYS.forEach(function (pair) {
     // retro.
     if (selectedOwnerId || !selectedCycleId) return;
     cycleDrafts.set(selectedCycleId + '::' + pair[0], textarea.value);
-    if (cycleModalKey === pair[0]) cycleSetValue('cycle-modal-text', textarea.value);
   });
 });
-if (cycleEl('cycle-modal-text')) cycleEl('cycle-modal-text').addEventListener('input', function () {
-  if (!cycleModalKey) return;
-  var textarea = cycleEl('cycle-md-' + cycleModalKey);
-  if (!textarea || textarea.readOnly) return;
-  textarea.value = cycleValue('cycle-modal-text');
-  if (!selectedOwnerId && selectedCycleId) cycleDrafts.set(selectedCycleId + '::' + cycleModalKey, textarea.value);
-});
-if (cycleEl('cycle-modal-close')) cycleEl('cycle-modal-close').addEventListener('click', function () { closeCycleModal(); });
-if (cycleEl('cycle-modal-save')) cycleEl('cycle-modal-save').addEventListener('click', function () { if (cycleModalKey) void runCycleSave(cycleModalKey); });
-if (cycleEl('cycle-modal')) cycleEl('cycle-modal').addEventListener('click', function (event) {
-  // Click the backdrop, not the card, to dismiss.
-  if (event.target === cycleEl('cycle-modal')) closeCycleModal();
-});
-document.addEventListener('keydown', onCycleModalKeydown);
 if (cycleEl('cycles-refresh')) cycleEl('cycles-refresh').addEventListener('click', function () {
   // Refresh is the explicit discard: drafts survive everything else.
   cycleDrafts.clear();
@@ -1879,7 +1850,7 @@ button.danger{background:var(--danger);border-color:var(--danger)}
 .cycle-item-broken{font-size:11px;color:var(--danger)}
 .cycle-cards{display:flex;flex-direction:column;gap:16px}
 .cycle-cards[hidden]{display:none}
-.cycle-card textarea,.cycle-modal-card textarea{width:100%;font:inherit;padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--surface);resize:vertical}
+.cycle-card textarea{width:100%;font:inherit;padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--surface);resize:vertical}
 .cycle-card textarea{min-height:11rem}
 .cycle-head-actions{display:flex;gap:6px;align-items:center}
 .cycle-read{font-size:13px;line-height:1.7}
@@ -1890,6 +1861,20 @@ button.danger{background:var(--danger);border-color:var(--danger)}
 .cy-group-title{margin:0 0 6px;font-size:13px;font-weight:600;color:var(--text)}
 .cy-tasks{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
 .cy-task{display:flex;gap:8px;align-items:baseline;padding-left:10px;border-left:2px solid var(--border);overflow-wrap:anywhere}
+.cy-task-done{border-left-color:#2e9e5b}
+.cy-task-partial{border-left-color:#d8a72a}
+.cy-task-missed{border-left-color:var(--danger)}
+.cy-task-done>span:last-child{color:var(--muted)}
+.cy-dots{flex:none;display:inline-flex;gap:3px;align-self:center}
+.cy-dot{width:11px;height:11px;padding:0;border-radius:50%;cursor:pointer;background:transparent;line-height:0}
+.cy-dot-done{border:1.5px solid #2e9e5b}
+.cy-dot-partial{border:1.5px solid #d8a72a}
+.cy-dot-missed{border:1.5px solid var(--danger)}
+.cy-dot-done.on{background:#2e9e5b}
+.cy-dot-partial.on{background:#d8a72a}
+.cy-dot-missed.on{background:var(--danger)}
+.cy-dot:hover{outline:2px solid var(--border);outline-offset:1px}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .cy-badge{flex:none;font-size:10px;font-weight:700;letter-spacing:.04em;padding:1px 6px;border-radius:6px;background:var(--danger);color:#fff}
 .cy-fields{margin:0 0 8px;display:grid;grid-template-columns:auto 1fr;gap:2px 12px}
 .cy-field{display:contents}
@@ -1897,16 +1882,12 @@ button.danger{background:var(--danger);border-color:var(--danger)}
 .cy-fields dd{margin:0;overflow-wrap:anywhere}
 /* Read-only is not broken, so it borrows the muted surface rather than the
    danger colours: nothing is wrong, this is just someone else's file. */
-.cycle-card textarea[readonly],.cycle-modal-card textarea[readonly]{background:var(--surface-2)}
+.cycle-card textarea[readonly]{background:var(--surface-2)}
 .cycle-card-actions{display:flex;gap:8px;align-items:center;margin-top:8px}
 .cycle-card-actions[hidden]{display:none}
 .cycle-readonly{margin-top:8px;padding:8px 10px;border-radius:10px;background:var(--surface-2);color:var(--muted);font-size:12px}
 .cycle-warning{margin-top:8px;padding:10px;border-radius:10px;background:#f7e0e0;color:var(--danger);font-size:12px}
 button.compact{padding:4px 10px;font-size:12px}
-.cycle-modal{position:fixed;inset:0;z-index:30;background:rgba(20,24,22,.55);display:flex;align-items:center;justify-content:center;padding:24px}
-.cycle-modal[hidden]{display:none}
-.cycle-modal-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px;width:min(880px,100%);max-height:86vh;display:flex;flex-direction:column;gap:10px}
-.cycle-modal-card textarea{flex:1;min-height:46vh}
 `;
 
 const CONSOLE_JS = `
