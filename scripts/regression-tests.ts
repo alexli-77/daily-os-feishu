@@ -142,6 +142,9 @@ try {
     'scripts/tests/cycles-standalone-page.test.ts',
     // LEO-280 history migration: run selection, both table layouts, idempotency.
     'scripts/tests/cycle-migration.test.ts',
+    // LEO-278 run -> cycle files: 要务 to the planned cycle, review to the
+    // reviewed one, user edits never clobbered, and the retro scaffold.
+    'scripts/tests/cycle-writeback.test.ts',
     // Standalone /okr page: two columns, every empty/malformed state, and the
     // Config-side OKR / strategy / decision-policy editors it was split from.
     'scripts/tests/okr-page.test.ts',

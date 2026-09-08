@@ -20,6 +20,7 @@ import type { EvidenceSource } from '../workflows/types.js';
 import { loadOkrFromDir, buildOkrSummary } from '../okr/loader.js';
 import { resolveOkrDir } from '../okr/biweekly-progress.js';
 import { isLifeReviewOsEntry, runLifeReviewOsSkill } from './life-review-os.js';
+import { formatLocalCycleWriteback, writeLocalCyclesFromRun, type LocalCycleWritebackResult } from '../cycles/writeback.js';
 
 type SkillEntry = AppConfig['skills']['registry'][number];
 type SkillProvider = SkillEntry['provider'];
@@ -52,6 +53,8 @@ export interface SkillRunResult {
   inputPackPath: string;
   output: string;
   draftOnly: boolean;
+  /** What the run put into `20_CYCLES` (LEO-278). Absent for non-cycle skills. */
+  localCycles?: LocalCycleWritebackResult;
 }
 
 const SKILL_FILE_LIMIT = 80_000;
@@ -165,14 +168,21 @@ async function runConfiguredSkillInner(
       userText: input.userText || '',
       inputPackPath,
     });
+    // Local markdown is the source of truth, so the cycle files are written
+    // here rather than behind the Feishu write-back confirmation. Feishu is a
+    // shared document and deserves an explicit confirm; the user's own vault
+    // does not, and gating it would mean a finished biweekly is invisible in
+    // the Cycles page until a second command is sent (LEO-278).
+    const localCycles = writeLocalCyclesFromRun(input.config, path.join(workdir, '.runs'), lifeReview.runId);
     const result = {
       runId: lifeReview.runId,
       skillId: entry.id,
       provider,
       mode,
       inputPackPath,
-      output: normalizeSkillOutput(lifeReview.draft),
+      output: appendLocalCycleNote(normalizeSkillOutput(lifeReview.draft), localCycles),
       draftOnly: true,
+      localCycles,
     };
     recordLatestSkillRun(input.config, result);
     return result;
@@ -726,6 +736,20 @@ function normalizeSkillOutput(text: string): string {
     .replace(/\s*```\s*$/i, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+/**
+ * Tell the user where the run landed locally.
+ *
+ * Without this the cycle write is silent, and the only way to find out whether
+ * a biweekly reached `20_CYCLES` is to go and look at the Cycles page. A run
+ * that wrote nothing is exactly the case worth surfacing, so a skipped or
+ * failed write is reported as loudly as a successful one.
+ */
+function appendLocalCycleNote(output: string, result: LocalCycleWritebackResult): string {
+  const note = formatLocalCycleWriteback(result).trim();
+  if (!note) return output;
+  return `${output}\n\n---\n📁 本地周期（Cycles 页）\n${note}`.trim();
 }
 
 function truncate(value: string, maxChars: number): string {

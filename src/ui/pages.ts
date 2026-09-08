@@ -15,6 +15,7 @@ import { extractDailyPlanTodos } from '../workflows/summary.js';
 import { todayInTimezone } from '../utils/date.js';
 import { listTodoFeedback } from '../todo/feedback.js';
 import { readOkrSnapshot, type OkrFile, type OkrObjective } from './okr-lite.js';
+import { RETRO_TEMPLATE } from '../cycles/retro-template.js';
 import { readArtifactsIndex, findArtifactById, isPreviewableType, type ArtifactRecord } from '../storage/artifacts.js';
 import { runManager } from '../service/run-manager.js';
 import { linearIssueUrl } from '../utils/linear-link.js';
@@ -642,7 +643,7 @@ function renderCyclesPage(ctx: PageContext): string {
       <section class="card cycle-card" id="cycle-card-${card.key}" aria-labelledby="cycle-title-${card.key}">
         <div class="card-head">
           <div>
-            <h3 id="cycle-title-${card.key}">${escapeHtml(card.title)}</h3>
+            <h3 id="cycle-title-${card.key}">${escapeHtml(card.title)}<span class="tag" id="cycle-template-${card.key}" hidden>模板</span></h3>
             <p class="muted small" id="cycle-meta-${card.key}"></p>
           </div>
           <button type="button" class="secondary compact" data-cycle-zoom="${card.key}" id="cycle-zoom-${card.key}">放大</button>
@@ -717,6 +718,11 @@ var CYCLE_PLACEHOLDERS = {
   retro: '这个周期实际发生了什么、哪里没做到',
   review: '对这个周期的评价与下一步建议',
 };
+// The Feishu retro layout, pre-filled into an empty retro so writing one here
+// produces the same three sections life-review-os parses back out. Interpolated
+// from RETRO_TEMPLATE rather than restated, so the scaffold and the parser
+// contract have one source.
+var CYCLE_RETRO_TEMPLATE = ${JSON.stringify(RETRO_TEMPLATE)};
 var cyclesData = { cycles: { dir: '', items: [] }, team: null };
 // Unsaved typing, keyed by cycle id + section slug. Re-filling a section someone
 // is halfway through writing would eat a hand-written retro — the one thing this
@@ -941,8 +947,15 @@ function renderCycleDetail(item, member, team) {
     var draftKey = item.id + '::' + key;
     // Drafts belong to my own files only, so a teammate view always shows what
     // was synced, never something I happened to have typed under the same id.
+    var content = stored ? stored.content || '' : '';
+    // An empty retro of my own starts from the Feishu scaffold. Only when it is
+    // genuinely empty and undrafted: pre-filling over a draft or over a
+    // teammate's synced text would be the one thing this page must never do.
+    var templated = key === 'retro' && !readOnly && !cycleDrafts.has(draftKey) && !content.trim();
     if (!readOnly && cycleDrafts.has(draftKey)) cycleSetValue('cycle-md-' + key, cycleDrafts.get(draftKey));
-    else cycleSetValue('cycle-md-' + key, stored ? stored.content || '' : '');
+    else cycleSetValue('cycle-md-' + key, templated ? CYCLE_RETRO_TEMPLATE : content);
+    var templateTag = cycleEl('cycle-template-' + key);
+    if (templateTag) templateTag.hidden = !templated;
     // A missing key and an empty string mean different things: never written vs.
     // written and then cleared.
     cycleSetText('cycle-meta-' + key, stored
