@@ -60,6 +60,43 @@ test('a child that exits 0 only because SIGTERM raced it is still a failure', as
   assert.equal(result.ok, false, 'a killed run must never look successful');
 });
 
+/**
+ * A child that exits before draining stdin makes the `child.stdin.end(input)`
+ * write fail with EPIPE. Nothing listened on that stream, so it surfaced as an
+ * uncaught exception and killed the calling process — a whole regression suite
+ * died this way in CI, printing no assertions at all, only "write EPIPE".
+ *
+ * The outcome is already covered by the 'error' and 'close' handlers, so the
+ * write failing is not interesting. It just must not be fatal.
+ */
+test('a child that exits without reading stdin does not kill the caller', async () => {
+  const result = await runCommand('node', ['-e', 'process.exit(0)'], {
+    // Large enough not to fit in the pipe buffer, so the write really does fail
+    // rather than being silently absorbed.
+    input: 'x'.repeat(2_000_000),
+    timeoutMs: 10000,
+  });
+  assert.equal(result.code, 0, 'the child exited fine; only our write to it failed');
+  assert.equal(result.ok, true);
+});
+
+test('a child that exits non-zero without reading stdin still reports its code', async () => {
+  const result = await runCommand('node', ['-e', 'console.error("nope"); process.exit(3)'], {
+    input: 'y'.repeat(2_000_000),
+    timeoutMs: 10000,
+  });
+  assert.equal(result.code, 3);
+  assert.equal(result.ok, false);
+  assert.match(result.stderr, /nope/, 'stderr collected before the exit must survive');
+});
+
+test('a missing binary with stdin input still resolves rather than throwing', async () => {
+  const result = await runCommand('definitely-not-a-real-binary-xyz', ['--x'], { input: 'x'.repeat(200000) });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, null);
+  assert.match(result.stderr, /ENOENT/);
+});
+
 async function run(): Promise<void> {
   let passed = 0;
   let failed = 0;
