@@ -53,11 +53,12 @@ import {
   getSession,
   listUsers,
   parseCookies,
+  registerUser,
   setPassword,
   verifyPassword,
   type Role,
 } from './auth.js';
-import { PLATFORM_PAGES, renderLoginPage, renderPlatformPage, type PageContext } from './pages.js';
+import { PLATFORM_PAGES, renderLoginPage, renderWelcomePage, renderPlatformPage, type PageContext } from './pages.js';
 import {
   createWebChatSession,
   deleteWebChatSession,
@@ -334,11 +335,12 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
     const auth = resolveAuthContext(request, url);
 
     // Public console auth endpoints. Still Origin-checked, but no token/session required.
-    if (url.pathname === '/api/login' || url.pathname === '/api/logout') {
+    if (url.pathname === '/api/login' || url.pathname === '/api/logout' || url.pathname === '/api/register') {
       if (!isAllowedApiOrigin(request.headers.origin, options)) {
         return sendJson(response, { ok: false, error: 'Forbidden origin' }, 403);
       }
       if (request.method === 'POST' && url.pathname === '/api/login') return handleLogin(request, response);
+      if (request.method === 'POST' && url.pathname === '/api/register') return handleRegister(request, response);
       if (request.method === 'POST' && url.pathname === '/api/logout') return handleLogout(request, response, auth);
       return sendJson(response, { ok: false, error: 'Not found' }, 404);
     }
@@ -391,7 +393,13 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
 
     // Homepage is the platform dashboard (where Chat lives). The legacy ops
     // console (setup / sources / checks) stays reachable at /console. (LEO-241)
-    if (request.method === 'GET' && url.pathname === '/') return redirect(response, '/dashboard');
+    // Signed out, the root is a welcome page rather than a bounce to /login.
+    // The old redirect chain (/ -> /dashboard -> /login) left the login form as
+    // the only thing a new visitor ever saw, with no way back out of it.
+    if (request.method === 'GET' && url.pathname === '/') {
+      if (auth.authenticated) return redirect(response, '/dashboard');
+      return send(response, 200, renderWelcomePage(), 'text/html; charset=utf-8');
+    }
     if (request.method === 'GET' && url.pathname === '/console') return send(response, 200, renderHtml(), 'text/html; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/assets/app.css') return send(response, 200, CSS, 'text/css; charset=utf-8');
     if (request.method === 'GET' && url.pathname === '/assets/app.js') return send(response, 200, JS, 'application/javascript; charset=utf-8');
@@ -491,7 +499,10 @@ function buildPageContext(auth: AuthContext, url: URL, options: UiServerOptions)
   const env = readEnvFile(options.envPath);
   applyEnv(env);
   const config = loadConfig(options.configPath);
-  return { config, role: auth.role, username: auth.username, url };
+  // The runtime-token path has no user record behind it, so the seed can be
+  // absent; the renderer falls back to the username.
+  const avatarSeed = findUser(auth.username)?.avatar_seed || '';
+  return { config, role: auth.role, username: auth.username, avatarSeed, url };
 }
 
 function sessionCookieHeader(token: string): string {
@@ -565,6 +576,34 @@ async function handleLogin(request: http.IncomingMessage, response: http.ServerR
     'set-cookie': sessionCookieHeader(session.token),
   });
   response.end(JSON.stringify({ ok: true, role: user.role, username: user.username }));
+}
+
+/**
+ * Sign-up. Public, like login, and Origin-checked the same way.
+ *
+ * Errors come back keyed by field so the form can put each message under its
+ * own input; the client validates too, but that only decides what the form
+ * looks like — this is the check that decides what gets stored.
+ *
+ * On success the session cookie is set here, so registering logs you in without
+ * a second round trip and without the page having to know the password again.
+ */
+async function handleRegister(request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
+  const body = readRecord(await readJson(request));
+  const result = registerUser({
+    username: String(body.username || ''),
+    email: String(body.email || ''),
+    password: String(body.password || ''),
+  });
+  if ('errors' in result) return sendJson(response, { ok: false, errors: result.errors }, 400);
+
+  const session = createSession(result.user.username, result.user.role);
+  response.writeHead(200, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+    'set-cookie': sessionCookieHeader(session.token),
+  });
+  response.end(JSON.stringify({ ok: true, username: result.user.username, role: result.user.role }));
 }
 
 function handleLogout(_request: http.IncomingMessage, response: http.ServerResponse, auth: AuthContext): void {

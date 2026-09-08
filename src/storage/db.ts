@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS users (
   role           TEXT NOT NULL,
   salt           TEXT NOT NULL,
   hash           TEXT NOT NULL,
+  email          TEXT NOT NULL DEFAULT '',
+  avatar_seed    TEXT NOT NULL DEFAULT '',
   created_at     TEXT NOT NULL,
   updated_at     TEXT NOT NULL
 );
@@ -124,6 +126,7 @@ export function getDb(): Db {
   const db = new Database(file);
   db.pragma('journal_mode = WAL');
   db.exec(SCHEMA);
+  addMissingUserColumns(db);
   handle = db;
   migrateLegacyJson(db);
   try {
@@ -142,9 +145,25 @@ export function resetDbForTests(): void {
   }
 }
 
+/**
+ * SCHEMA only ever runs as CREATE TABLE IF NOT EXISTS, so a column added later
+ * never reaches a database that already exists. Anyone upgrading has a users
+ * table from before email and avatar_seed, and losing their login over a schema
+ * bump would be a bad way to find that out.
+ */
+function addMissingUserColumns(db: Db): void {
+  const present = new Set((db.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>).map((row) => row.name));
+  for (const [column, ddl] of [
+    ['email', "ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''"],
+    ['avatar_seed', "ALTER TABLE users ADD COLUMN avatar_seed TEXT NOT NULL DEFAULT ''"],
+  ] as const) {
+    if (!present.has(column)) db.exec(ddl);
+  }
+}
+
 // --- users ------------------------------------------------------------------
 
-const USER_COLS = 'username, role, salt, hash, created_at, updated_at';
+const USER_COLS = 'username, role, salt, hash, email, avatar_seed, created_at, updated_at';
 
 export function dbLoadUsers(): UserRecord[] {
   return getDb().prepare(`SELECT ${USER_COLS} FROM users ORDER BY created_at`).all() as UserRecord[];
@@ -163,8 +182,8 @@ export function dbCountUsers(): number {
 
 export function dbInsertUser(user: UserRecord): void {
   getDb()
-    .prepare('INSERT INTO users (username, username_lower, role, salt, hash, created_at, updated_at) VALUES (?,?,?,?,?,?,?)')
-    .run(user.username, user.username.toLowerCase(), user.role, user.salt, user.hash, user.created_at, user.updated_at);
+    .prepare('INSERT INTO users (username, username_lower, role, salt, hash, email, avatar_seed, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)')
+    .run(user.username, user.username.toLowerCase(), user.role, user.salt, user.hash, user.email || '', user.avatar_seed || '', user.created_at, user.updated_at);
 }
 
 export function dbUpdateUserPassword(username: string, salt: string, hash: string, updatedAt: string): number {
