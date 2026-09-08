@@ -920,10 +920,11 @@ async function buildState(options: UiServerOptions): Promise<Record<string, unkn
 }
 
 /**
- * The biweekly plan rules live in three files across two repos: the block this
- * app injects into the input pack, and the two life-review-os files its prompt
- * builder embeds. Editing only one leaves the planner reading two versions of
- * the same rule, so the console exposes all three together.
+ * The rules behind a cycle live in several files across two repos: the block this
+ * app injects into the input pack, and the life-review-os files its prompt
+ * builders embed — two for planning the next cycle, two for reviewing the one
+ * that ended. Editing only one leaves the planner reading two versions of the
+ * same rule, so the console exposes them together.
  *
  * Clients send an id from this list, never a path — the allowlist is what keeps
  * the endpoint from turning into an arbitrary file write.
@@ -958,6 +959,21 @@ function strategyFiles(config: AppConfig): StrategyFile[] {
         label: 'modes/biweekly.md（双周模式）',
         hint: '双周模式独有的读取范围、趋势分析和写回行为。',
         path: path.join(workdir, 'modes', 'biweekly.md'),
+      },
+      // The two files the review itself is built from. Until these were listed,
+      // the console could change how the next cycle gets planned but not how it
+      // gets reviewed — including from the Cycles page's own generate button.
+      {
+        id: 'analyze_rules',
+        label: 'engine/02-analyze.md（分析规则）',
+        hint: 'life-review-os 作为 "# Analysis Rules" 整段嵌入 prompt。完整 weekly/biweekly 和 Cycles 页的「用 AI 生成 review」都读它。',
+        path: path.join(workdir, 'engine', '02-analyze.md'),
+      },
+      {
+        id: 'review_style',
+        label: 'engine/08-retro-review.md（review 文体）',
+        hint: 'review 的长度与段落约束（默认 350 字以内、固定两段）。<!-- CONTRACT --> 之后的正文才会进 prompt，前面是给你看的说明。清空或删除会回退到内置默认。',
+        path: path.join(workdir, 'engine', '08-retro-review.md'),
       },
     );
   }

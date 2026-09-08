@@ -281,9 +281,13 @@ async function testServerRoutes(): Promise<void> {
     // --- regression: the neighbouring console editors are untouched ------------
     const finalState = (await (await fetch(`${base}/api/state`, { headers: { cookie } })).json()) as any;
     const strategyIds = (finalState?.strategy?.files || []).map((file: any) => file.id);
+    // This guard is here so the Cycles work cannot quietly disturb Review
+    // Strategy. It checks that the planning files are still listed and still
+    // first — not that nothing was ever added, since the review files were
+    // added on purpose later.
     check(
-      'Review Strategy still lists its files',
-      strategyIds[0] === 'biweekly_strategy' && strategyIds.every((id: string) => ['biweekly_strategy', 'plan_rules', 'biweekly_mode'].includes(id)),
+      'Review Strategy still lists its planning files, in order',
+      ['biweekly_strategy', 'plan_rules', 'biweekly_mode'].every((id, index) => strategyIds[index] === id),
       strategyIds.join(','),
     );
     check('Review Strategy still exposes the built-in default', String(finalState?.strategy?.defaultStrategy || '').includes('计划条目规则'));
