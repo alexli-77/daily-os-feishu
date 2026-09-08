@@ -208,6 +208,9 @@ async function main(): Promise<void> {
     check('KR target / current are rendered', okrPage.html.includes('目标 100%') && okrPage.html.includes('当前 30%'));
     check('KR progress becomes a bar width', okrPage.html.includes('style="width:30%"'), 'no 30% bar');
     check("annual objective's parent link is shown", okrPage.html.includes('↦ N1'));
+    // Every objective in the real north-star and annual files says `Parent: none`,
+    // so rendering it verbatim would tag all of them with a link to nothing.
+    check('a "none" parent is not rendered as a link', !okrPage.html.includes('↦ none'), 'placeholder parent leaked');
     check('column summary counts objectives and KRs', okrPage.html.includes('2 个 Objective · 3 个 KR'));
     check('frontmatter cycle is surfaced', okrPage.html.includes('周期 2026-2031'));
     check(

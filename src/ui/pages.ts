@@ -380,7 +380,18 @@ function renderOkrPanel(label: string, fileName: string, file: OkrFile): string 
   </section>`;
 }
 
+/**
+ * `Parent: none` is how the top-level files spell "nothing above this". Both
+ * north-star-okr.md and annual-okr.md use it on every objective, so rendering it
+ * verbatim puts a meaningless `↦ none` tag on every heading of this page.
+ */
+function okrParentLabel(parent: string | undefined): string {
+  const value = String(parent ?? '').trim();
+  return /^(none|n\/a|-|—)$/i.test(value) ? '' : value;
+}
+
 function renderOkrObjective(obj: OkrObjective): string {
+  const parent = okrParentLabel(obj.parent);
   const krs = obj.keyResults.length
     ? obj.keyResults
         .map(
@@ -394,7 +405,7 @@ function renderOkrObjective(obj: OkrObjective): string {
         .join('')
     : '<li class="muted">这个 Objective 下还没有 KR。</li>';
   return `<div class="objective">
-    <h3>${escapeHtml(obj.id)}: ${escapeHtml(obj.title)}${obj.parent ? ` <span class="tag">↦ ${escapeHtml(obj.parent)}</span>` : ''}</h3>
+    <h3>${escapeHtml(obj.id)}: ${escapeHtml(obj.title)}${parent ? ` <span class="tag">↦ ${escapeHtml(parent)}</span>` : ''}</h3>
     <ul class="kr-list">${krs}</ul>
   </div>`;
 }
