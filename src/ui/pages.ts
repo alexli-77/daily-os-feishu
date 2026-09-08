@@ -393,6 +393,21 @@ function okrParentLabel(parent: string | undefined): string {
   return /^(none|n\/a|-|—)$/i.test(value) ? '' : value;
 }
 
+/**
+ * Target/Current are blank for most KRs in the long-horizon files — the numbers
+ * only get filled in on the quarterly file. Emitting the row anyway would put
+ * `目标 — · 当前 —` under every single KR, so drop it when there is nothing in it.
+ */
+function renderKrMeta(kr: OkrObjective['keyResults'][number]): string {
+  const placeholder = (value: string) => (/^(-|—|n\/a)?$/i.test(String(value ?? '').trim()) ? '' : String(value).trim());
+  const parts = [
+    placeholder(kr.target) && `目标 ${escapeHtml(placeholder(kr.target))}`,
+    placeholder(kr.current) && `当前 ${escapeHtml(placeholder(kr.current))}`,
+    placeholder(kr.updated) && escapeHtml(placeholder(kr.updated)),
+  ].filter(Boolean);
+  return parts.length ? `<div class="kr-meta muted small">${parts.join(' · ')}</div>` : '';
+}
+
 function renderOkrObjective(obj: OkrObjective): string {
   const parent = okrParentLabel(obj.parent);
   const krs = obj.keyResults.length
@@ -402,7 +417,7 @@ function renderOkrObjective(obj: OkrObjective): string {
             <div class="kr-head"><span class="kr-id">${escapeHtml(kr.id)}</span><span class="kr-prog">${kr.progress === null ? '—' : `${kr.progress}%`}</span></div>
             <div class="kr-desc">${escapeHtml(kr.description)}</div>
             <div class="bar"><span style="width:${kr.progress ?? 0}%"></span></div>
-            <div class="kr-meta muted small">目标 ${escapeHtml(kr.target || '—')} · 当前 ${escapeHtml(kr.current || '—')}${kr.updated ? ` · ${escapeHtml(kr.updated)}` : ''}</div>
+            ${renderKrMeta(kr)}
           </li>`,
         )
         .join('')
@@ -1444,9 +1459,9 @@ const CONSOLE_CSS = `
 :root{color-scheme:light;--bg:#f6f7f4;--surface:#fff;--surface-2:#eef3ee;--text:#202421;--muted:#68726b;--border:#d7ddd8;--accent:#1f6f58;--danger:#9f2d2d;--ok:#1e7a4d;--run:#0d5f8c;}
 *{box-sizing:border-box}
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);font-size:14px}
-.topbar{display:flex;align-items:center;gap:20px;padding:10px 18px;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:5}
+.topbar{display:flex;align-items:center;gap:20px;padding:10px 18px;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:5;flex-wrap:wrap}
 .brand{font-weight:600}
-.nav{display:flex;gap:6px;flex:1;flex-wrap:wrap;min-width:0}
+.nav{display:flex;gap:6px;flex:1;flex-wrap:wrap}
 .nav-link{padding:6px 12px;border-radius:8px;text-decoration:none;color:var(--muted)}
 .nav-link.active,.nav-link:hover{background:var(--surface-2);color:var(--text)}
 .session{display:flex;align-items:center;gap:10px}

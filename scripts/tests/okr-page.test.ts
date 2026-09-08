@@ -76,6 +76,9 @@ const NORTH_STAR = [
   '| KR ID | Description | Target | Current | Progress | Updated |',
   '| --- | --- | --- | --- | --- | --- |',
   '| N2-KR1 | 一作论文 | 4 篇 | 0 篇 | 0% | 2026-07-16 |',
+  // Shaped like the real long-horizon files, where Target/Updated are blank and
+  // Current is the em-dash placeholder.
+  '| N2-KR2 | 方向还没定 |  | — | 0% |  |',
   '',
 ].join('\n');
 
@@ -211,7 +214,9 @@ async function main(): Promise<void> {
     // Every objective in the real north-star and annual files says `Parent: none`,
     // so rendering it verbatim would tag all of them with a link to nothing.
     check('a "none" parent is not rendered as a link', !okrPage.html.includes('↦ none'), 'placeholder parent leaked');
-    check('column summary counts objectives and KRs', okrPage.html.includes('2 个 Objective · 3 个 KR'));
+    check('column summary counts objectives and KRs', okrPage.html.includes('2 个 Objective · 4 个 KR'));
+    check('a KR with no target/current gets no meta row', !okrPage.html.includes('目标 — · 当前 —'), 'empty meta row rendered');
+    check('the empty-meta KR still renders', okrPage.html.includes('N2-KR2') && okrPage.html.includes('方向还没定'));
     check('frontmatter cycle is surfaced', okrPage.html.includes('周期 2026-2031'));
     check(
       'the markdown source is not dumped on the page',
