@@ -23,4 +23,8 @@ node_modules/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
-config/config.yaml.bak-*
+# Any sidecar of the real config, not just the timestamped .bak- ones: these
+# hold live credentials, and a pattern that only covers the naming convention
+# someone happened to use last time is one improvised suffix away from a leak.
+config/config.yaml.*
+!config/config.yaml.example
