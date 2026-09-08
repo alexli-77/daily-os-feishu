@@ -1971,7 +1971,11 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,san
 .field-error{color:var(--danger);font-size:12px}
 .field-error[hidden]{display:none}
 .auth-switch{margin:0;text-align:center}
-.logout{border:1px solid var(--border);background:var(--surface);border-radius:8px;padding:5px 10px;cursor:pointer}
+/* The base button rule sets color:#fff for a filled accent button. This one
+   only overrode the background, so it was white text on a light surface — a
+   blank rounded box that reads as a broken control rather than as 退出. */
+.logout{border:1px solid var(--border);background:var(--surface);color:var(--muted);border-radius:8px;padding:5px 10px;cursor:pointer;font-size:13px}
+.logout:hover{color:var(--text);border-color:var(--muted)}
 .page{max-width:1100px;margin:0 auto;padding:18px;display:flex;flex-direction:column;gap:16px}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px}
 .card-head{display:flex;justify-content:space-between;align-items:center}

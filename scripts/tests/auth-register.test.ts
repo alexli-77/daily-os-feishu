@@ -116,6 +116,11 @@ async function main(): Promise<void> {
     check('the topbar shows the username', dashHtml.includes('>leon</span>'));
     check('the Setup link is gone', !dashHtml.includes('setup-link') && !dashHtml.includes('>Setup<'));
     check('the role is no longer appended to the name', !dashHtml.includes('· admin'), 'role badge still rendered');
+    // The base button rule paints text #fff for a filled accent button, and
+    // .logout only overrode the background — so this rendered as a blank
+    // rounded box that read as a broken control rather than as 退出.
+    check('the sign-out control has a label', dashHtml.includes('data-logout>退出</button>'), 'the button is unlabelled');
+    check('and does not inherit the white-on-light text', /\.logout\{[^}]*color:/.test(dashHtml), 'no colour override, so the label is invisible');
 
     const rootWhenSignedIn = await fetch(`${base}/`, { headers: { cookie }, redirect: 'manual' });
     check('signed in, the root goes to the dashboard', rootWhenSignedIn.status === 302 && rootWhenSignedIn.headers.get('location') === '/dashboard');
