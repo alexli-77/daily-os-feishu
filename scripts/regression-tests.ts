@@ -151,6 +151,9 @@ try {
     // Updating the weekly-review skill from the console: fast-forward only, and
     // refused on a dirty tree or a diverged branch.
     'scripts/tests/skill-update.test.ts',
+    // Read/edit modes on /cycles, and the AI review entry point. The property
+    // that matters is that no input line is ever dropped by the renderer.
+    'scripts/tests/cycle-read-mode.test.ts',
     // Standalone /okr page: two columns, every empty/malformed state, and the
     // Config-side OKR / strategy / decision-policy editors it was split from.
     'scripts/tests/okr-page.test.ts',

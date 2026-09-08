@@ -368,6 +368,10 @@ async function testPageRendering(): Promise<void> {
   check('the selected cycle fills the 要务 card', page.el('cycle-md-priorities').value === '- 最新要务', page.el('cycle-md-priorities').value);
   check('a never-written section is called out as never written', page.el('cycle-meta-retro').textContent.includes('还没写过'), page.el('cycle-meta-retro').textContent);
   check('a written section reports its source', page.el('cycle-meta-priorities').textContent.includes('planner'), page.el('cycle-meta-priorities').textContent);
+  // A card that opens in read mode has no save row — there is nothing a view
+  // you cannot type into could write. What must hold is that my own cards can
+  // be put into edit mode and then do have one.
+  ['priorities', 'retro', 'review'].forEach((key) => page.editMode(key));
   check('every card offers its own save control', ['priorities', 'retro', 'review'].every((key) => page.el('cycle-actions-' + key).hidden === false && page.el('cycle-save-' + key).disabled === false));
   check('the heading names the selected cycle', page.el('cycle-heading').textContent.includes('9.7-9.13'), page.el('cycle-heading').textContent);
 
@@ -401,6 +405,7 @@ async function testPageRendering(): Promise<void> {
 
   // --- zoom -----------------------------------------------------------------
   page.el('cycle-zoom-retro').focused = false;
+  page.editMode('retro');
   page.clickZoom('retro');
   check('the zoom dialog opens', page.el('cycle-modal').hidden === false);
   check('the dialog shows the section it was opened from', page.el('cycle-modal-title').textContent === 'retro', page.el('cycle-modal-title').textContent);
@@ -479,6 +484,7 @@ async function testPageRendering(): Promise<void> {
   page.clickCycle(NEW_ID);
   check('clicking one of my cycles leaves the teammate view', page.el('cycle-md-priorities').value === '- 最新要务', page.el('cycle-md-priorities').value);
   check('typing over a teammate never became a draft of mine', page.el('cycle-md-retro').value === '在放大视图里继续写', page.el('cycle-md-retro').value);
+  page.editMode('retro');
   check('my save controls are back', page.el('cycle-actions-retro').hidden === false && page.el('cycle-readonly').hidden === true);
 
   // A teammate with nothing cached is an empty state, not a blank form.
@@ -626,6 +632,11 @@ async function loadCyclesPage() {
     clickCycle: (id: string) => clickOn('cycle-list', '[data-cycle-id]', { cycleId: id }),
     clickMember: (ownerId: string) => clickOn('cycle-members', '[data-owner-id]', { ownerId }),
     clickZoom: (key: string) => clickOn('cycle-cards', '[data-cycle-zoom]', { cycleZoom: key }),
+    clickMode: (key: string) => clickOn('cycle-cards', '[data-cycle-mode]', { cycleMode: key }),
+    /** Put a card into edit mode regardless of which mode it opened in. */
+    editMode: (key: string) => {
+      if (get('cycle-md-' + key).hidden) clickOn('cycle-cards', '[data-cycle-mode]', { cycleMode: key });
+    },
     pressKey: (key: string) => {
       for (const handler of documentListeners.keydown || []) handler({ key, preventDefault() {} });
     },
