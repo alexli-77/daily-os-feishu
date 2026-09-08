@@ -104,16 +104,19 @@ async function runAuthTests(
   const PAGES = ['/dashboard', '/today', '/schedules', '/runs', '/artifacts'];
 
   try {
-    // 1) No cookie -> every console page 302 to /login.
+    // 1) No cookie -> every console page 302 to the welcome page. Signing in is
+    //    a dialog there; `signin=1` opens it on the sign-in form. What matters
+    //    for this file is that none of them renders without a session.
+    const SIGN_IN_TARGET = '/?signin=1';
     let allRedirect = true;
     for (const page of PAGES) {
       const res = await fetch(`${base}${page}`, { redirect: 'manual' });
-      if (res.status !== 302 || res.headers.get('location') !== '/login') {
+      if (res.status !== 302 || res.headers.get('location') !== SIGN_IN_TARGET) {
         allRedirect = false;
-        check(`no-cookie ${page} -> 302 /login`, false, `${res.status} ${res.headers.get('location')}`);
+        check(`no-cookie ${page} -> 302 ${SIGN_IN_TARGET}`, false, `${res.status} ${res.headers.get('location')}`);
       }
     }
-    check('all 5 console pages redirect to /login without a session', allRedirect);
+    check('all 5 console pages redirect to sign-in without a session', allRedirect);
 
     // 2) Forged session cookie -> pages redirect, api 401.
     const forged = `${auth.SESSION_COOKIE}=deadbeefdeadbeefdeadbeef`;

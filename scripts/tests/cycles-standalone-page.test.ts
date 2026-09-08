@@ -187,8 +187,8 @@ async function testServerRoutes(): Promise<void> {
     );
 
     const anonymous = await fetch(`${base}/cycles`, { redirect: 'manual' });
-    check('/cycles redirects an anonymous visitor to the login page',
-      anonymous.status === 302 && anonymous.headers.get('location') === '/login',
+    check('/cycles redirects an anonymous visitor to sign in',
+      anonymous.status === 302 && anonymous.headers.get('location') === '/?signin=1',
       `${anonymous.status} ${anonymous.headers.get('location')}`,
     );
 

@@ -185,7 +185,7 @@ const AUTH_MODAL = `
       <h2 id="auth-title">创建账号</h2>
       <button type="button" class="secondary compact" id="auth-close" aria-label="关闭">关闭</button>
     </div>
-    <label>用户名
+    <label><span id="auth-username-label">用户名</span>
       <input id="auth-username" name="username" autocomplete="username" />
       <span class="field-error" id="auth-error-username" hidden></span>
     </label>
@@ -234,6 +234,9 @@ function authSetMode(mode) {
   authEl('auth-password').setAttribute('autocomplete', register ? 'new-password' : 'current-password');
   authEl('auth-switch-text').textContent = register ? '已经有账号了？' : '还没有账号？';
   authEl('auth-switch').textContent = register ? '去登录' : '去注册';
+  // Signing in accepts either identifier, so the label says so; the format rule
+  // below only applies to picking a new name.
+  authEl('auth-username-label').textContent = register ? '用户名' : '用户名或邮箱';
 }
 
 function authOpen(mode) {
@@ -257,8 +260,12 @@ function authClose() {
  */
 function authValidate(values) {
   var errors = {};
-  if (!values.username) errors.username = '请填写用户名';
-  else if (!/^[A-Za-z0-9_.-]{2,64}$/.test(values.username)) errors.username = '用户名只能用字母、数字、_ . -，2-64 个字符';
+  if (!values.username) errors.username = authMode === 'register' ? '请填写用户名' : '请填写用户名或邮箱';
+  // The character rule is about choosing a name. An existing account is looked
+  // up by whatever was typed, so signing in must not reject an email here.
+  else if (authMode === 'register' && !/^[A-Za-z0-9_.-]{2,64}$/.test(values.username)) {
+    errors.username = '用户名只能用字母、数字、_ . -，2-64 个字符';
+  }
   if (authMode === 'register') {
     if (!values.email) errors.email = '请填写邮箱';
     else if (!/^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test(values.email)) errors.email = '邮箱格式不对';
@@ -320,6 +327,9 @@ async function authSubmit(event) {
 }
 
 if (authEl('auth-open')) authEl('auth-open').addEventListener('click', function () { authOpen('register'); });
+// Redirected here from a page that needed a session: open straight into the
+// sign-in form, since whoever was sent back almost certainly has an account.
+if (/[?&]signin=1(&|$)/.test(window.location.search)) authOpen('login');
 if (authEl('auth-close')) authEl('auth-close').addEventListener('click', authClose);
 if (authEl('auth-form')) authEl('auth-form').addEventListener('submit', authSubmit);
 if (authEl('auth-switch')) authEl('auth-switch').addEventListener('click', function (event) {
@@ -338,31 +348,6 @@ document.addEventListener('keydown', function (event) {
   if (event.key === 'Escape' && modal && !modal.hidden) authClose();
 });
 `;
-
-export function renderLoginPage(error?: string): string {
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Daily OS Console · Login</title>
-  <style>${CONSOLE_CSS}</style>
-</head>
-<body class="login-body">
-  <form class="login-card" method="post" action="/api/login" id="login-form">
-    <h1>Daily OS Console</h1>
-    <p class="muted">Sign in with your local account.</p>
-    ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
-    <label>Username<input name="username" autocomplete="username" autofocus required /></label>
-    <label>Password<input name="password" type="password" autocomplete="current-password" required /></label>
-    <button type="submit">Sign in</button>
-    <p class="muted small">忘记密码？运行 <code>npm run admin:reset-password</code>（或 <code>daily-os admin reset-password</code>）重设，再回来登录。</p>
-    <p class="muted small"><a href="/">← 返回首页</a></p>
-  </form>
-  <script>${LOGIN_JS}</script>
-</body>
-</html>`;
-}
 
 // --- dashboard --------------------------------------------------------------
 
@@ -1978,6 +1963,10 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,san
 .auth-modal[hidden]{display:none}
 .auth-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px;width:min(400px,100%);display:flex;flex-direction:column;gap:12px}
 .auth-card label{display:flex;flex-direction:column;gap:5px;font-size:13px}
+/* An author-level display beats the UA sheet's [hidden]{display:none}, so the
+   email row stayed visible in sign-in mode even though it was hidden. One rule
+   for the whole dialog rather than one per element that turns out to need it. */
+.auth-card [hidden]{display:none}
 .auth-card input{font:inherit;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface)}
 .field-error{color:var(--danger);font-size:12px}
 .field-error[hidden]{display:none}
@@ -2048,16 +2037,12 @@ button.danger{background:var(--danger);border-color:var(--danger)}
 .signal{display:flex;justify-content:space-between;padding:6px 8px;border-radius:8px;background:var(--surface-2)}
 .signal.error{background:#f7e0e0}
 .filter-bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
-.filter-bar input,.filter-bar select,.inline-form input,.inline-form select,.login-card input{font:inherit;padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface)}
+.filter-bar input,.filter-bar select,.inline-form input,.inline-form select{font:inherit;padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface)}
 .inline-form{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .row-actions{display:flex;gap:8px;align-items:center}
 .preview{background:#0f1512;color:#e6efe9;padding:14px;border-radius:10px;max-height:520px;overflow:auto;white-space:pre-wrap;word-break:break-word}
 .toast{position:fixed;bottom:20px;right:20px;background:var(--text);color:#fff;padding:10px 16px;border-radius:10px;z-index:20}
 .error{color:var(--danger)}
-.login-body{display:flex;min-height:100vh;align-items:center;justify-content:center}
-.login-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:26px;width:340px;display:flex;flex-direction:column;gap:12px}
-.login-card h1{font-size:18px;margin:0}
-.login-card label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted)}
 .chat-wrap{display:grid;grid-template-columns:240px 1fr;gap:16px;align-items:start}
 @media(max-width:800px){.chat-wrap{grid-template-columns:1fr}}
 .chat-sessions{max-height:70vh;overflow:auto}
@@ -2140,7 +2125,7 @@ const CONSOLE_JS = `
   function toast(msg){var t=document.getElementById('toast');if(!t)return;t.textContent=msg;t.hidden=false;setTimeout(function(){t.hidden=true},2600);}
   document.addEventListener('click',function(ev){
     var logout=ev.target.closest('[data-logout]');
-    if(logout){ev.preventDefault();fetch('/api/logout',{method:'POST',credentials:'same-origin'}).then(function(){location.href='/login';});return;}
+    if(logout){ev.preventDefault();fetch('/api/logout',{method:'POST',credentials:'same-origin'}).then(function(){location.href='/';});return;}
     var btn=ev.target.closest('button[data-post],a[data-post]');
     if(!btn)return;
     ev.preventDefault();
@@ -2179,20 +2164,3 @@ const CONSOLE_JS = `
 })();
 `;
 
-const LOGIN_JS = `
-(function(){
-  var form=document.getElementById('login-form');
-  if(!form)return;
-  form.addEventListener('submit',function(ev){
-    ev.preventDefault();
-    var obj={};new FormData(form).forEach(function(v,k){obj[k]=v;});
-    fetch('/api/login',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj)})
-      .then(function(r){return r.json().catch(function(){return{ok:false};}).then(function(d){return{status:r.status,data:d};});})
-      .then(function(res){
-        if(res.status>=200&&res.status<300&&res.data&&res.data.ok){location.href='/dashboard';}
-        else{var p=document.querySelector('.error')||document.createElement('p');p.className='error';p.textContent=(res.data&&res.data.error)||'Login failed';form.insertBefore(p,form.children[2]);}
-      })
-      .catch(function(e){alert(String(e));});
-  });
-})();
-`;

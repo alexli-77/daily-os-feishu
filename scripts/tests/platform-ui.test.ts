@@ -147,7 +147,9 @@ async function main(): Promise<void> {
 
     // --- Console page auth -------------------------------------------------
     const noAuthPage = await fetch(`${base}/dashboard`, { redirect: 'manual' });
-    check('dashboard without session -> redirect to /login', noAuthPage.status === 302 && noAuthPage.headers.get('location') === '/login', String(noAuthPage.status));
+    // Signing in is a dialog on the welcome page now; `signin=1` asks that page
+    // to open on the sign-in form rather than on sign-up.
+    check('dashboard without session -> redirect to the welcome page', noAuthPage.status === 302 && noAuthPage.headers.get('location') === '/?signin=1', `${noAuthPage.status} -> ${noAuthPage.headers.get('location')}`);
 
     const authedPage = await fetch(`${base}/dashboard`, { headers: { cookie: adminCookie } });
     const pageText = await authedPage.text();

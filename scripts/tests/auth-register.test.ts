@@ -74,10 +74,13 @@ async function main(): Promise<void> {
     check('it leaks no vault path', !homeHtml.includes(vault), 'vault path on the public page');
     check('it leaks no config or env', !homeHtml.includes('supabase') && !homeHtml.includes('app_secret'));
 
+    // Signing in is a dialog, not a page. /login stays routed so an old bookmark
+    // lands somewhere that can actually sign you in.
     const login = await fetch(`${base}/login`, { redirect: 'manual' });
-    const loginHtml = await login.text();
-    check('/login is no longer a dead end', loginHtml.includes('href="/"'), 'no way back to the welcome page');
-    check('/login no longer offers the signed-out console shell', !loginHtml.includes('without signing in'));
+    check('/login is no longer a page of its own', login.status === 302 && login.headers.get('location') === '/?signin=1', `${login.status} -> ${login.headers.get('location')}`);
+    const guarded = await fetch(`${base}/cycles`, { redirect: 'manual' });
+    check('a guarded page bounces to the welcome page, not to a login page', guarded.headers.get('location') === '/?signin=1', String(guarded.headers.get('location')));
+    check('and asks for the sign-in form rather than sign-up', homeHtml.includes('signin=1'), 'the page cannot tell why it was opened');
 
     // --- validation, per field -------------------------------------------------
     const cases: Array<[string, Record<string, string>, string]> = [
@@ -118,6 +121,22 @@ async function main(): Promise<void> {
     check('signed in, the root goes to the dashboard', rootWhenSignedIn.status === 302 && rootWhenSignedIn.headers.get('location') === '/dashboard');
 
     // --- account rules ----------------------------------------------------------
+    // --- signing in ------------------------------------------------------------
+    const signIn = async (identifier: string, password: string): Promise<number> =>
+      (await fetch(`${base}/api/login`, { method: 'POST', headers, body: JSON.stringify({ username: identifier, password }) })).status;
+
+    check('sign in with the username', (await signIn('leon', GOOD.password)) === 200);
+    // People remember the address they signed up with more reliably than the
+    // handle they picked in the same minute.
+    check('sign in with the email', (await signIn(GOOD.email, GOOD.password)) === 200);
+    check('the email is matched case-insensitively', (await signIn(GOOD.email.toUpperCase(), GOOD.password)) === 200);
+    check('a wrong password is still refused', (await signIn('leon', 'wrongpass')) === 401);
+    check('an unknown email is refused', (await signIn('nobody@example.com', GOOD.password)) === 401);
+    // The bootstrap admin has email '', which must not be matched by a blank or
+    // whitespace identifier.
+    check('a blank identifier is refused', (await signIn('   ', GOOD.password)) === 400);
+    check('an empty email does not match the account that has none', (await signIn('', GOOD.password)) === 400);
+
     const dup = await register({ ...GOOD, email: 'other@example.com' });
     check('a taken username is refused, on the username field', dup.status === 400 && Boolean(dup.body?.errors?.username), JSON.stringify(dup.body));
 
