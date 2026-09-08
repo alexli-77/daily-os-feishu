@@ -14,7 +14,7 @@ import { readLatestWorkflowOutput } from '../storage/memory.js';
 import { extractDailyPlanTodos } from '../workflows/summary.js';
 import { todayInTimezone } from '../utils/date.js';
 import { listTodoFeedback } from '../todo/feedback.js';
-import { readOkrSnapshot, type OkrObjective } from './okr-lite.js';
+import { readOkrSnapshot, type OkrFile, type OkrObjective } from './okr-lite.js';
 import { readArtifactsIndex, findArtifactById, isPreviewableType, type ArtifactRecord } from '../storage/artifacts.js';
 import { runManager } from '../service/run-manager.js';
 import { linearIssueUrl } from '../utils/linear-link.js';
@@ -33,12 +33,13 @@ export interface PageContext {
   url: URL;
 }
 
-export const PLATFORM_PAGES = new Set(['/dashboard', '/today', '/cycles', '/chat', '/schedules', '/runs', '/artifacts']);
+export const PLATFORM_PAGES = new Set(['/dashboard', '/today', '/cycles', '/okr', '/chat', '/schedules', '/runs', '/artifacts']);
 
 const NAV: Array<{ href: string; label: string }> = [
   { href: '/dashboard', label: 'Dashboard' },
   { href: '/today', label: 'Today' },
   { href: '/cycles', label: 'Cycles' },
+  { href: '/okr', label: 'OKR' },
   { href: '/chat', label: 'Chat' },
   { href: '/schedules', label: 'Schedules' },
   { href: '/runs', label: 'Runs' },
@@ -63,6 +64,8 @@ export function renderPlatformPage(pathname: string, ctx: PageContext): string {
       return layout('/today', ctx, renderToday(ctx));
     case '/cycles':
       return layout('/cycles', ctx, renderCyclesPage(ctx));
+    case '/okr':
+      return layout('/okr', ctx, renderOkrPage(ctx));
     case '/chat':
       return layout('/chat', ctx, renderChat(ctx));
     case '/schedules':
@@ -203,56 +206,14 @@ function renderAdminUsers(): string {
 // --- today ------------------------------------------------------------------
 
 function renderToday(ctx: PageContext): string {
-  const { config } = ctx;
-  const okr = safe(() => readOkrSnapshot(config.memory.repository_path), null);
-  const northStarTitle = okr?.northStar.exists
-    ? okr.northStar.objectives[0]?.title || okr.northStar.title
-    : 'North star OKR not found';
-  const cycle = okr?.current.frontmatter.cycle || '—';
-  const progress = okr?.currentProgress ?? null;
-
-  const northBar = `
-  <section class="north-bar">
-    <div class="north-main">
-      <span class="north-label">North Star</span>
-      <span class="north-title">${escapeHtml(northStarTitle)}</span>
-    </div>
-    <div class="north-meta">
-      <span>Cycle ${escapeHtml(cycle)}</span>
-      ${progress === null ? '<span class="muted">no KR progress</span>' : `<span class="north-progress">${progress}%</span>`}
-    </div>
-  </section>`;
-
-  const okrChain = renderOkrColumn(okr?.current.objectives ?? []);
   const planCol = renderPlanColumn(ctx);
   const myTodoCol = renderMyTodoColumn(ctx);
 
-  return `${northBar}
-  <div class="three-col">
-    <section class="card col"><h2>OKR chain</h2>${okrChain}</section>
+  return `
+  <div class="two-col">
     <section class="card col"><h2>Today's plan</h2>${planCol}</section>
     <section class="card col"><h2>My todos</h2>${myTodoCol}</section>
   </div>`;
-}
-
-function renderOkrColumn(objectives: OkrObjective[]): string {
-  if (objectives.length === 0) return '<p class="muted">No quarterly objectives parsed. Fill memory-vault/default/10_OKR/current-okr.md.</p>';
-  return objectives
-    .map((obj) => {
-      const krs = obj.keyResults.length
-        ? obj.keyResults
-            .map(
-              (kr) => `<li>
-                <div class="kr-head"><span class="kr-id">${escapeHtml(kr.id)}</span><span class="kr-prog">${kr.progress === null ? '—' : `${kr.progress}%`}</span></div>
-                <div class="kr-desc">${escapeHtml(kr.description)}</div>
-                <div class="bar"><span style="width:${kr.progress ?? 0}%"></span></div>
-              </li>`,
-            )
-            .join('')
-        : '<li class="muted">No key results.</li>';
-      return `<div class="objective"><h3>${escapeHtml(obj.id)}: ${escapeHtml(obj.title)}${obj.parent ? ` <span class="tag">↦ ${escapeHtml(obj.parent)}</span>` : ''}</h3><ul class="kr-list">${krs}</ul></div>`;
-    })
-    .join('');
 }
 
 /** Today's plan — the todos the daily_plan workflow generated (read-only view). */
@@ -372,6 +333,84 @@ function formatTodoHistoryDate(value: string): string {
   const date = new Date(ts);
   const pad = (input: number): string => String(input).padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+// --- okr --------------------------------------------------------------------
+
+/**
+ * Read-only view of the two long-horizon OKR files, side by side. The files are
+ * edited in Config → OKR; this page only parses and renders them, so every
+ * failure mode (missing file, unparseable body, objective without KRs) has to
+ * degrade into a message rather than a blank column.
+ */
+function renderOkrPage(ctx: PageContext): string {
+  const okr = safe(() => readOkrSnapshot(ctx.config.memory.repository_path), null);
+  if (!okr) {
+    return `<section class="card">
+      <h2>OKR</h2>
+      <p class="muted">读不到 OKR 目录。检查 config 里的 <code>memory.repository_path</code>，或到 <a href="/console#okr">Config → OKR</a> 填写。</p>
+    </section>`;
+  }
+  return `
+  <div class="two-col">
+    ${renderOkrPanel('5 年 North Star', 'north-star-okr.md', okr.northStar)}
+    ${renderOkrPanel('年度 Annual', 'annual-okr.md', okr.annual)}
+  </div>
+  <p class="muted small">来源目录 <code>${escapeHtml(okr.dir)}</code> · 只读视图，编辑请到 <a href="/console#okr">Config → OKR</a>。</p>`;
+}
+
+function renderOkrPanel(label: string, fileName: string, file: OkrFile): string {
+  const head = `<div class="card-head"><h2>${escapeHtml(label)}</h2><span class="tag">${escapeHtml(fileName)}</span></div>`;
+  if (!file.exists) {
+    return `<section class="card col">${head}
+      <p class="muted">还没有 <code>${escapeHtml(fileName)}</code>。到 <a href="/console#okr">Config → OKR</a> 写入后这里会显示。</p>
+    </section>`;
+  }
+  const meta = [
+    file.frontmatter.cycle ? `周期 ${file.frontmatter.cycle}` : '',
+    file.frontmatter.status ? `状态 ${file.frontmatter.status}` : '',
+    file.frontmatter.updated ? `更新于 ${file.frontmatter.updated}` : '',
+  ].filter(Boolean);
+  const krCount = file.objectives.reduce((sum, obj) => sum + obj.keyResults.length, 0);
+  const summary = `${file.objectives.length} 个 Objective · ${krCount} 个 KR`;
+  const body =
+    file.objectives.length === 0
+      ? `<p class="muted">这个文件里没有解析出 Objective。需要 <code>## Objective &lt;id&gt;: &lt;title&gt;</code> 标题，以及 <code>KR ID | Description | Target | Current | Progress | Updated</code> 这张表。</p>`
+      : file.objectives.map(renderOkrObjective).join('');
+  return `<section class="card col">${head}
+    <p class="muted small">${escapeHtml([summary, ...meta].join(' · '))}</p>
+    ${body}
+  </section>`;
+}
+
+/**
+ * `Parent: none` is how the top-level files spell "nothing above this". Both
+ * north-star-okr.md and annual-okr.md use it on every objective, so rendering it
+ * verbatim puts a meaningless `↦ none` tag on every heading of this page.
+ */
+function okrParentLabel(parent: string | undefined): string {
+  const value = String(parent ?? '').trim();
+  return /^(none|n\/a|-|—)$/i.test(value) ? '' : value;
+}
+
+function renderOkrObjective(obj: OkrObjective): string {
+  const parent = okrParentLabel(obj.parent);
+  const krs = obj.keyResults.length
+    ? obj.keyResults
+        .map(
+          (kr) => `<li>
+            <div class="kr-head"><span class="kr-id">${escapeHtml(kr.id)}</span><span class="kr-prog">${kr.progress === null ? '—' : `${kr.progress}%`}</span></div>
+            <div class="kr-desc">${escapeHtml(kr.description)}</div>
+            <div class="bar"><span style="width:${kr.progress ?? 0}%"></span></div>
+            <div class="kr-meta muted small">目标 ${escapeHtml(kr.target || '—')} · 当前 ${escapeHtml(kr.current || '—')}${kr.updated ? ` · ${escapeHtml(kr.updated)}` : ''}</div>
+          </li>`,
+        )
+        .join('')
+    : '<li class="muted">这个 Objective 下还没有 KR。</li>';
+  return `<div class="objective">
+    <h3>${escapeHtml(obj.id)}: ${escapeHtml(obj.title)}${parent ? ` <span class="tag">↦ ${escapeHtml(parent)}</span>` : ''}</h3>
+    <ul class="kr-list">${krs}</ul>
+  </div>`;
 }
 
 // --- chat (LEO-236) ---------------------------------------------------------
@@ -1440,19 +1479,16 @@ button.danger{background:var(--danger);border-color:var(--danger)}
 .stat-num{font-size:20px;font-weight:600}
 .stat-label{font-size:12px;color:var(--muted)}
 .three-col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
-.col{min-height:120px}
-@media(max-width:900px){.three-col{grid-template-columns:1fr}}
-.north-bar{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--accent);border-radius:12px;padding:14px 16px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
-.north-label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-right:8px}
-.north-title{font-weight:600}
-.north-progress{font-weight:700;color:var(--accent)}
-.north-meta{display:flex;gap:14px;align-items:center}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.col{min-height:120px;min-width:0}
+@media(max-width:900px){.three-col,.two-col{grid-template-columns:1fr}}
 .objective{margin-bottom:14px}
 .kr-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
 .kr-head{display:flex;justify-content:space-between}
 .kr-id{font-weight:600;font-size:12px}
 .kr-prog{font-size:12px;color:var(--accent)}
-.kr-desc{font-size:12px;color:var(--muted);margin:2px 0}
+.kr-desc{font-size:12px;color:var(--muted);margin:2px 0;overflow-wrap:anywhere}
+.kr-meta{margin-top:4px}
 .bar{height:6px;background:var(--surface-2);border-radius:6px;overflow:hidden}
 .bar>span{display:block;height:100%;background:var(--accent)}
 .todo-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
