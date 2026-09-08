@@ -151,6 +151,9 @@ try {
     // Updating the weekly-review skill from the console: fast-forward only, and
     // refused on a dirty tree or a diverged branch.
     'scripts/tests/skill-update.test.ts',
+    // Sign-up, the signed-out welcome page, and the topbar identity. The public
+    // root must stay free of the owner's data now that it is reachable.
+    'scripts/tests/auth-register.test.ts',
     // Read/edit modes on /cycles, and the AI review entry point. The property
     // that matters is that no input line is ever dropped by the renderer.
     'scripts/tests/cycle-read-mode.test.ts',

@@ -16,6 +16,7 @@ import { todayInTimezone } from '../utils/date.js';
 import { listTodoFeedback } from '../todo/feedback.js';
 import { readOkrSnapshot, type OkrFile, type OkrObjective } from './okr-lite.js';
 import { RETRO_TEMPLATE } from '../cycles/retro-template.js';
+import { pixelAvatarSvg } from './avatar.js';
 import { readArtifactsIndex, findArtifactById, isPreviewableType, type ArtifactRecord } from '../storage/artifacts.js';
 import { runManager } from '../service/run-manager.js';
 import { linearIssueUrl } from '../utils/linear-link.js';
@@ -31,6 +32,8 @@ export interface PageContext {
   config: AppConfig;
   role: Role;
   username: string;
+  /** Drives the topbar avatar. '' falls back to the username. */
+  avatarSeed: string;
   url: URL;
 }
 
@@ -86,7 +89,6 @@ function layout(active: string, ctx: PageContext, body: string): string {
   const nav = NAV.map(
     (item) => `<a class="nav-link${item.href === active ? ' active' : ''}" href="${item.href}">${escapeHtml(item.label)}</a>`,
   ).join('');
-  const roleBadge = ctx.role === 'admin' ? 'admin' : 'member';
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -100,9 +102,9 @@ function layout(active: string, ctx: PageContext, body: string): string {
     <div class="brand">Daily OS · Console</div>
     <nav class="nav">${nav}</nav>
     <div class="session">
-      <a class="setup-link" href="/">Setup</a>
-      <span class="role role-${roleBadge}">${escapeHtml(ctx.username)} · ${roleBadge}</span>
-      <button type="button" class="logout" data-logout>Logout</button>
+      ${pixelAvatarSvg(ctx.avatarSeed || ctx.username)}
+      <span class="who">${escapeHtml(ctx.username)}</span>
+      <button type="button" class="logout" data-logout>退出</button>
     </div>
   </header>
   <main class="page">${body}</main>
@@ -111,6 +113,231 @@ function layout(active: string, ctx: PageContext, body: string): string {
 </body>
 </html>`;
 }
+
+/**
+ * The signed-out landing page.
+ *
+ * Before this, `/` bounced to `/dashboard` and on to `/login`, so the first and
+ * only thing a visitor saw was a password form with nothing to go back to. Now
+ * the root explains what this is and offers a sign-up; once you are signed in
+ * the root redirects to the dashboard, so the welcome page is only ever the
+ * signed-out view and never something you have to dismiss.
+ *
+ * Deliberately small. The real product page is its own piece of work — this is
+ * the page that keeps the door from being a dead end.
+ */
+export function renderWelcomePage(): string {
+  const features = ([
+    ['双周复盘', '把计划和执行放在一起对比，生成下一期要务，复盘写在本地 markdown 里。'],
+    ['本地优先', '你的周期、OKR、复盘都是你机器上的文件。远端只做同步，不做真相源。'],
+    ['和你的工具连起来', 'Linear、飞书、日历、Obsidian vault —— 证据从它们来，结论回到你的文件里。'],
+    ['团队只读视图', '把自己的周期同步给家人或搭档看，各自的文件仍然在各自机器上。'],
+  ] as Array<[string, string]>)
+    .map(([title, body]) => `<li><h3>${escapeHtml(title)}</h3><p>${escapeHtml(body)}</p></li>`)
+    .join('');
+
+  return `<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Daily OS</title>
+  <style>${CONSOLE_CSS}</style>
+</head>
+<body class="welcome-body">
+  <header class="topbar">
+    <div class="brand">Daily OS</div>
+    <nav class="nav"></nav>
+    <div class="session">
+      <button type="button" id="auth-open">注册 / 登录</button>
+    </div>
+  </header>
+  <main class="page welcome">
+    <section class="welcome-hero">
+      <h1>把计划、执行和复盘放在同一个地方</h1>
+      <p class="muted">Daily OS 每两周帮你对一次账：这一期计划了什么、实际做了什么、下一期该做什么。所有内容都写进你自己的 markdown 文件。</p>
+      <div class="welcome-actions">
+        <button type="button" data-auth-open="register">创建账号</button>
+        <button type="button" class="secondary" data-auth-open="login">已有账号，登录</button>
+      </div>
+      <p class="muted small">只在本机运行（127.0.0.1）。配置、密钥和 vault 都留在这台电脑上。</p>
+    </section>
+    <ul class="welcome-features">${features}</ul>
+  </main>
+  ${AUTH_MODAL}
+  <script>${AUTH_JS}</script>
+</body>
+</html>`;
+}
+
+/**
+ * One dialog, two modes. Registering is the default: signing in is the case for
+ * someone who already has an account, and this page exists for people who do
+ * not.
+ *
+ * Errors render under the field they belong to, in red, rather than as an alert
+ * — a popup for "密码短了两位" makes you dismiss something before you can fix it.
+ */
+const AUTH_MODAL = `
+<div class="auth-modal" id="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title" hidden>
+  <form class="auth-card" id="auth-form" autocomplete="on">
+    <div class="card-head">
+      <h2 id="auth-title">创建账号</h2>
+      <button type="button" class="secondary compact" id="auth-close" aria-label="关闭">关闭</button>
+    </div>
+    <label>用户名
+      <input id="auth-username" name="username" autocomplete="username" />
+      <span class="field-error" id="auth-error-username" hidden></span>
+    </label>
+    <label id="auth-email-row">邮箱
+      <input id="auth-email" name="email" type="email" autocomplete="email" />
+      <span class="field-error" id="auth-error-email" hidden></span>
+    </label>
+    <label>密码
+      <input id="auth-password" name="password" type="password" autocomplete="new-password" />
+      <span class="field-hint muted small" id="auth-password-hint">8-20 个字符</span>
+      <span class="field-error" id="auth-error-password" hidden></span>
+    </label>
+    <p class="field-error" id="auth-error-form" hidden></p>
+    <button type="submit" id="auth-submit">创建账号并登录</button>
+    <p class="muted small auth-switch">
+      <span id="auth-switch-text">已经有账号了？</span>
+      <a href="#" id="auth-switch">去登录</a>
+    </p>
+  </form>
+</div>`;
+
+const AUTH_JS = String.raw`
+var authMode = 'register';
+
+function authEl(id) { return document.getElementById(id); }
+function authSetError(field, message) {
+  var el = authEl('auth-error-' + field);
+  if (!el) return;
+  el.textContent = message || '';
+  el.hidden = !message;
+}
+function authClearErrors() {
+  ['username', 'email', 'password', 'form'].forEach(function (field) { authSetError(field, ''); });
+}
+
+function authSetMode(mode) {
+  authMode = mode === 'login' ? 'login' : 'register';
+  var register = authMode === 'register';
+  authClearErrors();
+  authEl('auth-title').textContent = register ? '创建账号' : '登录';
+  authEl('auth-submit').textContent = register ? '创建账号并登录' : '登录';
+  // Email is only collected on sign-up; asking for it to sign in would be a
+  // second thing to get wrong for no benefit.
+  authEl('auth-email-row').hidden = !register;
+  authEl('auth-password-hint').hidden = !register;
+  authEl('auth-password').setAttribute('autocomplete', register ? 'new-password' : 'current-password');
+  authEl('auth-switch-text').textContent = register ? '已经有账号了？' : '还没有账号？';
+  authEl('auth-switch').textContent = register ? '去登录' : '去注册';
+}
+
+function authOpen(mode) {
+  var modal = authEl('auth-modal');
+  if (!modal) return;
+  authSetMode(mode);
+  modal.hidden = false;
+  var first = authEl('auth-username');
+  if (first && first.focus) first.focus();
+}
+
+function authClose() {
+  var modal = authEl('auth-modal');
+  if (modal) modal.hidden = true;
+}
+
+/**
+ * The same rules the server enforces, so the form can answer immediately. The
+ * server checks again regardless — this decides what the form looks like, not
+ * what gets stored.
+ */
+function authValidate(values) {
+  var errors = {};
+  if (!values.username) errors.username = '请填写用户名';
+  else if (!/^[A-Za-z0-9_.-]{2,64}$/.test(values.username)) errors.username = '用户名只能用字母、数字、_ . -，2-64 个字符';
+  if (authMode === 'register') {
+    if (!values.email) errors.email = '请填写邮箱';
+    else if (!/^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test(values.email)) errors.email = '邮箱格式不对';
+  }
+  if (!values.password) errors.password = '请填写密码';
+  else if (authMode === 'register' && (values.password.length < 8 || values.password.length > 20)) {
+    errors.password = '密码需要 8-20 个字符';
+  }
+  return errors;
+}
+
+async function authSubmit(event) {
+  if (event && event.preventDefault) event.preventDefault();
+  authClearErrors();
+  var values = {
+    username: (authEl('auth-username').value || '').trim(),
+    email: (authEl('auth-email').value || '').trim(),
+    password: authEl('auth-password').value || '',
+  };
+  var errors = authValidate(values);
+  var fields = Object.keys(errors);
+  if (fields.length > 0) {
+    fields.forEach(function (field) { authSetError(field, errors[field]); });
+    return;
+  }
+
+  var button = authEl('auth-submit');
+  var label = button.textContent;
+  button.disabled = true;
+  button.textContent = '处理中…';
+  try {
+    var endpoint = authMode === 'register' ? '/api/register' : '/api/login';
+    var payload = authMode === 'register'
+      ? { username: values.username, email: values.email, password: values.password }
+      : { username: values.username, password: values.password };
+    var response = await fetch(endpoint, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    var data = await response.json();
+    if (data && data.ok) {
+      // Registering signs you in, so both paths land in the same place.
+      window.location.href = '/dashboard';
+      return;
+    }
+    if (data && data.errors) {
+      Object.keys(data.errors).forEach(function (field) { authSetError(field, data.errors[field]); });
+    } else {
+      authSetError('form', (data && data.error) || '请求失败，请重试');
+    }
+  } catch (error) {
+    authSetError('form', '请求失败：' + error);
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
+}
+
+if (authEl('auth-open')) authEl('auth-open').addEventListener('click', function () { authOpen('register'); });
+if (authEl('auth-close')) authEl('auth-close').addEventListener('click', authClose);
+if (authEl('auth-form')) authEl('auth-form').addEventListener('submit', authSubmit);
+if (authEl('auth-switch')) authEl('auth-switch').addEventListener('click', function (event) {
+  if (event && event.preventDefault) event.preventDefault();
+  authSetMode(authMode === 'register' ? 'login' : 'register');
+});
+if (authEl('auth-modal')) authEl('auth-modal').addEventListener('click', function (event) {
+  if (event.target === authEl('auth-modal')) authClose();
+});
+document.addEventListener('click', function (event) {
+  var opener = event.target.closest ? event.target.closest('[data-auth-open]') : null;
+  if (opener) authOpen(opener.dataset.authOpen);
+});
+document.addEventListener('keydown', function (event) {
+  var modal = authEl('auth-modal');
+  if (event.key === 'Escape' && modal && !modal.hidden) authClose();
+});
+`;
 
 export function renderLoginPage(error?: string): string {
   return `<!doctype html>
@@ -129,8 +356,8 @@ export function renderLoginPage(error?: string): string {
     <label>Username<input name="username" autocomplete="username" autofocus required /></label>
     <label>Password<input name="password" type="password" autocomplete="current-password" required /></label>
     <button type="submit">Sign in</button>
-    <p class="muted small">Lost the password? Run <code>npm run admin:reset-password</code> (or <code>daily-os admin reset-password</code>) to set a new one, then sign in.</p>
-    <p class="muted small"><a href="/console">← Open the config console without signing in</a></p>
+    <p class="muted small">忘记密码？运行 <code>npm run admin:reset-password</code>（或 <code>daily-os admin reset-password</code>）重设，再回来登录。</p>
+    <p class="muted small"><a href="/">← 返回首页</a></p>
   </form>
   <script>${LOGIN_JS}</script>
 </body>
@@ -1734,9 +1961,27 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,san
 .nav-link{padding:6px 12px;border-radius:8px;text-decoration:none;color:var(--muted)}
 .nav-link.active,.nav-link:hover{background:var(--surface-2);color:var(--text)}
 .session{display:flex;align-items:center;gap:10px}
-.setup-link{color:var(--muted);text-decoration:none;font-size:13px}
-.role{font-size:12px;color:var(--muted)}
-.role-admin{color:var(--accent);font-weight:600}
+.who{font-size:13px;color:var(--text);font-weight:500}
+.avatar{border-radius:7px;display:block;flex:none}
+.welcome-body{background:var(--bg)}
+.welcome{max-width:860px}
+.welcome-hero{padding:34px 0 26px}
+.welcome-hero h1{margin:0 0 10px;font-size:26px;line-height:1.35}
+.welcome-hero p{margin:0 0 18px;max-width:60ch;line-height:1.7}
+.welcome-actions{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.welcome-features{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:760px){.welcome-features{grid-template-columns:1fr}}
+.welcome-features li{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px}
+.welcome-features h3{margin:0 0 6px;font-size:14px}
+.welcome-features p{margin:0;font-size:13px;color:var(--muted);line-height:1.65}
+.auth-modal{position:fixed;inset:0;z-index:40;background:rgba(20,24,22,.55);display:flex;align-items:center;justify-content:center;padding:24px}
+.auth-modal[hidden]{display:none}
+.auth-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px;width:min(400px,100%);display:flex;flex-direction:column;gap:12px}
+.auth-card label{display:flex;flex-direction:column;gap:5px;font-size:13px}
+.auth-card input{font:inherit;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface)}
+.field-error{color:var(--danger);font-size:12px}
+.field-error[hidden]{display:none}
+.auth-switch{margin:0;text-align:center}
 .logout{border:1px solid var(--border);background:var(--surface);border-radius:8px;padding:5px 10px;cursor:pointer}
 .page{max-width:1100px;margin:0 auto;padding:18px;display:flex;flex-direction:column;gap:16px}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px}

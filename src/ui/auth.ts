@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { writeFileAtomic } from '../utils/atomic-write.js';
+import { randomAvatarSeed } from './avatar.js';
 import { dbCountUsers, dbFindUser, dbInsertUser, dbLoadUsers, dbUpdateUserPassword } from '../storage/db.js';
 
 /**
@@ -22,6 +23,10 @@ export interface UserRecord {
   role: Role;
   salt: string;
   hash: string;
+  /** Collected at registration. Never verified — nothing here sends mail. */
+  email: string;
+  /** Fixed at registration; the avatar is drawn from it. */
+  avatar_seed: string;
   created_at: string;
   updated_at: string;
 }
@@ -93,16 +98,83 @@ export function listUsers(): Array<{ username: string; role: Role; created_at: s
   return dbLoadUsers().map((user) => ({ username: user.username, role: user.role, created_at: user.created_at }));
 }
 
-export function addUser(username: string, password: string, role: Role): UserRecord {
+export function addUser(username: string, password: string, role: Role, extra: { email?: string; avatarSeed?: string } = {}): UserRecord {
   const name = username.trim();
   if (!name) throw new Error('Username is required.');
   if (!/^[A-Za-z0-9_.-]{2,64}$/.test(name)) throw new Error('Username must be 2-64 chars of letters, digits, _ . -');
-  if (password.length < 8) throw new Error('Password must be at least 8 characters.');
+  if (password.length < PASSWORD_MIN) throw new Error(`Password must be at least ${PASSWORD_MIN} characters.`);
   if (dbFindUser(name)) throw new Error(`User already exists: ${name}`);
   const { salt, hash } = hashPassword(password);
-  const record: UserRecord = { username: name, role, salt, hash, created_at: nowIso(), updated_at: nowIso() };
+  const record: UserRecord = {
+    username: name,
+    role,
+    salt,
+    hash,
+    email: (extra.email || '').trim(),
+    // Every account gets one, including ones made by the admin form and the
+    // first-run bootstrap: a missing seed would render as everyone sharing the
+    // same avatar rather than as no avatar.
+    avatar_seed: extra.avatarSeed || randomAvatarSeed(),
+    created_at: nowIso(),
+    updated_at: nowIso(),
+  };
   dbInsertUser(record);
   return record;
+}
+
+export const PASSWORD_MIN = 8;
+export const PASSWORD_MAX = 20;
+
+export interface RegistrationInput {
+  username: string;
+  email: string;
+  password: string;
+}
+
+/**
+ * Per-field validation for the sign-up form, so the UI can put each message
+ * under the input it belongs to instead of showing one combined error.
+ *
+ * The same function backs the endpoint. Client-side checks decide what the form
+ * looks like; they decide nothing about what gets stored.
+ */
+export function validateRegistration(input: RegistrationInput): Record<string, string> {
+  const errors: Record<string, string> = {};
+  const username = (input.username || '').trim();
+  const email = (input.email || '').trim();
+  const password = input.password || '';
+
+  if (!username) errors.username = '请填写用户名';
+  else if (!/^[A-Za-z0-9_.-]{2,64}$/.test(username)) errors.username = '用户名只能用字母、数字、_ . -，2-64 个字符';
+
+  if (!email) errors.email = '请填写邮箱';
+  // Deliberately loose: this is a format sanity check, not an attempt to decide
+  // which addresses exist. Nothing here sends mail, so a wrong-but-well-formed
+  // address costs nothing.
+  else if (!/^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test(email)) errors.email = '邮箱格式不对';
+
+  if (!password) errors.password = '请填写密码';
+  else if (password.length < PASSWORD_MIN || password.length > PASSWORD_MAX) {
+    errors.password = `密码需要 ${PASSWORD_MIN}-${PASSWORD_MAX} 个字符`;
+  }
+
+  return errors;
+}
+
+/**
+ * Create an account from the sign-up form.
+ *
+ * New accounts are admins by design: this app is installed per machine and its
+ * config is the machine's own (the Claude CLI it shells into, the Feishu account
+ * in .env). Whoever registers on a given laptop is that laptop's owner, and it
+ * only ever listens on 127.0.0.1.
+ */
+export function registerUser(input: RegistrationInput): { user: UserRecord } | { errors: Record<string, string> } {
+  const errors = validateRegistration(input);
+  if (Object.keys(errors).length > 0) return { errors };
+  const username = input.username.trim();
+  if (findUser(username)) return { errors: { username: '这个用户名已经被用了' } };
+  return { user: addUser(username, input.password, 'admin', { email: input.email.trim() }) };
 }
 
 export function setPassword(username: string, password: string): UserRecord {
@@ -124,7 +196,7 @@ export function ensureAuthInitialized(): AuthInitResult {
   if (dbCountUsers() > 0) return { createdAdmin: false, adminUsername: 'admin' };
   const initialPassword = crypto.randomBytes(12).toString('base64url');
   const { salt, hash } = hashPassword(initialPassword);
-  const admin: UserRecord = { username: 'admin', role: 'admin', salt, hash, created_at: nowIso(), updated_at: nowIso() };
+  const admin: UserRecord = { username: 'admin', role: 'admin', salt, hash, email: '', avatar_seed: randomAvatarSeed(), created_at: nowIso(), updated_at: nowIso() };
   dbInsertUser(admin);
   return { createdAdmin: true, adminUsername: 'admin', initialPassword };
 }
