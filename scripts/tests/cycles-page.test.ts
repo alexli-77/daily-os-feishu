@@ -245,9 +245,11 @@ async function main(): Promise<void> {
     // The two life-review-os files only appear when that repo is reachable on
     // the machine running this, so assert the shape, not the exact list.
     const strategyIds = (finalState?.strategy?.files || []).map((file: any) => file.id);
+    // Asserts the planning files are still listed and still first, not that the
+    // list never grows — the review files were added to it deliberately.
     check(
-      'Review Strategy still lists its files',
-      strategyIds[0] === 'biweekly_strategy' && strategyIds.every((id: string) => ['biweekly_strategy', 'plan_rules', 'biweekly_mode'].includes(id)),
+      'Review Strategy still lists its planning files, in order',
+      ['biweekly_strategy', 'plan_rules', 'biweekly_mode'].every((id, index) => strategyIds[index] === id),
       strategyIds.join(','),
     );
     check('Review Strategy still exposes the built-in default', String(finalState?.strategy?.defaultStrategy || '').includes('计划条目规则'));
