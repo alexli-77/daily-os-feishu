@@ -177,17 +177,18 @@ export function validateRegistration(input: RegistrationInput): Record<string, s
 /**
  * Create an account from the sign-up form.
  *
- * New accounts are admins by design: this app is installed per machine and its
- * config is the machine's own (the Claude CLI it shells into, the Feishu account
- * in .env). Whoever registers on a given laptop is that laptop's owner, and it
- * only ever listens on 127.0.0.1.
+ * LEO-288: the first account on a fresh install is the owner (admin); everyone
+ * who signs up afterwards is a `member`. On a public / Mac / iOS build the old
+ * "every new account is admin" rule would let a stranger who reaches the sign-up
+ * form land as owner, so it must not be carried over.
  */
 export function registerUser(input: RegistrationInput): { user: UserRecord } | { errors: Record<string, string> } {
   const errors = validateRegistration(input);
   if (Object.keys(errors).length > 0) return { errors };
   const username = input.username.trim();
   if (findUser(username)) return { errors: { username: '这个用户名已经被用了' } };
-  return { user: addUser(username, input.password, 'admin', { email: input.email.trim() }) };
+  const role: Role = dbCountUsers() === 0 ? 'admin' : 'member';
+  return { user: addUser(username, input.password, role, { email: input.email.trim() }) };
 }
 
 export function setPassword(username: string, password: string): UserRecord {
@@ -201,18 +202,18 @@ export function setPassword(username: string, password: string): UserRecord {
 }
 
 /**
- * On first ever start (no users) create an `admin` with a random password so the
- * console is never left wide open. The generated password is returned so the
- * caller can surface it once (console + ui.json).
+ * Startup housekeeping.
+ *
+ * LEO-288: self-signup now owns account creation — the first registrant becomes
+ * the owner (see {@link registerUser}). We therefore no longer seed a bootstrap
+ * `admin`: doing so would steal the owner slot from the first real user and
+ * leave a console-printed password lying around. Until someone registers the
+ * console has no users and shows the welcome / sign-up page (no data exposed).
+ * We still backfill avatar seeds for accounts that predate the column.
  */
 export function ensureAuthInitialized(): AuthInitResult {
   backfillAvatarSeeds();
-  if (dbCountUsers() > 0) return { createdAdmin: false, adminUsername: 'admin' };
-  const initialPassword = crypto.randomBytes(12).toString('base64url');
-  const { salt, hash } = hashPassword(initialPassword);
-  const admin: UserRecord = { username: 'admin', role: 'admin', salt, hash, email: '', avatar_seed: randomAvatarSeed(), created_at: nowIso(), updated_at: nowIso() };
-  dbInsertUser(admin);
-  return { createdAdmin: true, adminUsername: 'admin', initialPassword };
+  return { createdAdmin: false, adminUsername: 'admin' };
 }
 
 /**

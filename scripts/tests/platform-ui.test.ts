@@ -34,6 +34,8 @@ function setupTempWorkspace(): string {
   fs.mkdirSync(path.join(dir, 'config'), { recursive: true });
   fs.copyFileSync(path.join(REPO_ROOT, '.env.example'), path.join(dir, '.env.example'));
   fs.copyFileSync(path.join(REPO_ROOT, 'config', 'config.example.yaml'), path.join(dir, 'config', 'config.example.yaml'));
+  // A real secret so the LEO-288 env-secret reveal gate can be tested meaningfully.
+  fs.writeFileSync(path.join(dir, '.env'), 'OPENAI_API_KEY=FAKE_SECRET_LEO288\n');
   return dir;
 }
 
@@ -215,6 +217,18 @@ async function main(): Promise<void> {
       body: JSON.stringify({ id: 'todo-1', action: 'check' }),
     });
     check('member whitelisted write -> 200', memberWhitelisted.status === 200, String(memberWhitelisted.status));
+
+    // --- LEO-288: env-secret reveal is admin-only --------------------------
+    const memberReveal = (await fetch(`${base}/api/env-secret?key=OPENAI_API_KEY&reveal=1`, {
+      headers: { cookie: memberCookie },
+    }).then((r) => r.json())) as { present?: boolean; value?: string };
+    check('member sees the secret is present', memberReveal.present === true, JSON.stringify(memberReveal));
+    check('member cannot reveal the secret in plaintext', memberReveal.value === undefined, JSON.stringify(memberReveal));
+
+    const adminReveal = (await fetch(`${base}/api/env-secret?key=OPENAI_API_KEY&reveal=1`, {
+      headers: { authorization: `Bearer ${controls.token}` },
+    }).then((r) => r.json())) as { value?: string };
+    check('admin (runtime token) can still reveal the secret', adminReveal.value === 'FAKE_SECRET_LEO288', JSON.stringify(adminReveal));
 
     // --- Admin via runtime token ------------------------------------------
     const tokenWrite = await fetch(`${base}/api/artifacts/reindex`, {
