@@ -33,11 +33,12 @@ export interface PageContext {
   url: URL;
 }
 
-export const PLATFORM_PAGES = new Set(['/dashboard', '/today', '/chat', '/schedules', '/runs', '/artifacts']);
+export const PLATFORM_PAGES = new Set(['/dashboard', '/today', '/cycles', '/chat', '/schedules', '/runs', '/artifacts']);
 
 const NAV: Array<{ href: string; label: string }> = [
   { href: '/dashboard', label: 'Dashboard' },
   { href: '/today', label: 'Today' },
+  { href: '/cycles', label: 'Cycles' },
   { href: '/chat', label: 'Chat' },
   { href: '/schedules', label: 'Schedules' },
   { href: '/runs', label: 'Runs' },
@@ -60,6 +61,8 @@ export function renderPlatformPage(pathname: string, ctx: PageContext): string {
       return layout('/dashboard', ctx, renderDashboard(ctx));
     case '/today':
       return layout('/today', ctx, renderToday(ctx));
+    case '/cycles':
+      return layout('/cycles', ctx, renderCyclesPage(ctx));
     case '/chat':
       return layout('/chat', ctx, renderChat(ctx));
     case '/schedules':
@@ -551,6 +554,569 @@ const CHAT_JS = String.raw`
 })();
 `;
 
+// --- cycles (LEO-286) -------------------------------------------------------
+
+/**
+ * The Cycles page: my own cycles on the left, one selected cycle rendered as
+ * three cards on the right.
+ *
+ * It used to be a section of the config console. It is not configuration — it is
+ * the place the user reads and writes their own biweekly priorities, retro and
+ * review — so it lives here, next to Today, with the same top nav as every other
+ * platform page.
+ *
+ * The markup below is the full, static skeleton: the three cards, the read-only
+ * banner, the frontmatter warning and the zoom dialog all exist in the DOM from
+ * the first byte, and the client script only fills them in. That is deliberate:
+ * "a teammate's card has no save control" is then an assertable property of real
+ * elements (`hidden` / `disabled`) rather than of a string of generated HTML.
+ */
+function renderCyclesPage(ctx: PageContext): string {
+  // Pulling teammates is a write against the remote and is admin-only server
+  // side; offering a button that always 403s to members would be a lie.
+  const syncButton =
+    ctx.role === 'admin'
+      ? '<button type="button" class="secondary compact" id="cycles-team-sync">同步队友</button>'
+      : '';
+  const cards = [
+    { key: 'priorities', title: '要务', placeholder: '- **MIT** 这个周期最重要的一件事', save: '保存要务' },
+    { key: 'retro', title: 'retro', placeholder: '这个周期实际发生了什么、哪里没做到', save: '保存 retro' },
+    { key: 'review', title: 'review', placeholder: '对这个周期的评价与下一步建议', save: '保存 review' },
+  ]
+    .map(
+      (card) => `
+      <section class="card cycle-card" id="cycle-card-${card.key}" aria-labelledby="cycle-title-${card.key}">
+        <div class="card-head">
+          <div>
+            <h3 id="cycle-title-${card.key}">${escapeHtml(card.title)}</h3>
+            <p class="muted small" id="cycle-meta-${card.key}"></p>
+          </div>
+          <button type="button" class="secondary compact" data-cycle-zoom="${card.key}" id="cycle-zoom-${card.key}">放大</button>
+        </div>
+        <textarea id="cycle-md-${card.key}" spellcheck="false" placeholder="${escapeHtml(card.placeholder)}"></textarea>
+        <div class="cycle-card-actions" id="cycle-actions-${card.key}">
+          <button type="button" id="cycle-save-${card.key}" data-cycle-save="${card.key}">${escapeHtml(card.save)}</button>
+        </div>
+        <p class="muted small" id="cycle-status-${card.key}"></p>
+      </section>`,
+    )
+    .join('');
+
+  return `
+  <section class="cycles-wrap">
+    <aside class="cycles-side">
+      <section class="card">
+        <div class="card-head"><h2>我的周期</h2><button type="button" class="secondary compact" id="cycles-refresh">Refresh</button></div>
+        <p class="muted small mono" id="cycles-dir"></p>
+        <div class="cycle-list" id="cycle-list"></div>
+        <p class="muted small" id="cycles-empty" hidden>还没有任何周期文件。跑一次双周复盘（<code>npm run weekly</code>）之后，周期目录里会出现 <code>&lt;开始日期&gt;_&lt;周期标签&gt;.md</code>，例如 <code>2026-08-24_8.24-9.6.md</code>。也可以先手动建一个同名文件，再点 Refresh。</p>
+      </section>
+      <section class="card">
+        <div class="card-head"><h2>团队成员</h2>${syncButton}</div>
+        <div class="cycle-list" id="cycle-members"></div>
+        <p class="muted small" id="cycle-team-status"></p>
+      </section>
+    </aside>
+    <div class="cycles-main">
+      <section class="card">
+        <div class="card-head">
+          <div><h2 id="cycle-heading">周期</h2><p class="muted small" id="cycle-subheading"></p></div>
+        </div>
+        <p class="muted small mono" id="cycle-file-path"></p>
+        <div class="cycle-readonly" id="cycle-readonly" role="status" hidden></div>
+        <div class="cycle-warning" id="cycle-frontmatter-error" role="alert" hidden></div>
+      </section>
+      <div class="cycle-cards" id="cycle-cards">${cards}</div>
+      <p class="muted" id="cycle-detail-empty" hidden>左边挑一个周期，或者点一位队友看他们最新的周期。</p>
+    </div>
+  </section>
+  <div class="cycle-modal" id="cycle-modal" role="dialog" aria-modal="true" aria-labelledby="cycle-modal-title" hidden>
+    <div class="cycle-modal-card">
+      <div class="card-head">
+        <div><h3 id="cycle-modal-title"></h3><p class="muted small" id="cycle-modal-meta"></p></div>
+        <button type="button" class="secondary compact" id="cycle-modal-close">关闭 (Esc)</button>
+      </div>
+      <textarea id="cycle-modal-text" spellcheck="false"></textarea>
+      <div class="cycle-card-actions" id="cycle-modal-actions">
+        <button type="button" id="cycle-modal-save">保存</button>
+      </div>
+      <p class="muted small" id="cycle-modal-status"></p>
+    </div>
+  </div>
+  <script>${CYCLES_JS}</script>`;
+}
+
+/**
+ * Client script for /cycles. Top-level (not an IIFE) on purpose: the regression
+ * suite evaluates this exact string against a DOM stub, which is the only way to
+ * prove that a teammate's card really has no reachable save control.
+ * `CONSOLE_JS` keeps its own scope, so nothing here collides with it.
+ */
+export const CYCLES_JS = String.raw`
+// Slug <-> markdown heading. '要务' is a poor element id, so the page keys
+// everything by slug and maps back at the API boundary.
+var CYCLE_SECTION_KEYS = [['priorities', '要务'], ['retro', 'retro'], ['review', 'review']];
+// The writing prompts, kept here as well as in the markup: a teammate's empty
+// section must not tell me what to write in it.
+var CYCLE_PLACEHOLDERS = {
+  priorities: '- **MIT** 这个周期最重要的一件事',
+  retro: '这个周期实际发生了什么、哪里没做到',
+  review: '对这个周期的评价与下一步建议',
+};
+var cyclesData = { cycles: { dir: '', items: [] }, team: null };
+// Unsaved typing, keyed by cycle id + section slug. Re-filling a section someone
+// is halfway through writing would eat a hand-written retro — the one thing this
+// page must never do. Keying by cycle rather than by section alone extends that
+// to switching cycles: click another one and come back, and the draft is still
+// there. Only Refresh discards.
+var cycleDrafts = new Map();
+var selectedCycleId = '';
+// Whose cycles the page shows: '' is me, otherwise a teammate's owner uuid.
+// Uuid, never member_id — the label is renameable and the cache is not filed
+// under it.
+var selectedOwnerId = '';
+// Selected cycle per owner, so switching to a teammate and back lands on the
+// cycle you were reading — and, because drafts are keyed by cycle id, on your
+// unsaved text as well.
+var selectedCycleByOwner = new Map();
+var cycleModalKey = '';
+var cycleModalReturn = null;
+
+function cycleEl(id) { return document.getElementById(id); }
+function cycleSetText(id, text) { var el = cycleEl(id); if (el) el.textContent = text; }
+function cycleSetValue(id, text) { var el = cycleEl(id); if (el) el.value = text == null ? '' : text; }
+function cycleValue(id) { var el = cycleEl(id); return el ? el.value : ''; }
+function cycleEscapeHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function cycleTime(value) {
+  var date = new Date(value);
+  return isNaN(date.getTime()) ? (value || '') : date.toLocaleString();
+}
+function cycleSectionName(key) {
+  for (var i = 0; i < CYCLE_SECTION_KEYS.length; i += 1) if (CYCLE_SECTION_KEYS[i][0] === key) return CYCLE_SECTION_KEYS[i][1];
+  return '';
+}
+function cycleToast(message) {
+  var el = cycleEl('toast');
+  if (!el) return;
+  el.textContent = message;
+  el.hidden = false;
+  setTimeout(function () { el.hidden = true; }, 2600);
+}
+
+/** Newest start date first; ties fall back to the id, which starts with it. */
+function sortCycles(items) {
+  return (items || []).slice().sort(function (left, right) {
+    var a = (left && left.startDate) || '';
+    var b = (right && right.startDate) || '';
+    if (a !== b) return a < b ? 1 : -1;
+    var la = (left && left.id) || '';
+    var lb = (right && right.id) || '';
+    return la < lb ? 1 : la > lb ? -1 : 0;
+  });
+}
+
+function cycleMemberById(ownerId) {
+  var members = (cyclesData.team && cyclesData.team.members) || [];
+  for (var i = 0; i < members.length; i += 1) if (members[i].userId === ownerId) return members[i];
+  return null;
+}
+
+function loadCycles() {
+  return fetch('/api/cycles/state', { credentials: 'same-origin' })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d || d.ok === false) throw new Error((d && d.error) || 'failed');
+      cyclesData = { cycles: d.cycles || { dir: '', items: [] }, team: d.team || null };
+      renderCyclesPage();
+    })
+    .catch(function (error) { cycleSetText('cycle-team-status', '读取周期失败：' + String(error)); });
+}
+
+function renderCyclesPage() {
+  var team = cyclesData.team;
+  renderCycleMembers(team);
+  renderCycleTeamStatus(team);
+
+  // A teammate who is no longer in the state (signed out, cache cleared, team
+  // changed) falls back to my own cycles instead of rendering a blank page.
+  var member = selectedOwnerId ? cycleMemberById(selectedOwnerId) : null;
+  if (selectedOwnerId && !member) { selectedOwnerId = ''; member = null; }
+  var viewingSelf = !selectedOwnerId;
+
+  var mine = sortCycles((cyclesData.cycles && cyclesData.cycles.items) || []);
+  // A teammate view is their *latest* cycle only: it answers "what are they on
+  // right now", and their older files are not mine to browse through here.
+  var items = viewingSelf ? mine : sortCycles(member.cycles || []).slice(0, 1);
+
+  var dir = cyclesData.cycles && cyclesData.cycles.dir;
+  cycleSetText('cycles-dir', viewingSelf ? (dir ? '周期目录：' + dir : '') : '');
+  var emptyMine = cycleEl('cycles-empty');
+  if (emptyMine) emptyMine.hidden = mine.length > 0;
+
+  var cards = cycleEl('cycle-cards');
+  var detailEmpty = cycleEl('cycle-detail-empty');
+  if (items.length === 0) {
+    selectedCycleId = '';
+    if (cards) cards.hidden = true;
+    if (detailEmpty) {
+      detailEmpty.hidden = false;
+      detailEmpty.textContent = viewingSelf
+        ? '还没有周期文件可以显示。'
+        : '还没有同步到 ' + ((member && member.label) || '这位队友') + ' 的周期。'
+          + (team && team.syncedAt
+            ? '上次同步于 ' + cycleTime(team.syncedAt) + '，那时对方还没有写过任何周期文件。'
+            : '还没有成功同步过。确认双方都已登录同一个团队，再点「同步队友」。');
+    }
+    cycleSetText('cycle-heading', viewingSelf ? '周期' : ((member && member.label) || '队友'));
+    cycleSetText('cycle-subheading', '');
+    cycleSetText('cycle-file-path', '');
+    var banner = cycleEl('cycle-readonly');
+    if (banner) { banner.hidden = viewingSelf; banner.textContent = viewingSelf ? '' : '只读'; }
+    var warn = cycleEl('cycle-frontmatter-error');
+    if (warn) warn.hidden = true;
+    renderCycleList(mine, viewingSelf);
+    closeCycleModal();
+    return;
+  }
+  if (cards) cards.hidden = false;
+  if (detailEmpty) detailEmpty.hidden = true;
+
+  // Newest cycle by default, and keep the current pick across re-renders.
+  var picked = null;
+  for (var i = 0; i < items.length; i += 1) if (items[i].id === selectedCycleId) picked = items[i];
+  if (!picked) { picked = items[0]; selectedCycleId = picked.id; }
+  selectedCycleByOwner.set(selectedOwnerId, selectedCycleId);
+  renderCycleList(mine, viewingSelf);
+  renderCycleDetail(picked, member, team);
+}
+
+function renderCycleList(items, viewingSelf) {
+  var list = cycleEl('cycle-list');
+  if (!list) return;
+  list.innerHTML = items.map(function (item) {
+    var active = viewingSelf && item.id === selectedCycleId;
+    var broken = item.frontmatterError ? '<span class="cycle-item-broken">frontmatter 解析失败</span>' : '';
+    var updated = item.updatedAt ? '更新于 ' + cycleTime(item.updatedAt) : '未记录更新时间';
+    return '<button type="button" class="cycle-item' + (active ? ' active' : '') + '"' +
+      ' data-cycle-id="' + cycleEscapeHtml(item.id) + '"' + (active ? ' aria-current="true"' : '') + '>' +
+      '<strong>' + cycleEscapeHtml(item.cycle || item.id) + '</strong>' +
+      '<span>' + cycleEscapeHtml(item.startDate + ' · ' + (item.mode || '')) + '</span>' +
+      '<span>' + cycleEscapeHtml(updated) + '</span>' + broken +
+      '</button>';
+  }).join('');
+}
+
+function renderCycleMembers(team) {
+  var box = cycleEl('cycle-members');
+  if (!box) return;
+  var members = (team && team.members) || [];
+  var ready = Boolean(team && team.status === 'ready' && members.length > 0);
+  if (!ready) {
+    selectedOwnerId = '';
+    box.innerHTML = '<p class="muted small">还没有队友的周期可以看。</p>';
+    return;
+  }
+  var selfLabel = (team.self && (team.self.displayName || team.self.memberId)) || '';
+  var html = '<button type="button" class="cycle-item cycle-member' + (selectedOwnerId ? '' : ' active') + '" data-owner-id="">' +
+    '<strong>' + cycleEscapeHtml(selfLabel ? '我（' + selfLabel + '）' : '我') + '</strong>' +
+    '<span>本地 20_CYCLES</span></button>';
+  members.forEach(function (member) {
+    var cycles = member.cycles || [];
+    var latest = sortCycles(cycles)[0];
+    html += '<button type="button" class="cycle-item cycle-member' + (member.userId === selectedOwnerId ? ' active' : '') + '"' +
+      ' data-owner-id="' + cycleEscapeHtml(member.userId) + '">' +
+      '<strong>' + cycleEscapeHtml(member.label || member.userId) + '</strong>' +
+      '<span>' + cycleEscapeHtml(latest ? '最新 ' + (latest.cycle || latest.id) : '还没有同步到周期') + '</span>' +
+      '<span>只读</span></button>';
+  });
+  box.innerHTML = html;
+}
+
+function renderCycleTeamStatus(team) {
+  var line = cycleEl('cycle-team-status');
+  if (!line) return;
+  if (!team) { line.textContent = ''; return; }
+  // Not-ready is a normal state, not a failure: local editing is unaffected, so
+  // say what is off rather than showing an error.
+  if (team.status !== 'ready') { line.textContent = '团队同步：' + (team.reason || '未启用'); return; }
+  var parts = [team.syncedAt ? '同步于 ' + cycleTime(team.syncedAt) : '还没有成功同步过'];
+  if (!(team.members || []).length) parts.push('团队里还没有其他成员');
+  if (team.lastError) parts.push('上次同步失败：' + team.lastError);
+  line.textContent = '团队同步：' + parts.join(' · ');
+}
+
+function renderCycleDetail(item, member, team) {
+  if (!item) return;
+  var readOnly = Boolean(member);
+  cycleSetText('cycle-heading', (item.cycle || item.id) + (readOnly ? ' · ' + ((member && member.label) || '队友') : ''));
+  cycleSetText('cycle-subheading', item.startDate + ' 开始 · ' + (item.mode || '') + (item.updatedAt ? ' · 更新于 ' + cycleTime(item.updatedAt) : ''));
+  // Where the bytes on screen actually came from: my vault, or the read-only
+  // teammate cache. Never nothing — "whose file is this" is the question the
+  // page has to keep answering.
+  cycleSetText('cycle-file-path', readOnly
+    ? (team && team.cacheDir ? '只读缓存：' + team.cacheDir + '/' + selectedOwnerId : '')
+    : (item.path || ''));
+
+  var banner = cycleEl('cycle-readonly');
+  if (banner) {
+    banner.hidden = !readOnly;
+    banner.textContent = readOnly
+      ? '来自 ' + ((member && member.label) || '队友') + ' · 只读 · ' +
+        (team && team.syncedAt ? '同步于 ' + cycleTime(team.syncedAt) : '同步时间未知')
+      : '';
+  }
+
+  // A file whose frontmatter will not parse is read-only here: the write path
+  // refuses it, so letting someone type a full retro first would just lose it.
+  var broken = Boolean(item.frontmatterError);
+  var warning = cycleEl('cycle-frontmatter-error');
+  if (warning) {
+    warning.hidden = !broken;
+    warning.textContent = broken
+      ? 'frontmatter 无法解析（' + item.frontmatterError + '）。保存已禁用：写回会丢掉整段 frontmatter。请先用编辑器修好 ' + (item.path || '这个文件') + ' 里的 YAML，再回来点 Refresh。'
+      : '';
+  }
+
+  CYCLE_SECTION_KEYS.forEach(function (pair) {
+    var key = pair[0];
+    var stored = item.sections ? item.sections[pair[1]] : null;
+    var draftKey = item.id + '::' + key;
+    // Drafts belong to my own files only, so a teammate view always shows what
+    // was synced, never something I happened to have typed under the same id.
+    if (!readOnly && cycleDrafts.has(draftKey)) cycleSetValue('cycle-md-' + key, cycleDrafts.get(draftKey));
+    else cycleSetValue('cycle-md-' + key, stored ? stored.content || '' : '');
+    // A missing key and an empty string mean different things: never written vs.
+    // written and then cleared.
+    cycleSetText('cycle-meta-' + key, stored
+      ? '来源 ' + (stored.source || 'unknown') + ' · ' + (stored.updatedAt ? '更新于 ' + cycleTime(stored.updatedAt) : '未记录更新时间')
+      : '这一段还没写过（文件里没有这个小节）');
+    var textarea = cycleEl('cycle-md-' + key);
+    // readonly rather than disabled for a teammate: the text still has to be
+    // selectable and scrollable, it just cannot be changed.
+    if (textarea) {
+      textarea.disabled = broken;
+      textarea.readOnly = readOnly;
+      textarea.placeholder = readOnly ? '（这一段是空的）' : CYCLE_PLACEHOLDERS[key];
+    }
+    var button = cycleEl('cycle-save-' + key);
+    if (button) button.disabled = broken || readOnly;
+    // The whole action row goes away in a teammate view, so there is no save
+    // control to click at all. The server rejects the write regardless.
+    var actions = cycleEl('cycle-actions-' + key);
+    if (actions) actions.hidden = readOnly;
+  });
+  if (cycleModalKey) syncCycleModal();
+}
+
+function selectCycle(id) {
+  if (!id) return;
+  // Clicking a cycle in "我的周期" is also the way back from a teammate view.
+  if (selectedOwnerId) selectedOwnerId = '';
+  else if (id === selectedCycleId) return;
+  selectedCycleId = id;
+  // Drafts survive the switch: they are keyed by cycle, and renderCycleDetail
+  // restores this cycle's own. Only Refresh and a successful save clear them.
+  clearCycleStatuses();
+  renderCyclesPage();
+}
+
+function selectCycleOwner(ownerId) {
+  var next = ownerId || '';
+  if (next === selectedOwnerId) return;
+  selectedOwnerId = next;
+  selectedCycleId = selectedCycleByOwner.get(next) || '';
+  clearCycleStatuses();
+  closeCycleModal();
+  renderCyclesPage();
+}
+
+function clearCycleStatuses() {
+  CYCLE_SECTION_KEYS.forEach(function (pair) { cycleSetText('cycle-status-' + pair[0], ''); });
+  cycleSetText('cycle-modal-status', '');
+}
+
+async function saveCycleSection(key) {
+  var statusId = 'cycle-status-' + key;
+  var section = cycleSectionName(key);
+  if (selectedOwnerId) { cycleSetText(statusId, '队友的周期是只读的，不能在这里保存。'); return; }
+  if (!selectedCycleId) { cycleSetText(statusId, '还没有选中任何周期。'); return; }
+  cycleSetText(statusId, 'Saving...');
+  var response = await fetch('/api/cycles/section', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: selectedCycleId, section: section, content: cycleValue('cycle-md-' + key) }),
+  });
+  var result = await response.json().catch(function () { return {}; });
+  if (!response.ok || result.ok === false) throw new Error(result.error || ('Failed (' + response.status + ')'));
+  cycleDrafts.delete(selectedCycleId + '::' + key);
+  // The save endpoint answers with the full console state; take the cycles and
+  // the team view out of it rather than paying for a second round trip.
+  if (result.state) {
+    cyclesData = {
+      cycles: result.state.cycles || cyclesData.cycles,
+      team: (result.state.team && result.state.team.view) || cyclesData.team,
+    };
+  }
+  renderCyclesPage();
+  cycleSetText(statusId, (result.savedAt ? cycleTime(result.savedAt) + ' · ' : '') + (result.text || 'Saved.'));
+  cycleToast('已保存 ' + section);
+}
+
+async function runCycleSave(key) {
+  try {
+    await saveCycleSection(key);
+  } catch (error) {
+    var message = error && error.message ? error.message : String(error);
+    cycleSetText('cycle-status-' + key, message);
+    cycleSetText('cycle-modal-status', cycleModalKey === key ? message : '');
+    cycleToast('保存失败：' + message);
+  }
+}
+
+// --- zoom dialog -------------------------------------------------------------
+
+/**
+ * The card, full size. Editable when the cycle is mine and writable, plain
+ * read-only text for a teammate — the modal mirrors the card's own state rather
+ * than deciding for itself, so there is one rule for "can this be written".
+ */
+function openCycleModal(key) {
+  var modal = cycleEl('cycle-modal');
+  var textarea = cycleEl('cycle-md-' + key);
+  if (!modal || !textarea) return;
+  cycleModalKey = key;
+  cycleModalReturn = cycleEl('cycle-zoom-' + key);
+  modal.hidden = false;
+  syncCycleModal();
+  var target = textarea.readOnly || textarea.disabled ? cycleEl('cycle-modal-close') : cycleEl('cycle-modal-text');
+  if (target && target.focus) target.focus();
+}
+
+/** Copy the card's content and state into the open dialog. */
+function syncCycleModal() {
+  var key = cycleModalKey;
+  if (!key) return;
+  var textarea = cycleEl('cycle-md-' + key);
+  if (!textarea) return;
+  cycleSetText('cycle-modal-title', cycleSectionName(key));
+  var meta = cycleEl('cycle-meta-' + key);
+  cycleSetText('cycle-modal-meta', meta ? meta.textContent : '');
+  cycleSetValue('cycle-modal-text', textarea.value);
+  var modalText = cycleEl('cycle-modal-text');
+  if (modalText) { modalText.readOnly = textarea.readOnly; modalText.disabled = textarea.disabled; }
+  var actions = cycleEl('cycle-modal-actions');
+  if (actions) actions.hidden = Boolean(textarea.readOnly);
+  var save = cycleEl('cycle-modal-save');
+  if (save) { save.disabled = Boolean(textarea.readOnly || textarea.disabled); save.textContent = '保存' + cycleSectionName(key); }
+}
+
+function closeCycleModal() {
+  var modal = cycleEl('cycle-modal');
+  if (!modal || modal.hidden) { cycleModalKey = ''; return; }
+  modal.hidden = true;
+  cycleModalKey = '';
+  cycleSetText('cycle-modal-status', '');
+  // Focus goes back to the control that opened the dialog, not to the top of
+  // the document.
+  if (cycleModalReturn && cycleModalReturn.focus) cycleModalReturn.focus();
+  cycleModalReturn = null;
+}
+
+/** Keep Tab inside the dialog: three stops, wrapped by hand. */
+function cycleModalFocusables() {
+  var stops = [cycleEl('cycle-modal-close'), cycleEl('cycle-modal-text'), cycleEl('cycle-modal-save')];
+  return stops.filter(function (el) { return el && !el.hidden && !el.disabled && !(el.id === 'cycle-modal-save' && cycleEl('cycle-modal-actions') && cycleEl('cycle-modal-actions').hidden); });
+}
+
+function onCycleModalKeydown(event) {
+  if (!cycleModalKey) return;
+  if (event.key === 'Escape') { if (event.preventDefault) event.preventDefault(); closeCycleModal(); return; }
+  if (event.key !== 'Tab') return;
+  var stops = cycleModalFocusables();
+  if (!stops.length) return;
+  var index = stops.indexOf(document.activeElement);
+  var next = event.shiftKey ? index - 1 : index + 1;
+  if (index < 0) next = event.shiftKey ? stops.length - 1 : 0;
+  else if (next < 0) next = stops.length - 1;
+  else if (next >= stops.length) next = 0;
+  else return;
+  if (event.preventDefault) event.preventDefault();
+  if (stops[next] && stops[next].focus) stops[next].focus();
+}
+
+// --- wiring ------------------------------------------------------------------
+
+if (cycleEl('cycle-list')) cycleEl('cycle-list').addEventListener('click', function (event) {
+  var item = event.target.closest ? event.target.closest('[data-cycle-id]') : null;
+  if (item) selectCycle(item.dataset.cycleId);
+});
+if (cycleEl('cycle-members')) cycleEl('cycle-members').addEventListener('click', function (event) {
+  var button = event.target.closest ? event.target.closest('[data-owner-id]') : null;
+  if (button) selectCycleOwner(button.dataset.ownerId || '');
+});
+if (cycleEl('cycle-cards')) cycleEl('cycle-cards').addEventListener('click', function (event) {
+  var zoom = event.target.closest ? event.target.closest('[data-cycle-zoom]') : null;
+  if (zoom) { openCycleModal(zoom.dataset.cycleZoom); return; }
+  var save = event.target.closest ? event.target.closest('[data-cycle-save]') : null;
+  if (save) void runCycleSave(save.dataset.cycleSave);
+});
+CYCLE_SECTION_KEYS.forEach(function (pair) {
+  var textarea = cycleEl('cycle-md-' + pair[0]);
+  if (!textarea) return;
+  textarea.addEventListener('input', function () {
+    // Teammate views are read-only, so there is nothing to draft. It also keeps
+    // the draft map single-owner: a teammate's cycle id can be identical to one
+    // of mine, and two people's unsaved text under one key is a way to lose a
+    // retro.
+    if (selectedOwnerId || !selectedCycleId) return;
+    cycleDrafts.set(selectedCycleId + '::' + pair[0], textarea.value);
+    if (cycleModalKey === pair[0]) cycleSetValue('cycle-modal-text', textarea.value);
+  });
+});
+if (cycleEl('cycle-modal-text')) cycleEl('cycle-modal-text').addEventListener('input', function () {
+  if (!cycleModalKey) return;
+  var textarea = cycleEl('cycle-md-' + cycleModalKey);
+  if (!textarea || textarea.readOnly) return;
+  textarea.value = cycleValue('cycle-modal-text');
+  if (!selectedOwnerId && selectedCycleId) cycleDrafts.set(selectedCycleId + '::' + cycleModalKey, textarea.value);
+});
+if (cycleEl('cycle-modal-close')) cycleEl('cycle-modal-close').addEventListener('click', function () { closeCycleModal(); });
+if (cycleEl('cycle-modal-save')) cycleEl('cycle-modal-save').addEventListener('click', function () { if (cycleModalKey) void runCycleSave(cycleModalKey); });
+if (cycleEl('cycle-modal')) cycleEl('cycle-modal').addEventListener('click', function (event) {
+  // Click the backdrop, not the card, to dismiss.
+  if (event.target === cycleEl('cycle-modal')) closeCycleModal();
+});
+document.addEventListener('keydown', onCycleModalKeydown);
+if (cycleEl('cycles-refresh')) cycleEl('cycles-refresh').addEventListener('click', function () {
+  // Refresh is the explicit discard: drafts survive everything else.
+  cycleDrafts.clear();
+  clearCycleStatuses();
+  void loadCycles().then(function () { cycleToast('已重新读取周期'); });
+});
+if (cycleEl('cycles-team-sync')) cycleEl('cycles-team-sync').addEventListener('click', function () {
+  // Drafts are untouched: this pulls teammates' files, it does not reload mine.
+  var button = cycleEl('cycles-team-sync');
+  button.disabled = true;
+  fetch('/api/team/sync', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+    .then(function (r) { return r.json(); })
+    .then(function (result) {
+      var sync = (result && result.sync) || {};
+      if (sync.status === 'ok') cycleToast('已同步：拉取 ' + (sync.pulled || 0) + ' 个队友周期，上传 ' + (sync.pushed || 0) + ' 个');
+      else cycleToast('同步未执行：' + (sync.reason || sync.status || 'unknown'));
+      return loadCycles();
+    })
+    .catch(function (error) { cycleToast('同步失败：' + String(error)); })
+    .then(function () { button.disabled = false; });
+});
+
+void loadCycles();
+`;
+
 // --- schedules --------------------------------------------------------------
 
 function renderSchedules(ctx: PageContext): string {
@@ -952,6 +1518,33 @@ button.danger{background:var(--danger);border-color:var(--danger)}
 .chat-composer{display:flex;gap:8px;align-items:flex-end;margin-top:10px;border-top:1px solid var(--border);padding-top:10px}
 .chat-composer textarea{flex:1;font:inherit;padding:8px 10px;border:1px solid var(--border);border-radius:8px;resize:vertical;background:var(--surface)}
 .chat-composer-actions{display:flex;flex-direction:column;gap:6px}
+.cycles-wrap{display:grid;grid-template-columns:270px 1fr;gap:16px;align-items:start}
+@media(max-width:900px){.cycles-wrap{grid-template-columns:1fr}}
+.cycles-side{display:flex;flex-direction:column;gap:16px}
+.cycles-main{display:flex;flex-direction:column;gap:16px}
+.cycle-list{display:flex;flex-direction:column;gap:6px;max-height:42vh;overflow:auto}
+.cycle-item{display:flex;flex-direction:column;gap:2px;text-align:left;padding:8px 10px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);cursor:pointer}
+.cycle-item:hover{background:var(--surface-2)}
+.cycle-item.active{border-color:var(--accent);background:var(--surface-2)}
+.cycle-item strong{font-size:13px}
+.cycle-item span{font-size:11px;color:var(--muted)}
+.cycle-item-broken{font-size:11px;color:var(--danger)}
+.cycle-cards{display:flex;flex-direction:column;gap:16px}
+.cycle-cards[hidden]{display:none}
+.cycle-card textarea,.cycle-modal-card textarea{width:100%;font:inherit;padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--surface);resize:vertical}
+.cycle-card textarea{min-height:11rem}
+/* Read-only is not broken, so it borrows the muted surface rather than the
+   danger colours: nothing is wrong, this is just someone else's file. */
+.cycle-card textarea[readonly],.cycle-modal-card textarea[readonly]{background:var(--surface-2)}
+.cycle-card-actions{display:flex;gap:8px;align-items:center;margin-top:8px}
+.cycle-card-actions[hidden]{display:none}
+.cycle-readonly{margin-top:8px;padding:8px 10px;border-radius:10px;background:var(--surface-2);color:var(--muted);font-size:12px}
+.cycle-warning{margin-top:8px;padding:10px;border-radius:10px;background:#f7e0e0;color:var(--danger);font-size:12px}
+button.compact{padding:4px 10px;font-size:12px}
+.cycle-modal{position:fixed;inset:0;z-index:30;background:rgba(20,24,22,.55);display:flex;align-items:center;justify-content:center;padding:24px}
+.cycle-modal[hidden]{display:none}
+.cycle-modal-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px;width:min(880px,100%);max-height:86vh;display:flex;flex-direction:column;gap:10px}
+.cycle-modal-card textarea{flex:1;min-height:46vh}
 `;
 
 const CONSOLE_JS = `
