@@ -281,9 +281,15 @@ async function testServerRoutes(): Promise<void> {
     // --- regression: the neighbouring console editors are untouched ------------
     const finalState = (await (await fetch(`${base}/api/state`, { headers: { cookie } })).json()) as any;
     const strategyIds = (finalState?.strategy?.files || []).map((file: any) => file.id);
+    // Shape, not the exact list: this guard exists so the Cycles work cannot
+    // quietly disturb Review Strategy, and the whitelist grew when the two
+    // review files were added on purpose. It must not require the
+    // life-review-os ids, which are absent wherever that repo is not checked
+    // out — CI included.
+    const KNOWN_STRATEGY_IDS = ['biweekly_strategy', 'plan_rules', 'biweekly_mode', 'analyze_rules', 'review_style'];
     check(
       'Review Strategy still lists its files',
-      strategyIds[0] === 'biweekly_strategy' && strategyIds.every((id: string) => ['biweekly_strategy', 'plan_rules', 'biweekly_mode'].includes(id)),
+      strategyIds[0] === 'biweekly_strategy' && strategyIds.every((id: string) => KNOWN_STRATEGY_IDS.includes(id)),
       strategyIds.join(','),
     );
     check('Review Strategy still exposes the built-in default', String(finalState?.strategy?.defaultStrategy || '').includes('计划条目规则'));

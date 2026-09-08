@@ -43,6 +43,8 @@ function seedSkillRepo(root: string): string {
   fs.mkdirSync(path.join(repo, 'modes'), { recursive: true });
   fs.writeFileSync(path.join(repo, 'engine', '03-plan.md'), '# Engine 03\n规则 3.5：默认逐字照搬。\n');
   fs.writeFileSync(path.join(repo, 'modes', 'biweekly.md'), '# 模式：biweekly\n');
+  fs.writeFileSync(path.join(repo, 'engine', '02-analyze.md'), '# Engine 02\n分析规则：先看完成率。\n');
+  fs.writeFileSync(path.join(repo, 'engine', '08-retro-review.md'), '# 文体\n说明文字不进 prompt。\n\n<!-- CONTRACT -->\nreview 固定两段。\n');
   return repo;
 }
 
@@ -88,12 +90,42 @@ async function main(): Promise<void> {
     const state = (await stateResponse.json()) as any;
     const files = state?.strategy?.files || [];
     const ids = files.map((file: any) => file.id).join(',');
-    check('state lists all three strategy files', ids === 'biweekly_strategy,plan_rules,biweekly_mode', ids);
+    check(
+      'state lists every strategy file, planning and review alike',
+      ids === 'biweekly_strategy,plan_rules,biweekly_mode,analyze_rules,review_style',
+      ids,
+    );
     check('built-in default rules are exposed for reset', String(state?.strategy?.defaultStrategy || '').includes('计划条目规则'));
 
     const planRules = files.find((file: any) => file.id === 'plan_rules');
     check('plan_rules resolves into the life-review-os repo', planRules?.path === path.join(skillRepo, 'engine', '03-plan.md'), planRules?.path);
     check('plan_rules content is read from disk', String(planRules?.markdown || '').includes('默认逐字照搬'));
+
+    // The two files the review is actually built from. Before they were listed,
+    // the console could change how the next cycle is planned but not how the
+    // finished one gets reviewed.
+    const analyze = files.find((file: any) => file.id === 'analyze_rules');
+    check('analyze_rules resolves into the life-review-os repo', analyze?.path === path.join(skillRepo, 'engine', '02-analyze.md'), analyze?.path);
+    check('analyze_rules content is read from disk', String(analyze?.markdown || '').includes('先看完成率'));
+
+    const reviewStyle = files.find((file: any) => file.id === 'review_style');
+    check('review_style resolves to the contract file', reviewStyle?.path === path.join(skillRepo, 'engine', '08-retro-review.md'), reviewStyle?.path);
+    check('review_style is shown whole, marker and all, so it can be edited', String(reviewStyle?.markdown || '').includes('<!-- CONTRACT -->') && String(reviewStyle?.markdown || '').includes('说明文字不进 prompt'));
+    check('the hint says what the marker means', String(reviewStyle?.hint || '').includes('CONTRACT'), reviewStyle?.hint);
+
+    // Saving through the new ids has to work, not just reading them: the
+    // allowlist is what turns an id into a path, so a listed-but-unsaveable file
+    // would be a read-only editor with a save button.
+    const savedStyle = await fetch(`${base}/api/strategy`, {
+      method: 'POST',
+      headers: authed,
+      body: JSON.stringify({ id: 'review_style', markdown: '<!-- CONTRACT -->\nreview 写成一段，不超过 100 字。\n' }),
+    });
+    check('review_style can be saved', savedStyle.status === 200 && ((await savedStyle.json()) as any).ok === true);
+    check(
+      'and the edit is on disk where life-review-os will read it',
+      fs.readFileSync(path.join(skillRepo, 'engine', '08-retro-review.md'), 'utf8').includes('不超过 100 字'),
+    );
 
     const strategyFile = files.find((file: any) => file.id === 'biweekly_strategy');
     check('missing prompt file is reported, not fabricated', strategyFile?.exists === false && strategyFile?.markdown === '');
