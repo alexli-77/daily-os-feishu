@@ -3462,11 +3462,17 @@ const MODEL_SUGGESTIONS = {
   ],
   claude: [
     ['default', 'claude-sonnet-5'],
-    ['claude-haiku-4', 'fastest, cheapest'], ['claude-sonnet-5', 'balanced'], ['claude-opus-4', 'most capable'],
+    ['claude-haiku-4-5', 'fastest, cheapest'], ['claude-sonnet-5', 'balanced'], ['claude-opus-5', 'most capable'],
+    // No row in DEFAULT_PRICE_TABLE resolves this one, so the budget meter
+    // would score it as $0 until billing.price_overrides names a price.
+    ['claude-fable-5-1', 'needs billing.price_overrides'],
   ],
   anthropic: [
     ['default', 'claude-sonnet-5'],
-    ['claude-haiku-4', 'fastest, cheapest'], ['claude-sonnet-5', 'balanced'], ['claude-opus-4', 'most capable'],
+    ['claude-haiku-4-5', 'fastest, cheapest'], ['claude-sonnet-5', 'balanced'], ['claude-opus-5', 'most capable'],
+    // No row in DEFAULT_PRICE_TABLE resolves this one, so the budget meter
+    // would score it as $0 until billing.price_overrides names a price.
+    ['claude-fable-5-1', 'needs billing.price_overrides'],
   ],
 };
 
