@@ -505,8 +505,9 @@ function buildPageContext(auth: AuthContext, url: URL, options: UiServerOptions)
   const config = loadConfig(options.configPath);
   // The runtime-token path has no user record behind it, so the seed can be
   // absent; the renderer falls back to the username.
-  const avatarSeed = findUser(auth.username)?.avatar_seed || '';
-  return { config, role: auth.role, username: auth.username, avatarSeed, url };
+  const user = findUser(auth.username);
+  const avatarSeed = user?.avatar_seed || '';
+  return { config, role: auth.role, username: auth.username, email: user?.email || '', avatarSeed, url };
 }
 
 function sessionCookieHeader(token: string): string {
@@ -2116,6 +2117,7 @@ const HTML = String.raw`<!doctype html>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Daily OS Feishu</title>
     <link rel="stylesheet" href="/assets/app.css" />
+    <script>try{var f=localStorage.getItem('daily_os_font');if(f==='small'||f==='large')document.documentElement.setAttribute('data-font',f);}catch(e){}</script>
   </head>
   <body>
     <header class="topbar">
@@ -2431,6 +2433,15 @@ npm run service:install</code></pre>
               <h2>Setup</h2>
               <div class="panel-actions"><span class="save-status" aria-live="polite"></span><button type="submit">Save</button></div>
             </div>
+            <fieldset class="wide-fieldset" id="font-size-fieldset">
+              <legend>界面字体</legend>
+              <p class="hint">调整控制台整体字号，立即生效，仅影响这台浏览器（不写入 config，无需 Save）。</p>
+              <div class="font-choices" id="font-size-control">
+                <label><input type="radio" name="ui-font" value="small" /> 小</label>
+                <label><input type="radio" name="ui-font" value="medium" /> 中</label>
+                <label><input type="radio" name="ui-font" value="large" /> 大</label>
+              </div>
+            </fieldset>
             <div class="grid">
               <label>Display name<input id="user-display-name" /></label>
               <label>Timezone<input id="user-timezone" /></label>
@@ -3444,7 +3455,14 @@ pre {
   .nav-button { flex: 0 0 auto; width: auto; }
   .todo-page { grid-template-columns: 1fr; }
   .log-entry { grid-template-columns: 1fr; gap: .35rem; }
-}`;
+}
+/* UI font size preference (Setup): small / medium / large via body zoom. */
+html[data-font="small"] { --ui-zoom: 0.9; }
+html[data-font="large"] { --ui-zoom: 1.14; }
+body { zoom: var(--ui-zoom, 1); }
+.font-choices { display: flex; gap: 10px; flex-wrap: wrap; }
+.font-choices label { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; cursor: pointer; }
+`;
 
 /**
  * Exported so tests can evaluate the shipped console script against a DOM stub.
@@ -3454,6 +3472,23 @@ pre {
  * holds a value never showed a menu.
  */
 export const JS = String.raw`let state;
+
+// UI font-size preference (Setup → 界面字体). Client-only, persisted in localStorage.
+(function () {
+  var control = document.getElementById('font-size-control');
+  if (!control || typeof control.querySelector !== 'function' || typeof control.addEventListener !== 'function') return;
+  var current = 'medium';
+  try { var f = localStorage.getItem('daily_os_font'); if (f === 'small' || f === 'large') current = f; } catch (e) {}
+  var checked = control.querySelector('input[value="' + current + '"]');
+  if (checked) checked.checked = true;
+  control.addEventListener('change', function (ev) {
+    var val = ev.target && ev.target.value;
+    if (val !== 'small' && val !== 'medium' && val !== 'large') return;
+    try { localStorage.setItem('daily_os_font', val); } catch (e) {}
+    if (val === 'medium') document.documentElement.removeAttribute('data-font');
+    else document.documentElement.setAttribute('data-font', val);
+  });
+})();
 
 const UI_TOKEN = (function () {
   // Priority: ?token=... (first open) -> sessionStorage -> token injected into the page HTML.

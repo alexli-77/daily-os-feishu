@@ -32,12 +32,13 @@ export interface PageContext {
   config: AppConfig;
   role: Role;
   username: string;
+  email: string;
   /** Drives the topbar avatar. '' falls back to the username. */
   avatarSeed: string;
   url: URL;
 }
 
-export const PLATFORM_PAGES = new Set(['/dashboard', '/today', '/cycles', '/okr', '/chat', '/schedules', '/runs', '/artifacts']);
+export const PLATFORM_PAGES = new Set(['/dashboard', '/today', '/cycles', '/okr', '/chat', '/schedules', '/runs', '/artifacts', '/profile']);
 
 const NAV: Array<{ href: string; label: string }> = [
   { href: '/dashboard', label: 'Dashboard' },
@@ -48,7 +49,7 @@ const NAV: Array<{ href: string; label: string }> = [
   { href: '/schedules', label: 'Schedules' },
   { href: '/runs', label: 'Runs' },
   { href: '/artifacts', label: 'Artifacts' },
-  { href: '/console', label: 'Config' },
+  // Config (/console) moved out of the top bar into the avatar dropdown ("设置").
 ];
 
 export function escapeHtml(value: unknown): string {
@@ -78,6 +79,8 @@ export function renderPlatformPage(pathname: string, ctx: PageContext): string {
       return layout('/runs', ctx, renderRuns(ctx));
     case '/artifacts':
       return layout('/artifacts', ctx, renderArtifacts(ctx));
+    case '/profile':
+      return layout('/profile', ctx, renderProfile(ctx));
     default:
       return layout('/dashboard', ctx, '<p>Unknown page.</p>');
   }
@@ -96,15 +99,23 @@ function layout(active: string, ctx: PageContext, body: string): string {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Daily OS Console</title>
   <style>${CONSOLE_CSS}</style>
+  <script>${FONT_PREF_JS}</script>
 </head>
 <body>
   <header class="topbar">
     <div class="brand">Daily OS · Console</div>
     <nav class="nav">${nav}</nav>
-    <div class="session">
-      ${pixelAvatarSvg(ctx.avatarSeed || ctx.username)}
-      <span class="who">${escapeHtml(ctx.username)}</span>
-      <button type="button" class="logout" data-logout>退出</button>
+    <div class="session usermenu" data-usermenu>
+      <button type="button" class="usermenu-trigger" data-usermenu-toggle aria-haspopup="menu" aria-expanded="false" title="打开用户导航栏">
+        ${pixelAvatarSvg(ctx.avatarSeed || ctx.username)}
+        <span class="who">${escapeHtml(ctx.username)}</span>
+        <span class="usermenu-caret" aria-hidden="true">▾</span>
+      </button>
+      <div class="usermenu-panel" role="menu" hidden>
+        <a role="menuitem" href="/profile">个人信息</a>
+        <a role="menuitem" href="/console">设置</a>
+        <button type="button" role="menuitem" data-logout>退出</button>
+      </div>
     </div>
   </header>
   <main class="page">${body}</main>
@@ -350,6 +361,28 @@ document.addEventListener('keydown', function (event) {
 `;
 
 // --- dashboard --------------------------------------------------------------
+
+function renderProfile(ctx: PageContext): string {
+  const roleLabel = ctx.role === 'admin' ? '管理员' : '成员';
+  return `
+  <section class="card profile-card">
+    <div class="profile-head">
+      ${pixelAvatarSvg(ctx.avatarSeed || ctx.username)}
+      <div>
+        <h2>${escapeHtml(ctx.username)}</h2>
+        <p class="muted small">${escapeHtml(roleLabel)}${ctx.email ? ' · ' + escapeHtml(ctx.email) : ''}</p>
+      </div>
+    </div>
+    <table class="grid">
+      <tbody>
+        <tr><th>用户名</th><td>${escapeHtml(ctx.username)}</td></tr>
+        <tr><th>角色</th><td>${escapeHtml(roleLabel)}</td></tr>
+        <tr><th>邮箱</th><td>${ctx.email ? escapeHtml(ctx.email) : '<span class="muted">未设置</span>'}</td></tr>
+      </tbody>
+    </table>
+    <p class="muted small">账号设置与界面偏好（含字体大小）在 <a href="/console">设置</a> 里调整。</p>
+  </section>`;
+}
 
 function renderDashboard(ctx: PageContext): string {
   const { config } = ctx;
@@ -1948,6 +1981,22 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,san
 .session{display:flex;align-items:center;gap:10px}
 .who{font-size:13px;color:var(--text);font-weight:500}
 .avatar{border-radius:7px;display:block;flex:none}
+/* Avatar dropdown menu (个人信息 / 设置 / 退出). */
+.usermenu{position:relative}
+.usermenu-trigger{display:flex;align-items:center;gap:10px;background:none;border:1px solid transparent;padding:3px 8px;border-radius:8px;cursor:pointer;color:var(--text)}
+.usermenu-trigger:hover{background:var(--surface-2);border-color:var(--border)}
+.usermenu-caret{color:var(--muted);font-size:11px}
+.usermenu-panel{position:absolute;right:0;top:calc(100% + 6px);background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:6px;min-width:150px;display:flex;flex-direction:column;gap:2px;box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:20}
+.usermenu-panel[hidden]{display:none}
+.usermenu-panel>a,.usermenu-panel>button{text-align:left;background:none;border:none;color:var(--text);padding:8px 10px;border-radius:7px;cursor:pointer;text-decoration:none;font:inherit;font-size:13px;width:100%}
+.usermenu-panel>a:hover,.usermenu-panel>button:hover{background:var(--surface-2)}
+.profile-card{max-width:520px}
+.profile-head{display:flex;align-items:center;gap:14px;margin-bottom:14px}
+.profile-head h2{margin:0}
+/* UI font size preference (LEO console): small / medium / large via body zoom. */
+html[data-font="small"]{--ui-zoom:0.9}
+html[data-font="large"]{--ui-zoom:1.14}
+body{zoom:var(--ui-zoom,1)}
 .welcome-body{background:var(--bg)}
 .welcome{max-width:860px}
 .welcome-hero{padding:34px 0 26px}
@@ -2120,10 +2169,19 @@ button.danger{background:var(--danger);border-color:var(--danger)}
 button.compact{padding:4px 10px;font-size:12px}
 `;
 
+/** Applied in <head> on every authenticated page so the font choice never flashes. */
+const FONT_PREF_JS = `try{var f=localStorage.getItem('daily_os_font');if(f==='small'||f==='large')document.documentElement.setAttribute('data-font',f);}catch(e){}`;
+
 const CONSOLE_JS = `
 (function(){
   function toast(msg){var t=document.getElementById('toast');if(!t)return;t.textContent=msg;t.hidden=false;setTimeout(function(){t.hidden=true},2600);}
+  document.addEventListener('keydown',function(ev){if(ev.key!=='Escape')return;var m=document.querySelector('[data-usermenu].open');if(m){m.classList.remove('open');var t=m.querySelector('[data-usermenu-toggle]');if(t)t.setAttribute('aria-expanded','false');var p=m.querySelector('.usermenu-panel');if(p)p.hidden=true;}});
+  function closeUserMenu(m){if(!m)return;m.classList.remove('open');var t=m.querySelector('[data-usermenu-toggle]');if(t)t.setAttribute('aria-expanded','false');var p=m.querySelector('.usermenu-panel');if(p)p.hidden=true;}
   document.addEventListener('click',function(ev){
+    var umToggle=ev.target.closest('[data-usermenu-toggle]');
+    if(umToggle){ev.preventDefault();var m=umToggle.closest('[data-usermenu]');var willOpen=!m.classList.contains('open');m.classList.toggle('open',willOpen);umToggle.setAttribute('aria-expanded',willOpen?'true':'false');var pnl=m.querySelector('.usermenu-panel');if(pnl)pnl.hidden=!willOpen;return;}
+    var openMenu=document.querySelector('[data-usermenu].open');
+    if(openMenu&&!ev.target.closest('.usermenu-panel')){closeUserMenu(openMenu);}
     var logout=ev.target.closest('[data-logout]');
     if(logout){ev.preventDefault();fetch('/api/logout',{method:'POST',credentials:'same-origin'}).then(function(){location.href='/';});return;}
     var btn=ev.target.closest('button[data-post],a[data-post]');
