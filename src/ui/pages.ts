@@ -1446,7 +1446,7 @@ const CONSOLE_CSS = `
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);font-size:14px}
 .topbar{display:flex;align-items:center;gap:20px;padding:10px 18px;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:5}
 .brand{font-weight:600}
-.nav{display:flex;gap:6px;flex:1}
+.nav{display:flex;gap:6px;flex:1;flex-wrap:wrap;min-width:0}
 .nav-link{padding:6px 12px;border-radius:8px;text-decoration:none;color:var(--muted)}
 .nav-link.active,.nav-link:hover{background:var(--surface-2);color:var(--text)}
 .session{display:flex;align-items:center;gap:10px}
@@ -1478,10 +1478,9 @@ button.danger{background:var(--danger);border-color:var(--danger)}
 .stat{display:flex;flex-direction:column}
 .stat-num{font-size:20px;font-weight:600}
 .stat-label{font-size:12px;color:var(--muted)}
-.three-col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
 .two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .col{min-height:120px;min-width:0}
-@media(max-width:900px){.three-col,.two-col{grid-template-columns:1fr}}
+@media(max-width:900px){.two-col{grid-template-columns:1fr}}
 .objective{margin-bottom:14px}
 .kr-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
 .kr-head{display:flex;justify-content:space-between}
