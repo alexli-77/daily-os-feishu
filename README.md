@@ -8,6 +8,19 @@ Daily OS Feishu is a Mac-first, Feishu-only personal workflow agent. It collects
 
 This repository is intentionally generic. It does not include personal tokens, private vault content, browser data, personal memory, or Feishu identifiers. It ships only a generic memory vault template. All private values live in `.env`, `config/config.yaml`, and ignored `data/` files.
 
+## Start here
+
+- **[Architecture](docs/architecture.md)** — the system, why the service runs on
+  your own machine, and the five components with an honest note on where this is
+  weak.
+- **[Five-minute demo](docs/demo-script.md)** — a walkthrough script.
+- **[ADR 0001](docs/adr/0001-ssr-console-scope-and-ui-freeze.md)** — why the
+  server-rendered console is frozen for UI polish.
+
+Native clients live in their own repositories:
+[macOS](https://github.com/alexli-77/daily-os-macos) ·
+[iOS](https://github.com/alexli-77/daily-os-ios).
+
 ## First Version Scope
 
 - Runs on macOS as a CLI or a `launchd` background service.

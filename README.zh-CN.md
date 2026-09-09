@@ -4,6 +4,18 @@ Daily OS Feishu 是一个优先支持 Mac、本地优先、只集成飞书的个
 
 这个仓库是通用版本，不包含任何个人 token、私人知识库内容、浏览器数据、个人 memory 或飞书 ID。仓库只包含一个通用 memory vault 模板。所有私密配置都放在 `.env`、`config/config.yaml` 和被 git 忽略的 `data/` 目录中。
 
+## 从这里开始
+
+- **[架构](docs/architecture.md)** —— 系统结构、为什么服务跑在你自己的机器上，
+  以及五个组件各自的状态（包括哪里是弱的）。
+- **[五分钟 demo](docs/demo-script.md)** —— 演示脚本。
+- **[ADR 0001](docs/adr/0001-ssr-console-scope-and-ui-freeze.md)** ——
+  服务端渲染控制台为什么冻结 UI 打磨。
+
+原生客户端在各自的仓库：
+[macOS](https://github.com/alexli-77/daily-os-macos) ·
+[iOS](https://github.com/alexli-77/daily-os-ios)。
+
 ## 第一版范围
 
 - 在 macOS 上以 CLI 或 `launchd` 后台服务运行。
