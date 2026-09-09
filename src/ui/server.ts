@@ -2704,9 +2704,9 @@ npm run service:install</code></pre>
                   <details class="source-advanced">
                     <summary>高级过滤（query · 项目/团队 白名单）</summary>
                     <label>Linear query<input id="linear-query" placeholder="留空即可；仅在需要自定义 GraphQL 过滤时填" /></label>
-                    <label>Allowed projects<textarea id="linear-projects-allowlist" rows="3" spellcheck="false" placeholder="每行一个 Linear 项目名，例如：daily-os mac版"></textarea></label>
+                    <label>Allowed projects<textarea id="linear-projects-allowlist" rows="3" spellcheck="false" placeholder="每行一个 Linear 项目名（例如 Web / Mobile）"></textarea></label>
                     <label>Blocked projects<textarea id="linear-projects-blocklist" rows="3" spellcheck="false" placeholder="每行一个要排除的项目名"></textarea></label>
-                    <label>Allowed teams<textarea id="linear-teams-allowlist" rows="3" spellcheck="false" placeholder="每行一个 Linear 团队名或 key，例如：Leon_os / LEO"></textarea></label>
+                    <label>Allowed teams<textarea id="linear-teams-allowlist" rows="3" spellcheck="false" placeholder="每行一个 Linear 团队名或 key（例如 Engineering / ENG）"></textarea></label>
                     <label>Blocked teams<textarea id="linear-teams-blocklist" rows="3" spellcheck="false" placeholder="每行一个要排除的团队名或 key"></textarea></label>
                     <p class="hint">项目过滤用 Linear 项目名；团队过滤用团队名或 key。匹配忽略大小写、空格、连字符和下划线。</p>
                   </details>
