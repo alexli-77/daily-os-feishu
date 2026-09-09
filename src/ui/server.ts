@@ -22,7 +22,7 @@ import { appVersion } from '../utils/version.js';
 import { startDecisionOnboarding } from '../decision/onboarding.js';
 import { ensureDecisionPolicyFiles } from '../decision/policy.js';
 import { BIWEEKLY_STRATEGY_FILE, defaultBiweeklyStrategy, expandPath } from '../skills/runner.js';
-import { readSkillRepoState, updateSkillRepo } from '../skills/update.js';
+import { defaultSkillInstallDir, installSkillRepo, readSkillRepoState, updateSkillRepo } from '../skills/update.js';
 import { generateCycleReview } from '../skills/life-review-os.js';
 import { readOkrEditorState, writeOkrFile } from '../okr/editor.js';
 import { normalizeOkrMarkdown } from '../okr/normalize.js';
@@ -396,6 +396,7 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
     if (request.method === 'POST' && url.pathname === '/api/artifacts/reindex') return sendJson(response, reindexArtifacts());
     if (request.method === 'POST' && url.pathname === '/api/admin/users') return sendJson(response, adminUsers(auth, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/skills/update') return sendJson(response, await updateSkill(options, auth));
+    if (request.method === 'POST' && url.pathname === '/api/skills/install') return sendJson(response, await installSkill(options, auth, await readJson(request)));
 
     // Web console chat (LEO-236).
     if (request.method === 'GET' && url.pathname === '/api/chat/sessions') return sendJson(response, chatSessions(options));
@@ -795,6 +796,34 @@ async function updateSkill(options: UiServerOptions, auth: AuthContext): Promise
   const config = loadConfig(options.configPath);
   const result = await updateSkillRepo(config);
   return { ...result, state: await readSkillRepoState(config) };
+}
+
+/**
+ * LEO-287: install the weekly-review skill from the console — git clone
+ * life-review-os, then register its checkout in config.skills.registry so the
+ * CLI and Daily OS both find it. Admin-only (it is also a non-whitelisted write,
+ * so the member gate already rejects it).
+ */
+async function installSkill(options: UiServerOptions, auth: AuthContext, body: unknown): Promise<Record<string, unknown>> {
+  if (auth.role !== 'admin') return { ok: false, error: 'Admin role required.' };
+  const dir = typeof readRecord(body).dir === 'string' ? String(readRecord(body).dir) : '';
+  const result = await installSkillRepo(dir || defaultSkillInstallDir());
+  if (!result.ok || !result.registered) return { ...result };
+  // Persist the checkout into the registry (same write path as saveConfig).
+  const config = loadConfig(options.configPath);
+  const entry: AppConfig['skills']['registry'][number] = {
+    id: 'weekly-review',
+    provider: 'auto',
+    path: result.registered.path,
+    workdir: result.registered.workdir,
+    default_mode: 'weekly',
+    effects: ['read', 'draft', 'feishu_write'],
+    require_confirmation_for: ['feishu_write'],
+  };
+  const registry = [...config.skills.registry.filter((existing) => existing.id !== 'weekly-review'), entry];
+  const nextConfig: AppConfig = { ...config, skills: { ...config.skills, enabled: true, registry } };
+  fs.writeFileSync(path.resolve(options.configPath), `${yaml.dump(nextConfig, { lineWidth: 120, noRefs: true })}`, 'utf8');
+  return { ...result };
 }
 
 function adminUsers(auth: AuthContext, body: unknown): Record<string, unknown> {
@@ -2487,6 +2516,10 @@ npm run service:install</code></pre>
                 <button type="button" class="secondary" id="skill-repo-update">更新 skill（git pull）</button>
                 <span class="save-status" aria-live="polite" id="skill-repo-result"></span>
               </div>
+              <div class="panel-actions" id="skill-repo-install-row" hidden>
+                <input id="skill-repo-install-dir" placeholder="留空用默认 ~/.daily-os/skills/life-review-os" />
+                <button type="button" id="skill-repo-install">安装 skill（git clone）</button>
+              </div>
               <pre class="mono small" id="skill-repo-commits" hidden></pre>
             </fieldset>
             <fieldset class="wide-fieldset" id="team-fieldset">
@@ -3639,6 +3672,7 @@ $('config-form').addEventListener('submit', async (event) => {
 });
 
 $('skill-repo-update')?.addEventListener('click', () => updateSkillRepo());
+$('skill-repo-install')?.addEventListener('click', () => installSkillRepoUi());
 $('refresh-logs').addEventListener('click', () => loadLogs());
 $('clear-logs').addEventListener('click', () => clearLogs());
 
@@ -4305,6 +4339,9 @@ function renderSkillRepo(repo) {
     blocked.hidden = !repo.blocked;
     blocked.textContent = repo.blocked || '';
   }
+  // LEO-287: offer install (git clone) when the skill is not present yet.
+  var installRow = $('skill-repo-install-row');
+  if (installRow) installRow.hidden = repo.available === true;
 }
 
 async function updateSkillRepo() {
@@ -4329,6 +4366,34 @@ async function updateSkillRepo() {
     else button.disabled = false;
   } catch (error) {
     if (result) result.textContent = '更新失败：' + error;
+    button.disabled = false;
+  }
+}
+
+// LEO-287: install (git clone) the weekly-review skill. The registry changes, so
+// on success reload the page to re-render config + status from fresh state.
+async function installSkillRepoUi() {
+  var button = $('skill-repo-install');
+  var result = $('skill-repo-result');
+  var dirInput = $('skill-repo-install-dir');
+  if (!button) return;
+  button.disabled = true;
+  if (result) result.textContent = '正在 git clone…（首次安装可能要十几秒）';
+  try {
+    const response = await fetch('/api/skills/install', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ dir: dirInput ? dirInput.value.trim() : '' }),
+    });
+    const data = await response.json();
+    if (result) result.textContent = data.ok ? data.message : (data.error || data.message || '安装失败');
+    if (data.ok) {
+      setTimeout(function () { location.reload(); }, 1200);
+    } else {
+      button.disabled = false;
+    }
+  } catch (error) {
+    if (result) result.textContent = '安装失败：' + error;
     button.disabled = false;
   }
 }
