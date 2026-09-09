@@ -756,3 +756,16 @@ These paths are ignored by default.
 The alpha is intentionally local-first: source connectors, personal memory,
 tokens, chat IDs, and vault paths stay in user-owned config files or private
 folders that are not committed to the repository.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+This repository had declared `"license": "MIT"` in `package.json` without
+carrying the licence text, which is not the same thing: a public repository
+with no LICENSE file is all rights reserved, so nobody could legally use it or
+contribute to it. The file settles that.
+
+The native clients are separate, also MIT:
+[daily-os-macos](https://github.com/alexli-77/daily-os-macos) and
+[daily-os-ios](https://github.com/alexli-77/daily-os-ios).
