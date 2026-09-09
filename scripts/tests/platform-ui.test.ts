@@ -218,12 +218,28 @@ async function main(): Promise<void> {
     });
     check('member whitelisted write -> 200', memberWhitelisted.status === 200, String(memberWhitelisted.status));
 
-    // --- LEO-288: env-secret reveal is admin-only --------------------------
-    const memberReveal = (await fetch(`${base}/api/env-secret?key=OPENAI_API_KEY&reveal=1`, {
-      headers: { cookie: memberCookie },
-    }).then((r) => r.json())) as { present?: boolean; value?: string };
-    check('member sees the secret is present', memberReveal.present === true, JSON.stringify(memberReveal));
-    check('member cannot reveal the secret in plaintext', memberReveal.value === undefined, JSON.stringify(memberReveal));
+    // --- LEO-291 Scope A: owner-only config surfaces -----------------------
+    // The whole config console + state/secret endpoints are admin(owner)-only.
+    const memberSecret = await fetch(`${base}/api/env-secret?key=OPENAI_API_KEY&reveal=1`, { headers: { cookie: memberCookie } });
+    check('member cannot reach /api/env-secret -> 403', memberSecret.status === 403, String(memberSecret.status));
+    const memberState = await fetch(`${base}/api/state`, { headers: { cookie: memberCookie } });
+    check('member cannot read /api/state -> 403', memberState.status === 403, String(memberState.status));
+    const memberConsole = await fetch(`${base}/console`, { headers: { cookie: memberCookie }, redirect: 'manual' });
+    check(
+      'member is redirected away from /console',
+      memberConsole.status === 302 && memberConsole.headers.get('location') === '/dashboard',
+      `${memberConsole.status} -> ${memberConsole.headers.get('location')}`,
+    );
+    const anonConsole = await fetch(`${base}/console`, { redirect: 'manual' });
+    check('signed-out visitor cannot open /console -> redirect', anonConsole.status === 302, String(anonConsole.status));
+
+    // The owner (admin) keeps full access to all of it.
+    const adminConsole = await fetch(`${base}/console`, { headers: { cookie: adminCookie }, redirect: 'manual' });
+    check('admin can open /console -> 200', adminConsole.status === 200, String(adminConsole.status));
+    const adminState = await fetch(`${base}/api/state`, { headers: { cookie: adminCookie } });
+    check('admin can read /api/state -> 200', adminState.status === 200, String(adminState.status));
+    const adminSecret = await fetch(`${base}/api/env-secret?key=OPENAI_API_KEY&reveal=1`, { headers: { cookie: adminCookie } });
+    check('admin can query /api/env-secret -> 200', adminSecret.status === 200, String(adminSecret.status));
 
     const adminReveal = (await fetch(`${base}/api/env-secret?key=OPENAI_API_KEY&reveal=1`, {
       headers: { authorization: `Bearer ${controls.token}` },

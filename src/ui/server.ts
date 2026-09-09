@@ -360,6 +360,16 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
       }
     }
 
+    // LEO-291 Scope A: owner-only surfaces. The Config console + full state/config
+    // /env endpoints expose the owner's config and .env presence. The member gate
+    // above only covers writes, and /console has no auth gate at all — so a member
+    // (or a signed-in stranger) could read the owner's config. Lock them to admin.
+    if (isOwnerOnlyPath(url.pathname) && auth.role !== 'admin') {
+      if (url.pathname === '/console') return redirect(response, auth.authenticated ? '/dashboard' : '/?signin=1');
+      if (!auth.authenticated) return sendJson(response, { ok: false, error: 'Unauthorized' }, 401);
+      return sendJson(response, { ok: false, error: 'Owner only' }, 403);
+    }
+
     // Signing in is a dialog on the welcome page, not a page of its own. /login
     // stays routed so an old bookmark or a stale tab still lands somewhere that
     // can actually sign you in.
@@ -495,6 +505,14 @@ const MEMBER_WRITE_WHITELIST = new Set([
 ]);
 function isMemberWriteWhitelisted(pathname: string): boolean {
   return MEMBER_WRITE_WHITELIST.has(pathname);
+}
+
+// LEO-291 Scope A: surfaces that expose the owner's config / .env and must never
+// be readable by a member or a signed-in stranger. /console is the Config SPA;
+// /api/state dumps configPath/envPath/redactedEnv; the rest read/write config/env.
+const OWNER_ONLY_PATHS = new Set(['/console', '/api/state', '/api/env', '/api/env-secret', '/api/config']);
+function isOwnerOnlyPath(pathname: string): boolean {
+  return OWNER_ONLY_PATHS.has(pathname);
 }
 
 function redirect(response: http.ServerResponse, location: string): void {
