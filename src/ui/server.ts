@@ -2701,12 +2701,15 @@ npm run service:install</code></pre>
                   <label>Assignee（我的任务标识）<input id="linear-assignee" placeholder="me / 邮箱 / 显示名；留空=整个团队" /></label>
                   <label class="check-row"><input id="linear-active-cycle" type="checkbox" /> 仅当前 Cycle 的任务</label>
                   <p class="hint">Assignee 作用于所有过滤（含团队/项目白名单）：me = API key 所属账号；填邮箱或 Linear 显示名可指定他人；留空拉整个团队。</p>
-                  <label>Linear query<input id="linear-query" /></label>
-                  <label>Allowed projects<textarea id="linear-projects-allowlist" rows="3" spellcheck="false" placeholder="One Linear project name per line"></textarea></label>
-                  <label>Blocked projects<textarea id="linear-projects-blocklist" rows="3" spellcheck="false" placeholder="One Linear project name per line"></textarea></label>
-                  <label>Allowed teams<textarea id="linear-teams-allowlist" rows="3" spellcheck="false" placeholder="One Linear team name or key per line"></textarea></label>
-                  <label>Blocked teams<textarea id="linear-teams-blocklist" rows="3" spellcheck="false" placeholder="One Linear team name or key per line"></textarea></label>
-                  <p class="hint">Project filters use Linear project names. Team filters use Linear team names or keys. Matching ignores case, spaces, hyphens, and underscores.</p>
+                  <details class="source-advanced">
+                    <summary>高级过滤（query · 项目/团队 白名单）</summary>
+                    <label>Linear query<input id="linear-query" placeholder="留空即可；仅在需要自定义 GraphQL 过滤时填" /></label>
+                    <label>Allowed projects<textarea id="linear-projects-allowlist" rows="3" spellcheck="false" placeholder="每行一个 Linear 项目名，例如：daily-os mac版"></textarea></label>
+                    <label>Blocked projects<textarea id="linear-projects-blocklist" rows="3" spellcheck="false" placeholder="每行一个要排除的项目名"></textarea></label>
+                    <label>Allowed teams<textarea id="linear-teams-allowlist" rows="3" spellcheck="false" placeholder="每行一个 Linear 团队名或 key，例如：Leon_os / LEO"></textarea></label>
+                    <label>Blocked teams<textarea id="linear-teams-blocklist" rows="3" spellcheck="false" placeholder="每行一个要排除的团队名或 key"></textarea></label>
+                    <p class="hint">项目过滤用 Linear 项目名；团队过滤用团队名或 key。匹配忽略大小写、空格、连字符和下划线。</p>
+                  </details>
                   <p class="hint status-line" id="linear-token-status"></p>
                 </div>
                 <label><input id="source-chrome" type="checkbox" /> Chrome snapshot</label>
@@ -3221,6 +3224,30 @@ legend {
   align-items: center;
   justify-content: space-between;
   gap: .75rem;
+}
+/* LEO-250: collapse the advanced Linear filters so the core fields lead. */
+.source-advanced {
+  border: 1px solid var(--border);
+  border-radius: .5rem;
+  background: var(--surface, #fff);
+  padding: 0 .6rem;
+}
+.source-advanced > summary {
+  cursor: pointer;
+  padding: .5rem .1rem;
+  color: var(--muted);
+  font-size: .85rem;
+  list-style: revert;
+}
+.source-advanced[open] > summary {
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: .5rem;
+}
+.source-advanced > label {
+  display: grid;
+  gap: .3rem;
+  margin-bottom: .5rem;
 }
 .compact {
   min-height: 2rem;
