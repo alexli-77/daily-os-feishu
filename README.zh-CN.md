@@ -612,3 +612,15 @@ npm run privacy:scan
 
 Alpha 版本刻意保持 local-first：数据源连接器、个人记忆、token、chat ID
 和 vault 路径都留在用户自己的本地配置文件或私有文件夹中，不提交到仓库。
+
+## 许可证
+
+MIT，见 [LICENSE](LICENSE)。
+
+此前 `package.json` 里写了 `"license": "MIT"` 但仓库里没有许可证文本，这两件事不
+等价：**公开但没有 LICENSE 文件 = 保留所有权利**，别人既不能合法使用也不能合法贡献。
+补上这个文件就是为了把它坐实。
+
+原生客户端是独立仓库，同样 MIT：
+[daily-os-macos](https://github.com/alexli-77/daily-os-macos) 与
+[daily-os-ios](https://github.com/alexli-77/daily-os-ios)。
