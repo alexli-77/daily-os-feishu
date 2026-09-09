@@ -151,6 +151,9 @@ try {
     // Updating the weekly-review skill from the console: fast-forward only, and
     // refused on a dirty tree or a diverged branch.
     'scripts/tests/skill-update.test.ts',
+    // LEO-287 installing the skill (git clone) from the console: git-missing,
+    // non-empty target, clone failure, and the config.yaml seed + registration.
+    'scripts/tests/skill-install.test.ts',
     // Sign-up, the signed-out welcome page, and the topbar identity. The public
     // root must stay free of the owner's data now that it is reachable.
     'scripts/tests/auth-register.test.ts',

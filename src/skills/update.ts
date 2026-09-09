@@ -77,6 +77,81 @@ export interface SkillUpdateResult {
 
 const SKILL_ID = 'weekly-review';
 const GIT_TIMEOUT_MS = 120000;
+const SKILL_REPO_URL = 'https://github.com/alexli-77/life-review-os';
+
+/** The default clone location when the operator does not pick one. */
+export function defaultSkillInstallDir(): string {
+  return path.join(os.homedir(), '.daily-os', 'skills', 'life-review-os');
+}
+
+export interface SkillInstallResult {
+  ok: boolean;
+  dir: string;
+  /** Registry entry the caller should persist into config.skills.registry. */
+  registered?: { id: string; path: string; workdir: string };
+  message: string;
+}
+
+/**
+ * LEO-287: clone life-review-os so the weekly-review skill can be installed from
+ * the console without a terminal. Does the git + filesystem work only; the caller
+ * (the endpoint) persists the registry entry, since config paths live there.
+ *
+ * The command runner is injectable so tests exercise the whole flow — git-missing,
+ * non-empty target, clone failure, and the config.yaml seed — with no real clone.
+ */
+/** Minimal command runner so tests can drive install without a real git. */
+export type SkillCommandRunner = (
+  command: string,
+  args: string[],
+  options?: { timeoutMs?: number },
+) => Promise<{ ok: boolean; stdout: string; stderr: string }>;
+
+export async function installSkillRepo(
+  targetDir: string,
+  deps: { run?: SkillCommandRunner } = {},
+): Promise<SkillInstallResult> {
+  const run: SkillCommandRunner = deps.run ?? runCommand;
+  const dir = path.resolve((targetDir || '').trim() || defaultSkillInstallDir());
+  const fail = (message: string): SkillInstallResult => ({ ok: false, dir, message });
+
+  const version = await run('git', ['--version'], { timeoutMs: 10000 });
+  if (!version.ok) return fail('git 不可用：请先安装 git 或确认它在 PATH 里。');
+
+  // Never clone over existing content — an existing non-empty dir is an error, not
+  // something to overwrite.
+  if (fs.existsSync(dir) && fs.readdirSync(dir).length > 0) {
+    return fail(`目标目录已存在且非空，未覆盖：${dir}`);
+  }
+
+  fs.mkdirSync(path.dirname(dir), { recursive: true });
+  const cloned = await run('git', ['clone', '--depth', '1', SKILL_REPO_URL, dir], { timeoutMs: GIT_TIMEOUT_MS });
+  if (!cloned.ok) return fail(`git clone 失败：${(cloned.stderr || cloned.stdout || '未知错误').slice(0, 300)}`);
+
+  // life-review-os keeps config.yaml gitignored; the repo ships only
+  // config.example.yaml. Seed the real file so the CLI has something to read —
+  // the returned message tells the operator to fill in the tokens.
+  const example = path.join(dir, 'config.example.yaml');
+  const configFile = path.join(dir, 'config.yaml');
+  let seeded = false;
+  try {
+    if (fs.existsSync(example) && !fs.existsSync(configFile)) {
+      fs.copyFileSync(example, configFile);
+      seeded = true;
+    }
+  } catch {
+    // Non-fatal: the clone succeeded; the operator can copy it by hand.
+  }
+
+  return {
+    ok: true,
+    dir,
+    registered: { id: SKILL_ID, path: path.join(dir, 'SKILL.md'), workdir: dir },
+    message: seeded
+      ? `已安装到 ${dir}。请在 ${configFile} 填入飞书文档 token 与 linear.workspace 后再运行 weekly-review。`
+      : `已安装到 ${dir}（未找到 config.example.yaml，需手动创建 config.yaml）。`,
+  };
+}
 
 /**
  * CLI skill directories this app knows about. Both Claude Code and Codex are

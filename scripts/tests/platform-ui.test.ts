@@ -218,6 +218,14 @@ async function main(): Promise<void> {
     });
     check('member whitelisted write -> 200', memberWhitelisted.status === 200, String(memberWhitelisted.status));
 
+    // LEO-287: installing a skill is a privileged write — members are refused.
+    const memberInstall = await fetch(`${base}/api/skills/install`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: memberCookie },
+      body: '{}',
+    });
+    check('member cannot install a skill -> 403', memberInstall.status === 403, String(memberInstall.status));
+
     // --- LEO-291 Scope A: owner-only config surfaces -----------------------
     // The whole config console + state/secret endpoints are admin(owner)-only.
     const memberSecret = await fetch(`${base}/api/env-secret?key=OPENAI_API_KEY&reveal=1`, { headers: { cookie: memberCookie } });
