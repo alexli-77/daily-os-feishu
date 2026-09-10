@@ -701,8 +701,12 @@ async function todoFeedback(options: UiServerOptions, body: unknown): Promise<Re
   const candidateId = String(request.candidateId || '').trim();
   if (candidateId) {
     const event = String(request.event || '').trim();
-    if (event !== 'complete' && event !== 'defer' && event !== 'update') {
-      return { ok: false, error: 'event must be complete, defer or update.' };
+    // `reopen` was already a `TodoFeedbackEvent`, already written by the My
+    // Todos restore path, and already honoured by `getCompletedCandidateIds` —
+    // only this gate refused it, which made ticking a plan row the one action in
+    // the product with no way back. A mis-click is not a decision.
+    if (event !== 'complete' && event !== 'defer' && event !== 'update' && event !== 'reopen') {
+      return { ok: false, error: 'event must be complete, defer, update or reopen.' };
     }
     const note = typeof request.note === 'string' ? request.note.trim() : '';
     const rank = Number(request.rank) || 0;
@@ -739,11 +743,13 @@ async function todoFeedback(options: UiServerOptions, body: unknown): Promise<Re
           ? '已标记完成'
           : event === 'defer'
             ? '已延期'
-            : minutes
-              ? `已改为 ${minutes} 分钟`
-              : clearsMinutes
-                ? '已清掉估时'
-                : '已记录更新',
+            : event === 'reopen'
+              ? '已恢复'
+              : minutes
+                ? `已改为 ${minutes} 分钟`
+                : clearsMinutes
+                  ? '已清掉估时'
+                  : '已记录更新',
     };
   }
 
@@ -1197,6 +1203,10 @@ function readTodayPlan(options: UiServerOptions): Record<string, unknown> {
     if (entry.event === 'complete' || entry.event === 'defer' || entry.event === 'update') {
       feedback[entry.candidateId] = entry.event;
     }
+    // Ledger order is append order, so a `reopen` after a tick wins and the row
+    // comes back untouched. Deleting rather than recording `reopen` as a state:
+    // "was completed and then wasn't" is history, and this map is the present.
+    if (entry.event === 'reopen') delete feedback[entry.candidateId];
     // `!== undefined` and not truthiness: 0 is the recorded "back to unknown",
     // and treating it as absent would make an estimate impossible to unset.
     if (entry.minutes !== undefined) editedMinutes.set(entry.candidateId, entry.minutes);
