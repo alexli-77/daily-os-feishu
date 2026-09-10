@@ -15,6 +15,7 @@ import { pollFeishuFeedback } from '../feedback/feishu-feedback.js';
 import { sendFeishuMessage } from '../connectors/lark-cli.js';
 import { readLatestWorkflowOutput } from '../storage/memory.js';
 import { listTodoFeedback } from '../todo/feedback.js';
+import { readArtifactsIndex } from '../storage/artifacts.js';
 import { buildDailyPlanTable, extractDailyPlanTodos, formatWorkflowSummaryForFeishu } from '../workflows/summary.js';
 import { getLaunchAgentStatus, installLaunchAgent, uninstallLaunchAgent } from '../service/launchd.js';
 import { runCommand } from '../utils/command.js';
@@ -394,6 +395,13 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
     if (request.method === 'POST' && url.pathname === '/api/runs/rerun') return sendJson(response, await rerunWorkflow(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/schedules/backfill') return sendJson(response, await backfillSchedule(options, await readJson(request)));
     if (request.method === 'GET' && url.pathname === '/api/schedules/logs') return sendScheduleLogs(response, url);
+    // Same gap the plan had: the artifact index was reachable only as rendered
+    // HTML, so a native client could list nothing and its 打开 button had no
+    // path to open. `path` is the absolute one — the point of this screen is to
+    // hand a file back to the user, not to describe it.
+    if (request.method === 'GET' && url.pathname === '/api/artifacts') {
+      return sendJson(response, { ok: true, artifacts: readArtifactsIndex() });
+    }
     if (request.method === 'POST' && url.pathname === '/api/artifacts/reindex') return sendJson(response, reindexArtifacts());
     if (request.method === 'POST' && url.pathname === '/api/admin/users') return sendJson(response, adminUsers(auth, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/skills/update') return sendJson(response, await updateSkill(options, auth));
