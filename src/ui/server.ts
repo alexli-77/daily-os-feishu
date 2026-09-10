@@ -14,6 +14,7 @@ import { todayInTimezone } from '../utils/date.js';
 import { pollFeishuFeedback } from '../feedback/feishu-feedback.js';
 import { sendFeishuMessage } from '../connectors/lark-cli.js';
 import { readLatestWorkflowOutput } from '../storage/memory.js';
+import { listTodoFeedback } from '../todo/feedback.js';
 import { buildDailyPlanTable, extractDailyPlanTodos, formatWorkflowSummaryForFeishu } from '../workflows/summary.js';
 import { getLaunchAgentStatus, installLaunchAgent, uninstallLaunchAgent } from '../service/launchd.js';
 import { runCommand } from '../utils/command.js';
@@ -426,6 +427,14 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
       // could otherwise read .env secrets. Non-admins get presence + masked only.
       const reveal = url.searchParams.get('reveal') === '1' && auth.role === 'admin';
       return sendJson(response, readSecret(options, url.searchParams.get('key') || '', { reveal, loopback: isLoopbackRequest }));
+    }
+    // The native clients need today's plan, and until now it existed only as
+    // server-rendered HTML: `renderPlanColumn` computed it inline and nothing
+    // returned it as data. So the Mac app had no way to show the same list the
+    // web shows, and fell back to the todo inbox — a different set of rows that
+    // merely looked plausible.
+    if (request.method === 'GET' && url.pathname === '/api/today/plan') {
+      return sendJson(response, readTodayPlan(options));
     }
     if (request.method === 'POST' && url.pathname === '/api/capture') return sendJson(response, await captureTodo(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/todo-inbox') return sendJson(response, await updateTodoInbox(options, await readJson(request)));
@@ -1117,6 +1126,49 @@ function readDecisionPolicyState(config: AppConfig): Record<string, unknown> {
     repositoryPath: files.repositoryPath,
     notesPath: files.notesPath,
     policyMd: readTextIfExists(files.notesPath),
+  };
+}
+
+/**
+ * Today's plan, as data.
+ *
+ * Deliberately the same three calls `renderPlanColumn` makes, in the same
+ * order — the point is that the web page and the native client cannot drift,
+ * so this reuses the extraction rather than re-implementing it.
+ *
+ * `stale` is reported rather than hidden: a plan from yesterday is still the
+ * most recent plan, and silently showing it as today's is how someone works a
+ * day behind without noticing.
+ */
+function readTodayPlan(options: UiServerOptions): Record<string, unknown> {
+  const env = readEnvFile(options.envPath);
+  applyEnv(env);
+  const config = loadConfig(options.configPath);
+
+  const latest = readLatestWorkflowOutput(config);
+  if (!latest || latest.workflow !== 'daily_plan') {
+    return { ok: true, plan: null, todos: [], feedback: {}, today: todayInTimezone(config) };
+  }
+
+  const today = todayInTimezone(config);
+  const todos = extractDailyPlanTodos(latest.content);
+
+  // Latest feedback per candidate for today, so a row the user already ticked
+  // does not come back looking untouched.
+  const feedback: Record<string, string> = {};
+  for (const entry of listTodoFeedback(config)) {
+    if (entry.date !== today) continue;
+    if (entry.event === 'complete' || entry.event === 'defer' || entry.event === 'update') {
+      feedback[entry.candidateId] = entry.event;
+    }
+  }
+
+  return {
+    ok: true,
+    plan: { date: latest.date ?? '', workflow: latest.workflow, stale: Boolean(latest.date && latest.date !== today) },
+    todos,
+    feedback,
+    today,
   };
 }
 
