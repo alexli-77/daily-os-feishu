@@ -21,6 +21,18 @@ export interface TodoFeedbackEntry {
   rank: number;
   source?: string;
   note?: string;
+  /**
+   * The user's own estimate for this row, in minutes, attached to an `update`
+   * event. It lives here rather than in a second store because an estimate edit
+   * *is* feedback on the plan — the model proposed 45 and the person who has to
+   * do the work said 90, which is precisely the signal the scorer wants. The
+   * latest entry for a (date, candidateId) wins.
+   *
+   * `0` means "put it back to unknown" and is distinct from the field being
+   * absent, which means the `update` was about something else and must leave an
+   * existing estimate alone.
+   */
+  minutes?: number;
 }
 
 export const TODO_FEEDBACK_PATH = 'data/runtime/todo-feedback.jsonl';

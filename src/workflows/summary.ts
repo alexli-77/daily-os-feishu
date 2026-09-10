@@ -14,6 +14,30 @@ export interface DailyPlanTodo {
   rank: number;
   text: string;
   candidateId: string;
+  /**
+   * Rough minutes the model thinks this takes. Optional on purpose: every plan
+   * written before the prompt asked for it has none, and a missing estimate has
+   * to stay missing rather than become a plausible default — the number exists
+   * so "four priorities is six hours" is visible in the morning, and a filled-in
+   * guess would make that check meaningless.
+   */
+  minutes?: number;
+}
+
+/** Bounds on a plan estimate, in minutes. */
+const MIN_PLAN_MINUTES = 5;
+const MAX_PLAN_MINUTES = 480;
+
+/**
+ * Coerce whatever the model (or the user's edit) supplied into a usable number
+ * of minutes, or undefined. Clamped rather than rejected: an eight-hour ceiling
+ * keeps one hallucinated `6000` from swallowing the whole proportional bar,
+ * while still letting a genuinely long block through.
+ */
+export function normalizePlanMinutes(value: unknown): number | undefined {
+  const raw = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  if (!Number.isFinite(raw) || raw <= 0) return undefined;
+  return Math.min(Math.max(Math.round(raw), MIN_PLAN_MINUTES), MAX_PLAN_MINUTES);
 }
 
 export interface DailyPlanTodoPlan {
@@ -44,7 +68,8 @@ export function parseDailyPlanTodoPlan(content: string): DailyPlanTodoPlan | nul
       if (!text) return null;
       const rank = typeof record.rank === 'number' && Number.isFinite(record.rank) ? record.rank : index + 1;
       const candidateId = typeof record.candidateId === 'string' ? record.candidateId : '';
-      return { rank, text, candidateId };
+      const minutes = normalizePlanMinutes(record.minutes);
+      return { rank, text, candidateId, ...(minutes ? { minutes } : {}) };
     })
     .filter((todo): todo is DailyPlanTodo => Boolean(todo))
     .sort((left, right) => left.rank - right.rank)

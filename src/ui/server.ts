@@ -16,7 +16,7 @@ import { sendFeishuMessage } from '../connectors/lark-cli.js';
 import { readLatestWorkflowOutput } from '../storage/memory.js';
 import { listTodoFeedback } from '../todo/feedback.js';
 import { readArtifactsIndex } from '../storage/artifacts.js';
-import { buildDailyPlanTable, extractDailyPlanTodos, formatWorkflowSummaryForFeishu } from '../workflows/summary.js';
+import { buildDailyPlanTable, extractDailyPlanTodos, formatWorkflowSummaryForFeishu, normalizePlanMinutes } from '../workflows/summary.js';
 import { getLaunchAgentStatus, installLaunchAgent, uninstallLaunchAgent } from '../service/launchd.js';
 import { runCommand } from '../utils/command.js';
 import { appendUiLog, clearUiLogs, readUiLogs } from '../storage/ui-log.js';
@@ -706,6 +706,17 @@ async function todoFeedback(options: UiServerOptions, body: unknown): Promise<Re
     }
     const note = typeof request.note === 'string' ? request.note.trim() : '';
     const rank = Number(request.rank) || 0;
+    // Only on `update`: complete and defer say nothing about how long the thing
+    // takes, and accepting a duration alongside them would let a stray field
+    // rewrite an estimate as a side effect of ticking a box.
+    //
+    // A literal 0 is not garbage — it is how the client says "I have no idea,
+    // put it back to unknown". It has to be recorded as 0 rather than as an
+    // absent field, because an `update` that merely carries a note must leave
+    // an existing estimate alone, and both cases would otherwise look the same
+    // in the ledger. Without this, an estimate could be set but never unset.
+    const minutes = event === 'update' ? normalizePlanMinutes(request.minutes) : undefined;
+    const clearsMinutes = minutes === undefined && event === 'update' && Number(request.minutes) === 0 && request.minutes !== undefined && request.minutes !== null;
     const env = readEnvFile(options.envPath);
     applyEnv(env);
     const config = loadConfig(options.configPath);
@@ -716,8 +727,24 @@ async function todoFeedback(options: UiServerOptions, body: unknown): Promise<Re
       rank,
       source: 'console-today',
       ...(note ? { note } : {}),
+      ...(minutes ? { minutes } : clearsMinutes ? { minutes: 0 } : {}),
     });
-    return { ok: true, candidateId, event, text: event === 'complete' ? '已标记完成' : event === 'defer' ? '已延期' : '已记录更新' };
+    return {
+      ok: true,
+      candidateId,
+      event,
+      ...(minutes ? { minutes } : {}),
+      text:
+        event === 'complete'
+          ? '已标记完成'
+          : event === 'defer'
+            ? '已延期'
+            : minutes
+              ? `已改为 ${minutes} 分钟`
+              : clearsMinutes
+                ? '已清掉估时'
+                : '已记录更新',
+    };
   }
 
   // Inbox feedback (My todos). This must write through to the inbox ledger's own
@@ -1164,17 +1191,30 @@ function readTodayPlan(options: UiServerOptions): Record<string, unknown> {
   // Latest feedback per candidate for today, so a row the user already ticked
   // does not come back looking untouched.
   const feedback: Record<string, string> = {};
+  const editedMinutes = new Map<string, number>();
   for (const entry of listTodoFeedback(config)) {
     if (entry.date !== today) continue;
     if (entry.event === 'complete' || entry.event === 'defer' || entry.event === 'update') {
       feedback[entry.candidateId] = entry.event;
     }
+    // `!== undefined` and not truthiness: 0 is the recorded "back to unknown",
+    // and treating it as absent would make an estimate impossible to unset.
+    if (entry.minutes !== undefined) editedMinutes.set(entry.candidateId, entry.minutes);
   }
 
   return {
     ok: true,
     plan: { date: latest.date ?? '', workflow: latest.workflow, stale: Boolean(latest.date && latest.date !== today) },
-    todos,
+    // The user's edit wins over the model's guess, and is merged in here rather
+    // than shipped as a second map: a client that renders `minutes` should not
+    // have to know an override mechanism exists to render the right number.
+    todos: todos.map((todo) => {
+      const edited = editedMinutes.get(todo.candidateId);
+      if (edited === undefined) return todo;
+      if (edited > 0) return { ...todo, minutes: edited };
+      const { minutes: _dropped, ...withoutEstimate } = todo;
+      return withoutEstimate;
+    }),
     feedback,
     today,
   };
