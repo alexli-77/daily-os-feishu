@@ -3,9 +3,16 @@ import { runAnthropicAgent } from './anthropic-agent.js';
 import { runClaudeAgent } from './claude-agent.js';
 import { runCodexAgent } from './codex-agent.js';
 import { runOpenAiAgent } from './openai-agent.js';
+import { cliUnderLaunchdMessage, cliUnderLaunchdOverridden, isCliProvider, isHeadlessLaunchd } from './runtime-env.js';
 
 export async function runAgent(input: AgentInput): Promise<string> {
   const provider = input.config.llm.provider;
+  // daily-os #199: don't launch a doomed run in the background. A subscription CLI
+  // under launchd connects but never returns, so instead of hanging (and, with the
+  // timeout cap raised, hanging for good) fail immediately with a clear reminder.
+  if (isCliProvider(provider) && isHeadlessLaunchd() && !cliUnderLaunchdOverridden()) {
+    throw new Error(cliUnderLaunchdMessage(provider));
+  }
   // Policy note (2026-05): Anthropic sanctions headless `claude -p` / Agent SDK usage
   // under a subscription via the monthly Agent SDK credit (Pro $20 / Max $100-$200,
   // billed at API rates; rollout paused as of 2026-06, currently still subscription

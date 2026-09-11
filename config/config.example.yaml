@@ -12,6 +12,8 @@ llm:
   # codex / claude 为订阅 CLI，用于程序化调度不合规（Anthropic 2026-02 条款），仅作迁移期回退。
   provider: "codex" # codex | openai | claude | anthropic
   model: "default" # codex/claude: 'default' uses the CLI account's model; openai/anthropic: an API model id (anthropic 默认 claude-sonnet-5)
+  # 单次生成的上限（毫秒）。长上下文生成不再被固定的 180s 静默中止；设 0 可完全关闭上限。
+  timeout_ms: 600000
 
 # 三层预算熔断：每次 LLM 调用前检查累计花费，任一层触顶即抛错并写 data/runtime/budget-alerts.jsonl。
 # 计量落盘于 data/runtime/usage-ledger.jsonl（每条调用一行 JSON）。

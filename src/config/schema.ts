@@ -58,6 +58,12 @@ export const AppConfigSchema = z.object({
   llm: z.object({
     provider: z.enum(['codex', 'openai', 'claude', 'anthropic']).default('codex'),
     model: z.string().default('default'),
+    // Upper bound on a single agent run. daily-os #199: the old hard-coded 180s
+    // silently SIGTERM'd long-context generations, so a legitimately slow run
+    // "necessarily failed" with no signal. Generous default; set 0 to disable the
+    // cap entirely. A run that hits this now throws a message naming the provider,
+    // model and prompt size instead of a bare timeout string.
+    timeout_ms: z.number().int().nonnegative().default(600000),
   }),
   billing: z
     .object({

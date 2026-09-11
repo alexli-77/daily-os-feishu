@@ -2234,6 +2234,12 @@ async function testCodexForUi(env: Record<string, string>): Promise<string> {
   const login = await runCommand(codexBin, ['login', 'status'], { timeoutMs: 10000, env: cliEnv(env) });
   const versionText = (version.stdout || version.stderr).trim();
   if (login.ok) return `Codex CLI 正常：${versionText}\n${(login.stdout || login.stderr).trim() || '已登录。'}`;
+  // daily-os #199: a timeout here is "no response in this environment", not "not
+  // logged in" — don't send the user to `codex login` (it works in Terminal and
+  // the background service stays broken).
+  if (login.timedOut) {
+    return `Codex CLI 正常：${versionText}\n无法判定登录状态：codex login status 10s 内没有返回。若本工具装成了 macOS 后台服务(launchd)，订阅版 CLI 会因 Keychain 阻塞而无响应（#199）——这不代表未登录。定时任务请改用 API-key provider（anthropic/openai）。`;
+  }
   return `Codex CLI 正常：${versionText}\n当前配置下 Codex 尚未登录。请在 Terminal 中运行以下命令，然后回到 UI 再点击 Test Codex login：\n${codexBin} login`;
 }
 
@@ -2247,6 +2253,11 @@ async function testClaudeForUi(env: Record<string, string>): Promise<string> {
   const versionText = (version.stdout || version.stderr).trim();
   const loggedIn = auth.ok && /"loggedIn"\s*:\s*true/.test(auth.stdout);
   if (loggedIn) return `Claude Code CLI 正常：${versionText}\n${auth.stdout.match(/"authMethod"\s*:\s*"([^"]+)"/)?.[1] ?? '已登录。'}`;
+  // daily-os #199: distinguish "no response" (launchd Keychain hang) from "not
+  // logged in" so the user isn't sent to a `claude auth login` dead-end.
+  if (auth.timedOut) {
+    return `Claude Code CLI 正常：${versionText}\n无法判定登录状态：claude auth status 10s 内没有返回。若本工具装成了 macOS 后台服务(launchd)，订阅版 CLI 会因 Keychain 阻塞而无响应（#199）——这不代表未登录。定时任务请改用 API-key provider（anthropic/openai）。`;
+  }
   return `Claude Code CLI 正常：${versionText}\n当前配置下 Claude 尚未登录。请在 Terminal 中运行以下命令，然后回到 UI 再点击 Test Claude login：\n${claudeBin} auth login`;
 }
 
@@ -2950,7 +2961,7 @@ npm run service:install</code></pre>
               <label>Display name<input id="user-display-name" /></label>
               <label>Timezone<input id="user-timezone" /></label>
               <label>Language<input id="assistant-language" /></label>
-              <label>LLM provider<select id="llm-provider"><option>codex</option><option>openai</option><option>claude</option></select></label>
+              <label>LLM provider<select id="llm-provider"><option>anthropic</option><option>openai</option><option>codex</option><option>claude</option></select><span class="hint">后台定时任务请用 <code>anthropic</code> / <code>openai</code>（API key）。<code>codex</code> / <code>claude</code> 是订阅版 CLI，在 launchd 后台里无法返回（#199）。</span></label>
               <label>Model<select id="llm-model-select"></select><input id="llm-model" autocomplete="off" placeholder="model id" hidden /><span class="hint">Options follow the selected provider. Choose <code>Custom…</code> to type any id the provider accepts; <code>default</code> follows the provider's own default.</span></label>
               <div class="form-field">
                 <label for="secret-OPENAI_API_KEY">OpenAI API key</label>
@@ -3042,36 +3053,42 @@ npm run service:install</code></pre>
             </fieldset>
             <fieldset class="wide-fieldset" id="codex-fieldset">
               <legend>Codex</legend>
-              <p class="hint">Use Codex CLI when LLM provider is set to codex. Configure the executable path here when the customer's shell PATH cannot find codex.</p>
+              <p class="hint"><strong>通常你什么都不用填。</strong>provider=codex 时会自动探测 Codex CLI 的位置，探测到就直接用。</p>
+              <p class="hint warn-hint">⚠️ 后台服务(launchd)的 PATH 和你终端里的不是同一个，所以“终端能跑通”不代表“后台能跑通”——这正是这一屏存在的理由。另外：订阅版 CLI 在后台会因 Keychain 阻塞而无法返回（#199），定时任务请把 LLM provider 改成 <code>anthropic</code> 或 <code>openai</code>（API key）。</p>
+              <p class="hint status-line detect-line" id="codex-detect">进入此项时会自动探测…</p>
               <div class="source-row">
-                <button type="button" class="secondary compact" data-action="discover_codex_binary">Find Codex CLI</button>
-                <button type="button" class="secondary compact" data-action="choose_codex_binary">Choose CLI</button>
-                <button type="button" class="secondary compact" data-action="codex_test">Test Codex login</button>
+                <button type="button" class="secondary compact" data-action="discover_codex_binary">重新探测</button>
+                <button type="button" class="secondary compact" data-action="codex_test">测 Codex 登录</button>
               </div>
-              <div class="form-field">
-                <label for="env-CODEX_BIN">Codex binary</label>
-                <div class="path-control"><input id="env-CODEX_BIN" placeholder="codex or /opt/homebrew/bin/codex" /><button type="button" class="secondary compact" data-action="choose_codex_binary">Choose CLI</button></div>
-              </div>
-              <div class="form-field">
-                <label for="env-CODEX_HOME">Codex home</label>
-                <div class="path-control"><input id="env-CODEX_HOME" placeholder="Optional, usually ~/.codex" /><button type="button" class="secondary compact" data-action="choose_codex_home">Choose folder</button></div>
-              </div>
-              <p class="hint">如果 Test Codex login 提示未登录，请在 Terminal 中用相同的 Codex binary/home 运行 <code>codex login</code>，然后重新 Run Checks。</p>
+              <details class="cli-manual" id="codex-manual">
+                <summary>找不到？手动指定路径</summary>
+                <div class="form-field">
+                  <label for="env-CODEX_BIN">Codex binary</label>
+                  <div class="path-control"><input id="env-CODEX_BIN" placeholder="codex or /opt/homebrew/bin/codex" /><button type="button" class="secondary compact" data-action="choose_codex_binary">选择…</button></div>
+                </div>
+                <div class="form-field">
+                  <label for="env-CODEX_HOME">Codex home</label>
+                  <div class="path-control"><input id="env-CODEX_HOME" placeholder="Optional, usually ~/.codex" /><button type="button" class="secondary compact" data-action="choose_codex_home">选择文件夹</button></div>
+                </div>
+              </details>
               <p class="hint status-line" id="codex-status"></p>
             </fieldset>
             <fieldset class="wide-fieldset" id="claude-fieldset" hidden>
               <legend>Claude Code</legend>
-              <p class="hint">Use the Claude Code CLI when LLM provider is set to claude. Configure the executable path here when the customer's shell PATH cannot find claude.</p>
+              <p class="hint"><strong>通常你什么都不用填。</strong>provider=claude 时会自动探测 Claude Code CLI 的位置，探测到就直接用。</p>
+              <p class="hint warn-hint">⚠️ 后台服务(launchd)的 PATH 和你终端里的不是同一个，所以“终端能跑通”不代表“后台能跑通”——这正是这一屏存在的理由。另外：订阅版 CLI 在后台会因 Keychain 阻塞而无法返回（#199），定时任务请把 LLM provider 改成 <code>anthropic</code> 或 <code>openai</code>（API key）。</p>
+              <p class="hint status-line detect-line" id="claude-detect">进入此项时会自动探测…</p>
               <div class="source-row">
-                <button type="button" class="secondary compact" data-action="discover_claude_binary">Find Claude CLI</button>
-                <button type="button" class="secondary compact" data-action="choose_claude_binary">Choose CLI</button>
-                <button type="button" class="secondary compact" data-action="claude_test">Test Claude login</button>
+                <button type="button" class="secondary compact" data-action="discover_claude_binary">重新探测</button>
+                <button type="button" class="secondary compact" data-action="claude_test">测 Claude 登录</button>
               </div>
-              <div class="form-field">
-                <label for="env-CLAUDE_BIN">Claude binary</label>
-                <div class="path-control"><input id="env-CLAUDE_BIN" placeholder="claude or /opt/homebrew/bin/claude" /><button type="button" class="secondary compact" data-action="choose_claude_binary">Choose CLI</button></div>
-              </div>
-              <p class="hint">如果 Test Claude login 提示未登录，请在 Terminal 中用相同的 Claude binary 运行 <code>claude auth login</code>，然后重新 Run Checks。</p>
+              <details class="cli-manual" id="claude-manual">
+                <summary>找不到？手动指定路径</summary>
+                <div class="form-field">
+                  <label for="env-CLAUDE_BIN">Claude binary</label>
+                  <div class="path-control"><input id="env-CLAUDE_BIN" placeholder="claude or /opt/homebrew/bin/claude" /><button type="button" class="secondary compact" data-action="choose_claude_binary">选择…</button></div>
+                </div>
+              </details>
               <p class="hint status-line" id="claude-status"></p>
             </fieldset>
             <div class="toggles">
@@ -3744,6 +3761,28 @@ legend {
   min-height: 1.1rem;
 }
 
+.warn-hint {
+  border-left: 3px solid #d97706;
+  padding-left: .55rem;
+  color: #92600a;
+}
+
+.detect-line {
+  font-weight: 600;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
+.cli-manual > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: .85rem;
+}
+
+.cli-manual[open] > summary {
+  margin-bottom: .4rem;
+}
+
 .service-status {
   border: 1px solid var(--border);
   border-radius: .45rem;
@@ -4081,7 +4120,11 @@ document.querySelectorAll('[data-action]').forEach((button) => {
   button.addEventListener('click', () => runAction(button.dataset.action));
 });
 
-$('llm-provider')?.addEventListener('change', updateProviderSections);
+$('llm-provider')?.addEventListener('change', () => {
+  // An explicit provider switch should re-probe the newly selected CLI.
+  cliAutoDetected = { codex: false, claude: false };
+  updateProviderSections();
+});
 $('llm-model-select')?.addEventListener('change', onModelSelectChange);
 
 $('strategy-file')?.addEventListener('change', () => {
@@ -4219,6 +4262,8 @@ function onModelSelectChange() {
   custom.value = select.value;
 }
 
+var cliAutoDetected = { codex: false, claude: false };
+
 function updateProviderSections() {
   const provider = value('llm-provider');
   const codex = $('codex-fieldset');
@@ -4226,6 +4271,32 @@ function updateProviderSections() {
   if (codex) codex.hidden = provider !== 'codex';
   if (claude) claude.hidden = provider !== 'claude';
   updateModelSuggestions();
+  // #200: auto-detect is the primary path. When a CLI fieldset becomes visible,
+  // probe for the binary once and show the result as status; only fall back to the
+  // (collapsed) manual input when detection fails.
+  if ((provider === 'codex' || provider === 'claude') && !cliAutoDetected[provider]) {
+    cliAutoDetected[provider] = true;
+    void autoDetectCli(provider);
+  }
+}
+
+async function autoDetectCli(kind) {
+  const detect = $(kind + '-detect');
+  const manual = $(kind + '-manual');
+  if (detect) detect.textContent = '正在探测 CLI 路径…';
+  try {
+    const action = kind === 'codex' ? 'discover_codex_binary' : 'discover_claude_binary';
+    const result = await post('/api/action', { action });
+    const text = (result.text || '').trim();
+    if (result.state) { state = result.state; }
+    if (detect) detect.textContent = text || '探测完成。';
+    // Open the manual entry only when detection did not resolve a usable path.
+    const found = text.indexOf('/') !== -1 && !/not found|未找到|not runnable/i.test(text);
+    if (manual) manual.open = !found;
+  } catch (error) {
+    if (detect) detect.textContent = '探测失败：' + (error && error.message ? error.message : String(error));
+    if (manual) manual.open = true;
+  }
 }
 
 function render() {

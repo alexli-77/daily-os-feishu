@@ -7,6 +7,7 @@ import type { MemoryBundle } from '../storage/memory.js';
 import { billingFromConfig, checkBudget, estimateCostUsd, recordUsage } from './token-meter.js';
 import { bundledAsset } from '../utils/install-root.js';
 import { fitEvidenceToBudget } from '../workflows/evidence-budget.js';
+import { describeAgentTimeout, resolveAgentTimeoutMs } from './runtime-env.js';
 
 export interface AgentInput {
   config: AppConfig;
@@ -25,16 +26,30 @@ export async function runOpenAiAgent(input: AgentInput): Promise<string> {
   // Three-tier budget circuit breaker: block the call if any tier is already spent.
   checkBudget(billing, { runId });
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const response = await client.chat.completions.create(
-    {
-      model: input.config.llm.model,
-      messages: [
-        { role: 'system', content: buildSystemPrompt() },
-        { role: 'user', content: buildUserPrompt(input) },
-      ],
-    },
-    { timeout: 180000 },
-  );
+  const timeoutMs = resolveAgentTimeoutMs(input.config);
+  const userPrompt = buildUserPrompt(input);
+  const startedAt = Date.now();
+  let response;
+  try {
+    response = await client.chat.completions.create(
+      {
+        model: input.config.llm.model,
+        messages: [
+          { role: 'system', content: buildSystemPrompt() },
+          { role: 'user', content: userPrompt },
+        ],
+      },
+      // timeout_ms=0 disables the cap (daily-os #199); otherwise the SDK aborts
+      // the request at the configured bound.
+      timeoutMs > 0 ? { timeout: timeoutMs } : {},
+    );
+  } catch (error) {
+    const name = error instanceof Error ? error.name : '';
+    if (/timeout/i.test(name) || (error instanceof Error && /timed out/i.test(error.message))) {
+      throw new Error(describeAgentTimeout('openai', input.config.llm.model, userPrompt.length, Date.now() - startedAt, timeoutMs));
+    }
+    throw error;
+  }
   const inputTokens = response.usage?.prompt_tokens ?? 0;
   const outputTokens = response.usage?.completion_tokens ?? 0;
   const cost = estimateCostUsd(input.config.llm.model, inputTokens, outputTokens, billing.price_overrides);
