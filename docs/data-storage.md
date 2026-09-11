@@ -58,6 +58,34 @@ A large part of your data is plain files, not SQLite:
 | `data/runtime/usage-ledger.jsonl` | Per-turn token usage. |
 | `.env` / `config/config.yaml` | Secrets and configuration (gitignored). |
 
+## Supabase sync — what leaves the machine
+
+By default **nothing syncs** and the app never talks to the network for your
+data. Sync only happens when all three are true: you set `team.supabase_url` +
+`team.supabase_anon_key` in Config, you sign in to Supabase, and you are in a
+team. Until then everything above stays entirely on this machine.
+
+When sync is on, it is a **60-second poll of one table only — `cycles`** (your
+`20_CYCLES/` weekly / retro / review markdown). It checks `max(updated_at)`
+first and only pulls bodies when something changed.
+
+- **Your own cycles are pushed** (upsert), never pulled back.
+- **Teammates' cycles are pulled into a read-only cache**, never written into
+  your local vault.
+- If Supabase is unreachable, local read/write is unaffected — sync just pauses.
+
+**Never synced — always local only:**
+
+- the SQLite database: accounts (password hash/salt), **chat conversations**,
+  calendar write-backs, the artifact index;
+- `config/config.yaml` and `.env` (all secrets and Feishu credentials);
+- your OKR files (`memory-vault/`) and the `data/memory/` notes (daily,
+  workflow-runs, todo inbox, usage ledger).
+
+The one identity detail that does leave: when you sign up for a team, your local
+username is used as your Supabase `display_name` so the two identities line up.
+That is a display label only — the password hash, salt, and email stay local.
+
 ## Back up / uninstall
 
 - **To back up everything**, take `data/`, `memory-vault/` (or your configured
