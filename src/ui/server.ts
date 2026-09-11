@@ -491,7 +491,7 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
     // swallow it and dispatch 'sync' as an unknown team action.
     if (request.method === 'POST' && url.pathname === '/api/team/sync') return sendJson(response, await runTeamSync(options));
     if (request.method === 'POST' && url.pathname.startsWith('/api/team/')) {
-      return sendJson(response, await teamAction(options, url.pathname.slice('/api/team/'.length), await readJson(request)));
+      return sendJson(response, await teamAction(options, url.pathname.slice('/api/team/'.length), await readJson(request), auth));
     }
     if (request.method === 'POST' && url.pathname === '/api/config') return sendJson(response, await saveConfig(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/env') return sendJson(response, await saveEnv(options, await readJson(request)));
@@ -1778,11 +1778,15 @@ function readOptionalCount(value: unknown, label: string, min: number, max: numb
  * Every branch returns a plain { ok, text|error } result and the rebuilt state.
  * A remote failure is data, not an exception: the console keeps working.
  */
-async function teamAction(options: UiServerOptions, action: string, body: unknown): Promise<Record<string, unknown>> {
+async function teamAction(options: UiServerOptions, action: string, body: unknown, auth: AuthContext): Promise<Record<string, unknown>> {
   const request = readRecord(body);
   const env = readEnvFile(options.envPath);
   applyEnv(env);
   const config = loadConfig(options.configPath);
+  // LEO-302 (GH #193): map the local console account to the Supabase member by
+  // defaulting the display_name to the local username, so「我是谁」lines up across
+  // the two identities. An explicit display name from the form still wins.
+  const localUsername = findUser(auth.username)?.username || '';
 
   const run = async (): Promise<TeamActionResult> => {
     switch (action) {
@@ -1790,7 +1794,7 @@ async function teamAction(options: UiServerOptions, action: string, body: unknow
         return signUp(config, {
           email: String(request.email || ''),
           password: String(request.password || ''),
-          displayName: String(request.displayName || ''),
+          displayName: String(request.displayName || '') || localUsername,
           memberId: String(request.memberId || ''),
         });
       case 'signin':

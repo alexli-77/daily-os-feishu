@@ -475,8 +475,16 @@ async function main(): Promise<void> {
     });
     check('the anon key saves', saved.body?.ok === true && saved.body?.state?.team?.configured === true, JSON.stringify(saved.body?.error || '').slice(0, 160));
 
+    // LEO-302 (GH #193): with no display name given, the Supabase identity
+    // defaults to the local console username (here 'admin'), so the two identities
+    // line up. This throwaway signup overwrites the local session; the real Leon
+    // signup below re-establishes it.
+    const mapped = await teamPost('signup', { email: 'throwaway@example.com', password: PASSWORD_A });
+    check('signup defaults display_name to the local username', mapped.body?.ok === true && mapped.body?.state?.team?.displayName === 'admin', JSON.stringify(mapped.body?.state?.team));
+
     const signup = await teamPost('signup', { email: 'leon@example.com', password: PASSWORD_A, displayName: 'Leon' });
     check('signup succeeds', signup.body?.ok === true, JSON.stringify(signup.body?.error || ''));
+    check('an explicit display name still wins over the local username', signup.body?.state?.team?.displayName === 'Leon', JSON.stringify(signup.body?.state?.team));
     check('signup leaves the user signed in but teamless', signup.body?.state?.team?.signedIn === true && !signup.body?.state?.team?.teamId, JSON.stringify(signup.body?.state?.team));
 
     const live = session.readTeamSession(currentConfig());
