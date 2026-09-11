@@ -200,6 +200,7 @@ const AUTH_MODAL = `
       <input id="auth-username" name="username" autocomplete="username" />
       <span class="field-error" id="auth-error-username" hidden></span>
     </label>
+    <p class="muted small" id="auth-existing" hidden></p>
     <label id="auth-email-row">邮箱
       <input id="auth-email" name="email" type="email" autocomplete="email" />
       <span class="field-error" id="auth-error-email" hidden></span>
@@ -210,10 +211,14 @@ const AUTH_MODAL = `
       <span class="field-error" id="auth-error-password" hidden></span>
     </label>
     <p class="field-error" id="auth-error-form" hidden></p>
+    <p class="muted small" id="auth-local-note">这个账号只建在本机服务上，不会出现在 Supabase / 团队成员里。</p>
     <button type="submit" id="auth-submit">创建账号并登录</button>
     <p class="muted small auth-switch">
       <span id="auth-switch-text">已经有账号了？</span>
       <a href="#" id="auth-switch">去登录</a>
+    </p>
+    <p class="muted small auth-switch" id="auth-forgot-row" hidden>
+      <a href="#" id="auth-forgot">忘记密码？在本机重置</a>
     </p>
   </form>
 </div>`;
@@ -231,23 +236,32 @@ function authSetError(field, message) {
 function authClearErrors() {
   ['username', 'email', 'password', 'form'].forEach(function (field) { authSetError(field, ''); });
 }
+function authHideExisting() {
+  var el = authEl('auth-existing');
+  if (el) { el.hidden = true; el.textContent = ''; }
+}
 
 function authSetMode(mode) {
-  authMode = mode === 'login' ? 'login' : 'register';
+  authMode = mode === 'login' ? 'login' : mode === 'reset' ? 'reset' : 'register';
   var register = authMode === 'register';
+  var reset = authMode === 'reset';
   authClearErrors();
-  authEl('auth-title').textContent = register ? '创建账号' : '登录';
-  authEl('auth-submit').textContent = register ? '创建账号并登录' : '登录';
-  // Email is only collected on sign-up; asking for it to sign in would be a
+  authHideExisting();
+  authEl('auth-title').textContent = register ? '创建账号' : reset ? '重置密码' : '登录';
+  authEl('auth-submit').textContent = register ? '创建账号并登录' : reset ? '重置密码' : '登录';
+  // Email is only collected on sign-up; asking for it elsewhere would be a
   // second thing to get wrong for no benefit.
   authEl('auth-email-row').hidden = !register;
-  authEl('auth-password-hint').hidden = !register;
-  authEl('auth-password').setAttribute('autocomplete', register ? 'new-password' : 'current-password');
-  authEl('auth-switch-text').textContent = register ? '已经有账号了？' : '还没有账号？';
-  authEl('auth-switch').textContent = register ? '去登录' : '去注册';
+  authEl('auth-password-hint').hidden = !register && !reset;
+  authEl('auth-password-hint').textContent = reset ? '新密码 8-20 个字符' : '8-20 个字符';
+  authEl('auth-password').setAttribute('autocomplete', register || reset ? 'new-password' : 'current-password');
+  authEl('auth-switch-text').textContent = register ? '已经有账号了？' : reset ? '' : '还没有账号？';
+  authEl('auth-switch').textContent = register ? '去登录' : reset ? '返回登录' : '去注册';
   // Signing in accepts either identifier, so the label says so; the format rule
   // below only applies to picking a new name.
-  authEl('auth-username-label').textContent = register ? '用户名' : '用户名或邮箱';
+  authEl('auth-username-label').textContent = register ? '用户名' : reset ? '要重置的用户名' : '用户名或邮箱';
+  var localNote = authEl('auth-local-note'); if (localNote) localNote.hidden = !register;
+  var forgotRow = authEl('auth-forgot-row'); if (forgotRow) forgotRow.hidden = authMode !== 'login';
 }
 
 function authOpen(mode) {
@@ -271,6 +285,12 @@ function authClose() {
  */
 function authValidate(values) {
   var errors = {};
+  if (authMode === 'reset') {
+    if (!values.username) errors.username = '请选择要重置的账号';
+    if (!values.password) errors.password = '请填写新密码';
+    else if (values.password.length < 8 || values.password.length > 20) errors.password = '密码需要 8-20 个字符';
+    return errors;
+  }
   if (!values.username) errors.username = authMode === 'register' ? '请填写用户名' : '请填写用户名或邮箱';
   // The character rule is about choosing a name. An existing account is looked
   // up by whatever was typed, so signing in must not reject an email here.
@@ -308,7 +328,7 @@ async function authSubmit(event) {
   button.disabled = true;
   button.textContent = '处理中…';
   try {
-    var endpoint = authMode === 'register' ? '/api/register' : '/api/login';
+    var endpoint = authMode === 'register' ? '/api/register' : authMode === 'reset' ? '/api/reset-password' : '/api/login';
     var payload = authMode === 'register'
       ? { username: values.username, email: values.email, password: values.password }
       : { username: values.username, password: values.password };
@@ -320,9 +340,26 @@ async function authSubmit(event) {
     });
     var data = await response.json();
     if (data && data.ok) {
+      if (authMode === 'reset') {
+        // Reset does not sign you in; drop back to login with the name prefilled.
+        var name = values.username;
+        authSetMode('login');
+        authEl('auth-username').value = name;
+        authSetError('form', '密码已重置，请用新密码登录。');
+        return;
+      }
       // Registering signs you in, so both paths land in the same place.
       window.location.href = '/dashboard';
       return;
+    }
+    // GH #192: on a taken username the server returns the machine's usernames so
+    // the operator can see which local account to sign into.
+    if (data && data.existingUsers && data.existingUsers.length) {
+      var existing = authEl('auth-existing');
+      if (existing) {
+        existing.textContent = '这台机器上已有账号：' + data.existingUsers.join('、') + ' —— 点下面「去登录」用它登录。';
+        existing.hidden = false;
+      }
     }
     if (data && data.errors) {
       Object.keys(data.errors).forEach(function (field) { authSetError(field, data.errors[field]); });
@@ -345,7 +382,13 @@ if (authEl('auth-close')) authEl('auth-close').addEventListener('click', authClo
 if (authEl('auth-form')) authEl('auth-form').addEventListener('submit', authSubmit);
 if (authEl('auth-switch')) authEl('auth-switch').addEventListener('click', function (event) {
   if (event && event.preventDefault) event.preventDefault();
-  authSetMode(authMode === 'register' ? 'login' : 'register');
+  authSetMode(authMode === 'register' ? 'login' : authMode === 'reset' ? 'login' : 'register');
+});
+if (authEl('auth-forgot')) authEl('auth-forgot').addEventListener('click', function (event) {
+  if (event && event.preventDefault) event.preventDefault();
+  var name = (authEl('auth-username').value || '').trim();
+  authSetMode('reset');
+  if (name) authEl('auth-username').value = name;
 });
 if (authEl('auth-modal')) authEl('auth-modal').addEventListener('click', function (event) {
   if (event.target === authEl('auth-modal')) authClose();
