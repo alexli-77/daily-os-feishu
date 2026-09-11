@@ -6,6 +6,7 @@ import type { Evidence } from '../workflows/types.js';
 import type { MemoryBundle } from '../storage/memory.js';
 import { billingFromConfig, checkBudget, estimateCostUsd, recordUsage } from './token-meter.js';
 import { bundledAsset } from '../utils/install-root.js';
+import { fitEvidenceToBudget } from '../workflows/evidence-budget.js';
 
 export interface AgentInput {
   config: AppConfig;
@@ -51,13 +52,21 @@ export function buildCliPrompt(input: AgentInput): string {
 
 export function buildUserPrompt(input: AgentInput): string {
   const workflowPrompt = readPrompt(`${input.workflow}.md`);
+  // Every provider funnels through here, so the budget cannot be bypassed by
+  // picking a different `llm.provider` — which matters, because the prompt that
+  // was too big for Codex was exactly as too big for Claude.
+  const { evidence, notes } = fitEvidenceToBudget(input.evidence, input.workflow);
+  for (const note of notes) console.warn(`[evidence] ${note}`);
   return [
     `# Workflow\n${workflowPrompt}`,
     `# User\n${JSON.stringify(input.config.user, null, 2)}`,
     `# Planning Configuration\n${JSON.stringify(input.config.planning, null, 2)}`,
     `# Date\n${input.date}`,
     `# Memory\n${JSON.stringify(input.memory, null, 2)}`,
-    `# Evidence\n${JSON.stringify(input.evidence, null, 2)}`,
+    // Compact rather than indented. Two-space indentation on a JSON document
+    // this size is tens of thousands of characters of whitespace that carries
+    // no meaning to a model — it was pure context spent on looking tidy.
+    `# Evidence\n${JSON.stringify(evidence)}`,
     '# 输出',
     '只返回最终可直接发送到飞书的消息。不要包含工具调用或隐藏推理过程。',
   ].join('\n\n');
