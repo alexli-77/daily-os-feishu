@@ -140,6 +140,9 @@ try {
     // longer carrying it, and the shipped script's cards, ordering, drafts and
     // zoom dialog driven against a DOM stub.
     'scripts/tests/cycles-standalone-page.test.ts',
+    // Creating the next cycle from a client: the 沿用上一期 dates, and a created
+    // file the planner can still write into.
+    'scripts/tests/cycle-create.test.ts',
     // LEO-280 history migration: run selection, both table layouts, idempotency.
     'scripts/tests/cycle-migration.test.ts',
     // LEO-278 run -> cycle files: 要务 to the planned cycle, review to the
