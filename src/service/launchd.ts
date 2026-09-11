@@ -448,6 +448,10 @@ function buildPlist(repoRoot: string, scriptPath: string, logsDir: string): stri
   <dict>
     <key>PATH</key>
     <string>${escapeXml(process.env.PATH || '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin')}</string>
+    <!-- daily-os #199: marks this process as the headless launchd service so the
+         agents can refuse the doomed subscription-CLI path up front. -->
+    <key>DAILY_OS_LAUNCHD</key>
+    <string>1</string>
   </dict>
   <key>ProgramArguments</key>
   <array>

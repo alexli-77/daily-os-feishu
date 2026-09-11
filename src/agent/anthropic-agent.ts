@@ -6,6 +6,7 @@ import {
   estimateCostUsd,
   recordUsage,
 } from './token-meter.js';
+import { describeAgentTimeout, resolveAgentTimeoutMs } from './runtime-env.js';
 
 /**
  * Anthropic API-key provider — a first-class programmatic provider that talks to
@@ -17,7 +18,6 @@ import {
 const ANTHROPIC_MESSAGES_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
 const DEFAULT_MODEL = 'claude-sonnet-5';
-const TIMEOUT_MS = 180000;
 // Headroom over the small JSON outputs these workflows emit (a daily plan is 5-8
 // short todos). The old 4096 cap could truncate a plan/review mid-array, and the
 // caller then saw invalid JSON; see the stop_reason guard below.
@@ -56,8 +56,13 @@ export async function runAnthropicAgent(input: AgentInput): Promise<string> {
   // Three-tier budget circuit breaker: block the call if any tier is already spent.
   checkBudget(billing, { runId });
 
+  const timeoutMs = resolveAgentTimeoutMs(input.config);
+  const userPrompt = buildUserPrompt(input);
+  const startedAt = Date.now();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  // timeout_ms=0 disables the cap entirely (daily-os #199): a legitimately slow
+  // long-context generation is allowed to finish rather than being killed.
+  const timer = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
   let response: Response;
   try {
     response = await fetch(ANTHROPIC_MESSAGES_URL, {
@@ -71,17 +76,17 @@ export async function runAnthropicAgent(input: AgentInput): Promise<string> {
         model,
         max_tokens: MAX_TOKENS,
         system: buildSystemPrompt(),
-        messages: [{ role: 'user', content: buildUserPrompt(input) }],
+        messages: [{ role: 'user', content: userPrompt }],
       }),
       signal: controller.signal,
     });
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error(`Anthropic API timed out after ${TIMEOUT_MS}ms`);
+      throw new Error(describeAgentTimeout('anthropic', model, userPrompt.length, Date.now() - startedAt, timeoutMs));
     }
     throw error;
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
   }
 
   const raw = await response.text();

@@ -8,6 +8,7 @@ import { defaultMemoryRepositoryPath, resolveMemoryRepositoryPath } from '../sto
 import { feishuSafetyWarnings, hasAnyAccessRule, summarizeFeishuAccess } from '../interaction/access-policy.js';
 import { decisionPolicyFiles } from '../decision/policy.js';
 import { feishuSessionCatalogPath } from '../interaction/session-catalog.js';
+import { isCliProvider, isHeadlessLaunchd } from '../agent/runtime-env.js';
 
 export interface DoctorCheck {
   name: string;
@@ -29,6 +30,19 @@ export async function runDoctor(config: AppConfig, configPath = 'config/config.y
       ok: true,
       level: 'warning',
       detail: 'not required for the currently enabled Feishu SDK-only features',
+    });
+  }
+
+  // daily-os #199: a subscription CLI (claude/codex) never returns under launchd,
+  // so a scheduled/background run silently times out. Surface it as its own check
+  // rather than letting the login check below get misread as "not logged in".
+  if (isCliProvider(config.llm.provider) && isHeadlessLaunchd()) {
+    checks.push({
+      name: `llm.provider=${config.llm.provider} under launchd`,
+      ok: false,
+      level: 'warning',
+      detail:
+        '本服务运行在 macOS 后台(launchd)里，订阅版 CLI 会因 Keychain 阻塞而永不返回（#199），定时任务不受支持。请改用 API-key provider（anthropic/openai），或设 DAILY_OS_ALLOW_CLI_UNDER_LAUNCHD=1 强行尝试（仅当 CLI 用 API key 认证时）。',
     });
   }
 
@@ -225,6 +239,17 @@ async function codexLoginCheck(codexBin: string, env: NodeJS.ProcessEnv): Promis
       detail: (result.stdout || result.stderr).trim() || 'authenticated',
     };
   }
+  // daily-os #199: a 10s timeout here is not "not logged in" — under launchd the
+  // CLI hangs on the Keychain. Report the no-response condition instead of sending
+  // the user to run `codex login` (which succeeds in Terminal and changes nothing).
+  if (result.timedOut) {
+    return {
+      name: 'Codex login',
+      ok: false,
+      level: 'warning',
+      detail: 'codex login status 10s 内没有返回，无法判定登录状态。若本服务在 macOS 后台(launchd)运行，订阅版 CLI 会因 Keychain 阻塞而无响应（#199）——这不代表未登录。定时任务请改用 API-key provider。',
+    };
+  }
   return {
     name: 'Codex login',
     ok: false,
@@ -240,6 +265,17 @@ async function claudeAuthCheck(claudeBin: string): Promise<DoctorCheck> {
       name: 'Claude Code auth',
       ok: true,
       detail: (result.stdout.match(/"authMethod"\s*:\s*"([^"]+)"/)?.[1]) ?? 'authenticated',
+    };
+  }
+  // daily-os #199: distinguish "no response" (launchd Keychain hang) from "not
+  // logged in" — the old message sent the user to `claude auth login`, which works
+  // in Terminal and leaves the background service just as broken.
+  if (result.timedOut) {
+    return {
+      name: 'Claude Code auth',
+      ok: false,
+      level: 'warning',
+      detail: 'claude auth status 10s 内没有返回，无法判定登录状态。若本服务在 macOS 后台(launchd)运行，订阅版 CLI 会因 Keychain 阻塞而无响应（#199）——这不代表未登录。定时任务请改用 API-key provider。',
     };
   }
   return {

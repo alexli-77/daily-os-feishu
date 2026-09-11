@@ -1646,8 +1646,19 @@ async function runCycleReviewGeneration() {
   var button = cycleEl('cycle-generate-review');
   if (!selectedCycleId || selectedOwnerId) return;
   var previous = button ? button.textContent : '';
-  if (button) { button.disabled = true; button.textContent = '生成中…（约 1-2 分钟）'; }
-  cycleSetText('cycle-status-review', '正在用 life-review-os 的复盘规则生成…');
+  if (button) { button.disabled = true; button.textContent = '生成中…'; }
+  // #199: no fixed "约 1-2 分钟" promise and no silent deadline. Show a live
+  // elapsed counter so a long generation reads as "still working", not "stuck".
+  var startedAt = Date.now();
+  var tickElapsed = function () {
+    var s = Math.round((Date.now() - startedAt) / 1000);
+    var mm = Math.floor(s / 60);
+    var ss = s % 60;
+    var elapsed = mm > 0 ? (mm + '分' + (ss < 10 ? '0' : '') + ss + '秒') : (ss + '秒');
+    cycleSetText('cycle-status-review', '正在用 life-review-os 的复盘规则生成…已等待 ' + elapsed + '（长文本可能要几分钟，请耐心等待）');
+  };
+  tickElapsed();
+  var elapsedTimer = window.setInterval(tickElapsed, 1000);
   try {
     const response = await fetch('/api/cycles/review', {
       method: 'POST',
@@ -1655,6 +1666,7 @@ async function runCycleReviewGeneration() {
       body: JSON.stringify({ id: selectedCycleId }),
     });
     const data = await response.json();
+    window.clearInterval(elapsedTimer);
     if (!data.ok) throw new Error(data.error || '生成失败');
     cycleModes.set('review', 'edit');
     cycleSetValue('cycle-md-review', data.review || '');
@@ -1663,10 +1675,12 @@ async function runCycleReviewGeneration() {
     cycleSetText('cycle-status-review', '已生成 ' + String(data.review || '').length + ' 字，还没保存——看过之后点「保存 review」。');
     cycleToast('review 草稿已生成');
   } catch (error) {
+    window.clearInterval(elapsedTimer);
     var message = error && error.message ? error.message : String(error);
     cycleSetText('cycle-status-review', '生成失败：' + message);
     cycleToast('生成失败：' + message);
   } finally {
+    window.clearInterval(elapsedTimer);
     if (button) { button.disabled = false; button.textContent = previous || '用 AI 生成 review'; }
   }
 }

@@ -199,6 +199,10 @@ try {
     // daily-os-macos #3: doctor warns when the vault path exists but is the
     // empty template (no 10_OKR/), instead of silently reporting ok.
     'scripts/tests/doctor-vault.test.ts',
+    // daily-os #199: a subscription CLI under launchd is refused up front with a
+    // clear reminder (no doomed hang); the timeout message names provider/model/
+    // prompt; doctor warns on the combo instead of reporting "not logged in".
+    'scripts/tests/cli-launchd-guard.test.ts',
     // The prompt has a size budget now: the GitHub projection, the per-workflow
     // drops, and the degradation order that replaced a hard 180s timeout.
     'scripts/tests/evidence-budget.test.ts',
