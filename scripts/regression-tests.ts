@@ -193,6 +193,9 @@ try {
     // remote is unreachable, the cheap poll, cache layout, and the two layers
     // that keep a teammate's cycle out of the local vault.
     'scripts/tests/team-sync.test.ts',
+    // The prompt has a size budget now: the GitHub projection, the per-workflow
+    // drops, and the degradation order that replaced a hard 180s timeout.
+    'scripts/tests/evidence-budget.test.ts',
   ]);
   console.log('Regression tests passed.');
 } finally {
