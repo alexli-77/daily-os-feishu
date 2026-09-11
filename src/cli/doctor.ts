@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import type { AppConfig } from '../config/schema.js';
 import { commandExists, runCommand } from '../utils/command.js';
 import { checkLarkCli } from '../connectors/lark-cli.js';
@@ -116,12 +117,21 @@ export async function runDoctor(config: AppConfig, configPath = 'config/config.y
   }
 
   const memoryRepositoryPath = resolveMemoryRepositoryPath(config);
+  const usingDefault = !config.memory.repository_path.trim();
+  const vaultExists = fs.existsSync(memoryRepositoryPath);
+  // daily-os-macos #3: a path that exists but has no 10_OKR/ is the empty
+  // template, not your data — the exact silent-loss case. Say so instead of
+  // reporting ok. A real vault has 10_OKR/ (and usually 20_CYCLES/).
+  const looksSeeded = vaultExists && fs.existsSync(path.join(memoryRepositoryPath, '10_OKR'));
   checks.push({
-    name: config.memory.repository_path.trim() ? 'memory.repository_path' : 'memory.repository_path (default)',
-    ok: fs.existsSync(memoryRepositoryPath),
-    detail: config.memory.repository_path.trim()
-      ? memoryRepositoryPath
-      : `使用内置模板：${defaultMemoryRepositoryPath()}`,
+    name: usingDefault ? 'memory.repository_path (default)' : 'memory.repository_path',
+    ok: vaultExists && looksSeeded,
+    level: !vaultExists ? 'missing' : looksSeeded ? 'ok' : 'warning',
+    detail: !vaultExists
+      ? `找不到 vault：${memoryRepositoryPath}${usingDefault ? '（用的是内置模板路径）' : ''}`
+      : looksSeeded
+        ? memoryRepositoryPath
+        : `vault 存在但缺 10_OKR/，看起来是空模板而非你的数据：${memoryRepositoryPath}。若刚从 checkout 迁移，检查 memory-vault 是否搬到了托管目录。`,
   });
 
   if (config.decision.enabled) {
