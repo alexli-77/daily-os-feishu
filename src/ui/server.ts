@@ -93,7 +93,22 @@ import { listRecentWorkflowRuns, markWorkflowRunFailed } from '../workflows/run-
 import { writeFileAtomic } from '../utils/atomic-write.js';
 
 const SECRET_ENV_KEYS = new Set(['OPENAI_API_KEY', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'VAULT_GATE_TOKEN', 'LARK_APP_SECRET']);
-const UI_RUNTIME_PATH = './data/runtime/ui.json';
+const DEFAULT_UI_RUNTIME_PATH = './data/runtime/ui.json';
+
+/**
+ * Where this server advertises its address and token.
+ *
+ * `DAILY_OS_UI_RUNTIME_PATH` overrides it, for the same reason
+ * `DAILY_OS_DB_PATH` exists: a test that boots a real server resolves this
+ * against its own cwd, which is the repo root — so it overwrote the *live*
+ * runtime file with a throwaway server's ephemeral port and token. The running
+ * Mac app then read that file, dialled a port nothing was listening on, and
+ * reported the service as down. Running the test suite should not be able to
+ * disconnect the app.
+ */
+function uiRuntimePath(): string {
+  return path.resolve(process.env.DAILY_OS_UI_RUNTIME_PATH || DEFAULT_UI_RUNTIME_PATH);
+}
 const PLAIN_ENV_KEYS = [
   'FEISHU_CHAT_ID',
   'DAILY_OS_DECISION_CHAT_ID',
@@ -256,7 +271,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerC
 }
 
 export function readUiRuntimeUrl(): string | null {
-  const filePath = path.resolve(UI_RUNTIME_PATH);
+  const filePath = uiRuntimePath();
   if (!fs.existsSync(filePath)) return null;
   try {
     const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as { url?: unknown };
@@ -297,7 +312,7 @@ function isAddressInUse(error: unknown): boolean {
 }
 
 function writeUiRuntime(url: string, token: string, adminInitialPassword?: string): void {
-  const filePath = path.resolve(UI_RUNTIME_PATH);
+  const filePath = uiRuntimePath();
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const payload = JSON.stringify(
     {

@@ -201,6 +201,15 @@ async function testCreateEndpoint(): Promise<void> {
 
   const originalCwd = process.cwd();
   process.chdir(tmp);
+  // Pin the runtime file explicitly. `chdir` alone is not enough: the server
+  // resolves that path against the cwd *at write time*, and any write that
+  // lands after the `finally` restores the cwd goes to the real
+  // data/runtime/ui.json — overwriting the running service's address and token
+  // with this throwaway server's ephemeral port. The Mac app then dials a dead
+  // port and reports the service down. Running tests must not be able to do
+  // that.
+  const originalRuntimePath = process.env.DAILY_OS_UI_RUNTIME_PATH;
+  process.env.DAILY_OS_UI_RUNTIME_PATH = path.join(tmp, 'data', 'runtime', 'ui.json');
   const auth = await import('../../src/ui/auth.js');
   const { startUiServer } = await import('../../src/ui/server.js');
   auth.resetSessionCacheForTests();
@@ -285,6 +294,8 @@ async function testCreateEndpoint(): Promise<void> {
   } finally {
     await controls.stop();
     process.chdir(originalCwd);
+    if (originalRuntimePath === undefined) delete process.env.DAILY_OS_UI_RUNTIME_PATH;
+    else process.env.DAILY_OS_UI_RUNTIME_PATH = originalRuntimePath;
   }
 }
 
