@@ -355,13 +355,23 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
     const auth = resolveAuthContext(request, url);
 
     // Public console auth endpoints. Still Origin-checked, but no token/session required.
-    if (url.pathname === '/api/login' || url.pathname === '/api/logout' || url.pathname === '/api/register') {
+    if (
+      url.pathname === '/api/login' ||
+      url.pathname === '/api/logout' ||
+      url.pathname === '/api/register' ||
+      url.pathname === '/api/reset-password'
+    ) {
       if (!isAllowedApiOrigin(request.headers.origin, options)) {
         return sendJson(response, { ok: false, error: 'Forbidden origin' }, 403);
       }
       if (request.method === 'POST' && url.pathname === '/api/login') return handleLogin(request, response);
       if (request.method === 'POST' && url.pathname === '/api/register') return handleRegister(request, response);
       if (request.method === 'POST' && url.pathname === '/api/logout') return handleLogout(request, response, auth);
+      // GH #192: a packaged install has no checkout to run admin:reset-password.
+      // A reset is allowed only from loopback — the same trust as running the CLI.
+      if (request.method === 'POST' && url.pathname === '/api/reset-password') {
+        return handleResetPassword(request, response, isLoopbackRequest);
+      }
       return sendJson(response, { ok: false, error: 'Not found' }, 404);
     }
 
@@ -481,7 +491,7 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
     // swallow it and dispatch 'sync' as an unknown team action.
     if (request.method === 'POST' && url.pathname === '/api/team/sync') return sendJson(response, await runTeamSync(options));
     if (request.method === 'POST' && url.pathname.startsWith('/api/team/')) {
-      return sendJson(response, await teamAction(options, url.pathname.slice('/api/team/'.length), await readJson(request)));
+      return sendJson(response, await teamAction(options, url.pathname.slice('/api/team/'.length), await readJson(request), auth));
     }
     if (request.method === 'POST' && url.pathname === '/api/config') return sendJson(response, await saveConfig(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/env') return sendJson(response, await saveEnv(options, await readJson(request)));
@@ -662,7 +672,17 @@ async function handleRegister(request: http.IncomingMessage, response: http.Serv
     email: String(body.email || ''),
     password: String(body.password || ''),
   });
-  if ('errors' in result) return sendJson(response, { ok: false, errors: result.errors }, 400);
+  if ('errors' in result) {
+    // GH #192: "用户名已被用" is a dead end unless we say which names exist. The
+    // server is loopback-only and this lists usernames only (never emails), so a
+    // stuck operator can see which local account to sign into.
+    const taken = result.errors.username === '这个用户名已经被用了';
+    return sendJson(
+      response,
+      { ok: false, errors: result.errors, ...(taken ? { existingUsers: listUsers().map((entry) => entry.username) } : {}) },
+      400,
+    );
+  }
 
   const session = createSession(result.user.username, result.user.role);
   response.writeHead(200, {
@@ -671,6 +691,34 @@ async function handleRegister(request: http.IncomingMessage, response: http.Serv
     'set-cookie': sessionCookieHeader(session.token),
   });
   response.end(JSON.stringify({ ok: true, username: result.user.username, role: result.user.role }));
+}
+
+/**
+ * GH #192: reset a local account's password without a checkout. Allowed only
+ * from loopback — being able to reach 127.0.0.1 is the same trust level as being
+ * able to run `npm run admin:reset-password` or read the DB, so this adds no new
+ * attack surface. Errors stay generic so it never becomes a username oracle
+ * beyond what the sign-up form already reveals.
+ */
+async function handleResetPassword(
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+  isLoopback: boolean,
+): Promise<void> {
+  if (!isLoopback) return sendJson(response, { ok: false, error: '密码重置只能在本机（127.0.0.1）上操作。' }, 403);
+  const body = readRecord(await readJson(request));
+  const username = String(body.username || '').trim();
+  const password = String(body.password || '');
+  if (!username) return sendJson(response, { ok: false, errors: { username: '请选择要重置的账号' } }, 400);
+  if (password.length < 8 || password.length > 20) {
+    return sendJson(response, { ok: false, errors: { password: '密码需要 8-20 个字符' } }, 400);
+  }
+  try {
+    setPassword(username, password);
+  } catch {
+    return sendJson(response, { ok: false, errors: { username: '重置失败：找不到这个账号' } }, 400);
+  }
+  return sendJson(response, { ok: true, username });
 }
 
 function handleLogout(_request: http.IncomingMessage, response: http.ServerResponse, auth: AuthContext): void {
@@ -1730,11 +1778,15 @@ function readOptionalCount(value: unknown, label: string, min: number, max: numb
  * Every branch returns a plain { ok, text|error } result and the rebuilt state.
  * A remote failure is data, not an exception: the console keeps working.
  */
-async function teamAction(options: UiServerOptions, action: string, body: unknown): Promise<Record<string, unknown>> {
+async function teamAction(options: UiServerOptions, action: string, body: unknown, auth: AuthContext): Promise<Record<string, unknown>> {
   const request = readRecord(body);
   const env = readEnvFile(options.envPath);
   applyEnv(env);
   const config = loadConfig(options.configPath);
+  // LEO-302 (GH #193): map the local console account to the Supabase member by
+  // defaulting the display_name to the local username, so「我是谁」lines up across
+  // the two identities. An explicit display name from the form still wins.
+  const localUsername = findUser(auth.username)?.username || '';
 
   const run = async (): Promise<TeamActionResult> => {
     switch (action) {
@@ -1742,7 +1794,7 @@ async function teamAction(options: UiServerOptions, action: string, body: unknow
         return signUp(config, {
           email: String(request.email || ''),
           password: String(request.password || ''),
-          displayName: String(request.displayName || ''),
+          displayName: String(request.displayName || '') || localUsername,
           memberId: String(request.memberId || ''),
         });
       case 'signin':
