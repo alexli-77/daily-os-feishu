@@ -23,14 +23,16 @@ import { appendUiLog, clearUiLogs, readUiLogs } from '../storage/ui-log.js';
 import { appVersion } from '../utils/version.js';
 import { startDecisionOnboarding } from '../decision/onboarding.js';
 import { ensureDecisionPolicyFiles } from '../decision/policy.js';
-import { BIWEEKLY_STRATEGY_FILE, defaultBiweeklyStrategy, expandPath } from '../skills/runner.js';
+import { BIWEEKLY_STRATEGY_FILE, defaultBiweeklyStrategy, expandPath, runConfiguredSkill } from '../skills/runner.js';
 import { defaultSkillInstallDir, installSkillRepo, readSkillRepoState, updateSkillRepo } from '../skills/update.js';
-import { generateCycleReview } from '../skills/life-review-os.js';
+import { generateCycleReview, isLifeReviewOsEntry } from '../skills/life-review-os.js';
 import { readOkrEditorState, writeOkrFile } from '../okr/editor.js';
 import { normalizeOkrMarkdown } from '../okr/normalize.js';
 import type { OkrLevel } from '../okr/editor.js';
-import { CYCLE_SECTIONS, cycleFilePath, cyclesDir, listCycles, parseCycleId, readCycle, writeSection } from '../cycles/file.js';
+import { CYCLE_SECTIONS, cycleFilePath, cyclesDir, listCycles, parseCycleId, readCycle, writeCycle, writeSection } from '../cycles/file.js';
 import type { CycleSection } from '../cycles/file.js';
+import { MAX_CYCLE_DAYS, MIN_CYCLE_DAYS, planNextCycle, type NextCyclePlan } from '../cycles/next.js';
+import { formatLocalCycleWriteback } from '../cycles/writeback.js';
 import { assertLocalCycleWriteTarget, pushLocalCycle, readTeamViewState, startTeamSync, syncTeamOnce } from '../team/sync.js';
 import type { TeamSyncLoop } from '../team/sync.js';
 import { collectProgressCandidates, formatProgressCandidates } from '../progress/capture.js';
@@ -91,7 +93,22 @@ import { listRecentWorkflowRuns, markWorkflowRunFailed } from '../workflows/run-
 import { writeFileAtomic } from '../utils/atomic-write.js';
 
 const SECRET_ENV_KEYS = new Set(['OPENAI_API_KEY', 'GITHUB_TOKEN', 'LINEAR_API_KEY', 'VAULT_GATE_TOKEN', 'LARK_APP_SECRET']);
-const UI_RUNTIME_PATH = './data/runtime/ui.json';
+const DEFAULT_UI_RUNTIME_PATH = './data/runtime/ui.json';
+
+/**
+ * Where this server advertises its address and token.
+ *
+ * `DAILY_OS_UI_RUNTIME_PATH` overrides it, for the same reason
+ * `DAILY_OS_DB_PATH` exists: a test that boots a real server resolves this
+ * against its own cwd, which is the repo root — so it overwrote the *live*
+ * runtime file with a throwaway server's ephemeral port and token. The running
+ * Mac app then read that file, dialled a port nothing was listening on, and
+ * reported the service as down. Running the test suite should not be able to
+ * disconnect the app.
+ */
+function uiRuntimePath(): string {
+  return path.resolve(process.env.DAILY_OS_UI_RUNTIME_PATH || DEFAULT_UI_RUNTIME_PATH);
+}
 const PLAIN_ENV_KEYS = [
   'FEISHU_CHAT_ID',
   'DAILY_OS_DECISION_CHAT_ID',
@@ -254,7 +271,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerC
 }
 
 export function readUiRuntimeUrl(): string | null {
-  const filePath = path.resolve(UI_RUNTIME_PATH);
+  const filePath = uiRuntimePath();
   if (!fs.existsSync(filePath)) return null;
   try {
     const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as { url?: unknown };
@@ -295,7 +312,7 @@ function isAddressInUse(error: unknown): boolean {
 }
 
 function writeUiRuntime(url: string, token: string, adminInitialPassword?: string): void {
-  const filePath = path.resolve(UI_RUNTIME_PATH);
+  const filePath = uiRuntimePath();
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const payload = JSON.stringify(
     {
@@ -456,6 +473,7 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
     if (request.method === 'GET' && url.pathname === '/api/cycles/state') return sendJson(response, await readCyclesPageState(options));
     if (request.method === 'POST' && url.pathname === '/api/cycles/section') return sendJson(response, await saveCycleSection(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/cycles/review') return sendJson(response, await generateCycleReviewSection(options, await readJson(request)));
+    if (request.method === 'POST' && url.pathname === '/api/cycles/create') return sendJson(response, await createCycle(options, await readJson(request)));
     // Team / Supabase (LEO-282/283/284/285). Writes, so the member gate above
     // already rejects the member role; nothing here is on the member whitelist.
     // /api/team/sync is matched first: the prefix handler below would otherwise
@@ -1354,6 +1372,14 @@ async function readCyclesPageState(options: UiServerOptions): Promise<Record<str
  * generated opinion about a cycle the user lived through is theirs to read and
  * edit before it becomes part of their record, so it goes through the same save
  * button as anything they typed.
+ *
+ * `save: true` is the one exception, and it exists for clients that cannot hold
+ * a draft across the call: the Mac app gives up on the socket after 30 seconds
+ * while the drafting model runs for one to two minutes, so a returned draft is
+ * one nobody receives. Writing it here means the prose survives the disconnect
+ * — as `source: 'ai'`, never as the user's own words. It only ever fills a gap:
+ * a cycle that already has a review is refused below, before the minutes are
+ * spent, so this can neither clobber a draft nor quietly bill for one.
  */
 async function generateCycleReviewSection(options: UiServerOptions, body: unknown): Promise<Record<string, unknown>> {
   const request = readRecord(body);
@@ -1377,13 +1403,29 @@ async function generateCycleReviewSection(options: UiServerOptions, body: unknow
     throw new Error(`周期 ${cycle.cycle || id} 既没有要务也没有 retro，没有可以复盘的内容。先写 retro 再生成。`);
   }
 
+  const save = request.save === true;
+  if (save && (cycle.sections.review?.content || '').trim()) {
+    throw new Error(`周期 ${cycle.cycle || id} 已经有 review 了，不会覆盖。要重写就先把这一段清空再生成。`);
+  }
+  if (save && cycle.frontmatterError) {
+    throw new Error(`周期 ${id} 的 frontmatter 无法解析（${cycle.frontmatterError}），写不进去。请先在文件里修好 YAML。`);
+  }
+
   const review = await generateCycleReview(config, 'weekly-review', {
     cycle: cycle.cycle || id,
     mode: cycle.mode || 'biweekly',
     priorities,
     retro,
   });
-  return { ok: true, id, review: review.text, chars: review.chars, hadRetro: Boolean(retro.trim()) };
+  const saved = save ? writeSection(config, id, 'review', review.text, 'ai') : null;
+  return {
+    ok: true,
+    id,
+    review: review.text,
+    chars: review.chars,
+    hadRetro: Boolean(retro.trim()),
+    savedAt: saved?.sections.review?.updatedAt || '',
+  };
 }
 
 async function saveCycleSection(options: UiServerOptions, body: unknown): Promise<Record<string, unknown>> {
@@ -1434,6 +1476,167 @@ async function saveCycleSection(options: UiServerOptions, body: unknown): Promis
     sync: { status: sync.status, reason: sync.reason },
     state: await buildState(options),
   };
+}
+
+/**
+ * Create the next cycle file, and set the planner going on its 要务.
+ *
+ * Until now a cycle file only ever came into being as a side effect of a
+ * finished life-review-os run (`cycles/writeback.ts`), which meant there was no
+ * way to say "start the next one" — you waited for a run, or you made the file
+ * by hand in the vault. This is that missing verb.
+ *
+ * Every field is optional and a blank one is answered from the previous cycle
+ * rather than from a constant; `planNextCycle` explains why. The file is created
+ * with frontmatter only: 要务 belongs to the planner, and seeding it with
+ * anything would leave a fabricated priority list sitting in a real cycle if the
+ * run never finishes.
+ *
+ * The planning run is *not* awaited — see `startCyclePlanning`.
+ */
+async function createCycle(options: UiServerOptions, body: unknown): Promise<Record<string, unknown>> {
+  const request = readRecord(body);
+  const env = readEnvFile(options.envPath);
+  applyEnv(env);
+  const config = loadConfig(options.configPath);
+
+  // Same guard as the save path: creating a cycle is a write into 20_CYCLES,
+  // which belongs to whoever is at this machine, and a request that names an
+  // owner must name the signed-in account.
+  await assertLocalCycleWriteTarget(config, request.owner ?? request.ownerId);
+
+  const days = readOptionalCount(request.days, '周期长度', MIN_CYCLE_DAYS, MAX_CYCLE_DAYS);
+  const taskCount = readOptionalCount(request.taskCount, '要务数量', 1, 50);
+  const note = String(request.note ?? '').trim();
+
+  // Newest first, so `[0]` is the cycle this one follows.
+  const plan = planNextCycle(listCycles(config)[0] || null, {
+    ...(days === undefined ? {} : { days }),
+    today: todayInTimezone(config),
+  });
+
+  // Refuse rather than merge. `writeCycle` would happily fold new frontmatter
+  // into an existing file, and the cycle most likely to collide here is the one
+  // a planning run already wrote 要务 into — the exact file whose contents
+  // nobody can reconstruct, since 20_CYCLES is untracked in git.
+  const filePath = cycleFilePath(config, plan.id);
+  if (fs.existsSync(filePath)) {
+    throw new Error(`周期 ${plan.label} 已经存在了（${filePath}），没有创建也没有覆盖。要重开这一期，先把文件挪走。`);
+  }
+
+  writeCycle(config, plan.id, { cycle: plan.label, mode: plan.mode });
+  const planning = startCyclePlanning(config, plan, { ...(taskCount === undefined ? {} : { taskCount }), note });
+
+  return {
+    ok: true,
+    id: plan.id,
+    cycle: plan.label,
+    mode: plan.mode,
+    startDate: plan.startDate,
+    endDate: plan.endDate,
+    days: plan.days,
+    lengthFrom: plan.lengthFrom,
+    path: filePath,
+    text: `已创建周期 ${plan.label}（${plan.startDate} 起 ${plan.days} 天，${describeCycleLength(plan)}）。`,
+    planning,
+  };
+}
+
+/** How the length was decided, in the words the user would use to check it. */
+function describeCycleLength(plan: NextCyclePlan): string {
+  if (plan.lengthFrom === 'request') return '按你填的长度';
+  if (plan.lengthFrom === 'previous-label') return `沿用上一期 ${plan.previousId.split('_')[1] || ''}`.trim();
+  if (plan.lengthFrom === 'previous-mode') return '沿用上一期的 mode';
+  return '没有上一期可以参考，用的默认双周';
+}
+
+/**
+ * Start the planning run that fills in 要务, and report only whether it started.
+ *
+ * Not awaited on purpose: a biweekly run takes roughly ten minutes, and the
+ * caller is an HTTP request whose client gives up after thirty seconds. Awaiting
+ * it would turn every successful creation into a timeout.
+ *
+ * That makes the run's outcome invisible to this response, and there is a second
+ * reason it has to be reported elsewhere: life-review-os resolves its own target
+ * week from today's date, so the cycle it writes 要务 into is its decision, not
+ * ours. Creating the next cycle on the day the current one ends puts the two in
+ * agreement; creating one a week early does not. The UI log records which cycle
+ * actually received the priorities, rather than this endpoint promising one.
+ */
+function startCyclePlanning(
+  config: AppConfig,
+  plan: NextCyclePlan,
+  hints: { taskCount?: number; note: string },
+): { status: 'started' | 'unavailable'; reason: string } {
+  if (!config.skills.enabled) {
+    return { status: 'unavailable', reason: 'skills.enabled=false，没有跑规划。要务需要你自己写，或者启用技能后再跑一次。' };
+  }
+  const entry = config.skills.registry.find((candidate) => candidate.id === 'weekly-review');
+  if (!entry || !isLifeReviewOsEntry(entry)) {
+    return { status: 'unavailable', reason: '没有可用的 weekly-review skill（life-review-os CLI 找不到），没有跑规划。要务需要你自己写。' };
+  }
+
+  const mode = plan.mode === 'weekly' ? 'weekly' : 'biweekly';
+  void runConfiguredSkill({
+    config,
+    skillId: entry.id,
+    mode,
+    userText: planningRequestText(plan, hints),
+    source: 'local-ui-cycle-create',
+    messageId: `cycle-create-${plan.id}`,
+  })
+    .then((result) => {
+      appendUiLog({
+        event: 'action',
+        level: 'info',
+        status: 'success',
+        action: 'cycle_create_plan',
+        detail: result.localCycles ? formatLocalCycleWriteback(result.localCycles) : `规划跑完了，但没有写入任何周期文件（${plan.label}）。`,
+      });
+    })
+    .catch((error: unknown) => {
+      appendUiLog({
+        event: 'action',
+        level: 'error',
+        status: 'error',
+        action: 'cycle_create_plan',
+        detail: `${plan.label} 规划失败：${error instanceof Error ? error.message : String(error)}`,
+      });
+    });
+
+  return {
+    status: 'started',
+    reason: `规划已经在后台跑了（${mode === 'biweekly' ? '双周' : '单周'}，大约十分钟）。跑完要务会自己写进周期文件，中途可以在 Runs 里看进度。`,
+  };
+}
+
+/** The planning run reads free text, so the optional fields travel as a sentence. */
+function planningRequestText(plan: NextCyclePlan, hints: { taskCount?: number; note: string }): string {
+  return [
+    `为周期 ${plan.label}（${plan.startDate} 到 ${plan.endDate}，共 ${plan.days} 天）规划要务。`,
+    hints.taskCount === undefined ? '' : `这一期计划 ${hints.taskCount} 条要务。`,
+    hints.note ? `这一期要考虑的重要事件：${hints.note}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+/**
+ * An optional whole number from the request body.
+ *
+ * Empty, missing and null all mean "decide for me" — that is the whole contract
+ * of the dialog these come from. Anything else has to be a number in range:
+ * silently flooring a `"七天"` or a `0` to a default would look like the app
+ * ignored what was typed, which is worse than refusing it.
+ */
+function readOptionalCount(value: unknown, label: string, min: number, max: number): number | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const parsed = typeof value === 'number' ? value : Number(String(value).trim());
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+    throw new Error(`${label}要填 ${min}-${max} 之间的整数，收到的是「${String(value)}」。留空就按默认策略。`);
+  }
+  return parsed;
 }
 
 /**

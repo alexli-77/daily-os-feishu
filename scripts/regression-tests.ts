@@ -2,6 +2,23 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+
+// Point every test server's runtime file somewhere disposable, before anything
+// that could start one is imported.
+//
+// Nine suites in here boot a real HTTP server. Each wrote its address and token
+// to `./data/runtime/ui.json` resolved against the cwd at write time — which,
+// for any write landing after a suite restores the cwd, is this repo. That
+// overwrote the *live* service's runtime file with a throwaway server's
+// ephemeral port, and the Mac app, which reads exactly that file to find the
+// service, then dialled a dead port and reported the service down.
+//
+// Running the test suite must not be able to disconnect the app. Set here
+// rather than in each suite so a tenth one cannot forget.
+process.env.DAILY_OS_UI_RUNTIME_PATH ||= path.join(
+  fs.mkdtempSync(path.join(os.tmpdir(), 'daily-os-test-runtime-')),
+  'ui.json',
+);
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../src/config/load-config.js';
@@ -140,6 +157,9 @@ try {
     // longer carrying it, and the shipped script's cards, ordering, drafts and
     // zoom dialog driven against a DOM stub.
     'scripts/tests/cycles-standalone-page.test.ts',
+    // Creating the next cycle from a client: the 沿用上一期 dates, and a created
+    // file the planner can still write into.
+    'scripts/tests/cycle-create.test.ts',
     // LEO-280 history migration: run selection, both table layouts, idempotency.
     'scripts/tests/cycle-migration.test.ts',
     // LEO-278 run -> cycle files: 要务 to the planned cycle, review to the
