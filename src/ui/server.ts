@@ -16,7 +16,7 @@ import { sendFeishuMessage } from '../connectors/lark-cli.js';
 import { readLatestWorkflowOutput } from '../storage/memory.js';
 import { listTodoFeedback } from '../todo/feedback.js';
 import { readArtifactsIndex } from '../storage/artifacts.js';
-import { buildDailyPlanTable, extractDailyPlanTodos, formatWorkflowSummaryForFeishu, normalizePlanMinutes } from '../workflows/summary.js';
+import { buildDailyPlanTable, extractDailyPlanTodos, formatWorkflowSummaryForFeishu, normalizePlanMinutes, type DailyPlanTodo } from '../workflows/summary.js';
 import { getLaunchAgentStatus, installLaunchAgent, uninstallLaunchAgent } from '../service/launchd.js';
 import { runCommand } from '../utils/command.js';
 import { appendUiLog, clearUiLogs, readUiLogs } from '../storage/ui-log.js';
@@ -407,6 +407,7 @@ async function handleRequest(request: http.IncomingMessage, response: http.Serve
 
     // Console API routes (auth + member gate already enforced above).
     if (request.method === 'POST' && url.pathname === '/api/today/todo-feedback') return sendJson(response, await todoFeedback(options, await readJson(request)));
+    if (request.method === 'POST' && url.pathname === '/api/today/plan-order') return sendJson(response, await reorderTodayPlan(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/today/resend') return sendJson(response, await resendLatestWorkflow(options));
     if (request.method === 'POST' && url.pathname === '/api/runs/cancel') return sendJson(response, await cancelRun(options, await readJson(request)));
     if (request.method === 'POST' && url.pathname === '/api/runs/rerun') return sendJson(response, await rerunWorkflow(options, await readJson(request)));
@@ -532,6 +533,8 @@ function isWriteRequest(method: string | undefined): boolean {
 // (durable-write / free-form agent) turns for the member role.
 const MEMBER_WRITE_WHITELIST = new Set([
   '/api/today/todo-feedback',
+  // Reordering your own day is the same class of act as ticking a row on it.
+  '/api/today/plan-order',
   '/api/capture',
   '/api/todo-inbox',
   '/api/chat/session',
@@ -709,6 +712,76 @@ async function resendLatestWorkflow(options: UiServerOptions): Promise<Record<st
     return { ok: false, error: `发送失败：${error instanceof Error ? error.message : String(error)}` };
   }
   return { ok: true, text: `已发送 ${latest.workflow}（${latest.date}）到飞书。` };
+}
+
+/**
+ * Reorder today's plan.
+ *
+ * The plan's order is the model's ranking, and the person doing the work is
+ * allowed to disagree with it. That disagreement is recorded rather than
+ * applied: the workflow output on disk is what `daily_plan` said, and rewriting
+ * it would destroy the record the evening review reconciles against — and the
+ * signal the scorer eventually wants, which is precisely "the model put this
+ * fourth and the user moved it first".
+ *
+ * So it writes one `reorder` entry per row into the same append-only ledger
+ * that already holds complete / defer / estimate edits. `reorder` has been in
+ * `TodoFeedbackEvent` since the ledger was written; this is the first thing to
+ * produce one.
+ *
+ * Takes the whole order, not a moved id and a destination. A single moved row
+ * leaves every other row's rank implicit, and "implicit" has to be recomputed
+ * identically on both sides forever; sending the full list means the ledger
+ * says what the day looks like rather than how it got there.
+ */
+/**
+ * Put the user's ordering back over the model's, and renumber.
+ *
+ * A row with no recorded rank keeps the model's position rather than being
+ * swept to one end: the plan can grow between a reorder and a read — a rerun
+ * adds rows, and the ledger says nothing about them — and a new row silently
+ * appearing at the top of someone's day is worse than it appearing where the
+ * model put it.
+ *
+ * `rank` is rewritten to the final 1..n, because it is not decoration: it is
+ * half the ledger key every client sends back with complete / defer / update.
+ * Leaving the model's original numbers on a reordered list would make two rows
+ * claim the same position.
+ */
+export function applyUserOrder(todos: DailyPlanTodo[], userRank: Map<string, number>): DailyPlanTodo[] {
+  if (userRank.size === 0) return todos;
+  return todos
+    .map((todo, index) => ({ todo, key: userRank.get(todo.candidateId) ?? todo.rank, index }))
+    // `index` breaks ties, so two rows that end up with the same key keep the
+    // order they arrived in instead of swapping on every read.
+    .sort((left, right) => left.key - right.key || left.index - right.index)
+    .map(({ todo }, index) => ({ ...todo, rank: index + 1 }));
+}
+
+async function reorderTodayPlan(options: UiServerOptions, body: unknown): Promise<Record<string, unknown>> {
+  const request = readRecord(body);
+  const order = Array.isArray(request.order)
+    ? request.order.map((id) => String(id || '').trim()).filter(Boolean)
+    : [];
+  if (order.length === 0) return { ok: false, error: 'order must be a non-empty array of candidate ids.' };
+  if (new Set(order).size !== order.length) return { ok: false, error: 'order contains duplicate candidate ids.' };
+
+  const env = readEnvFile(options.envPath);
+  applyEnv(env);
+  const config = loadConfig(options.configPath);
+  const date = todayInTimezone(config);
+  const ts = new Date().toISOString();
+  for (const [index, candidateId] of order.entries()) {
+    recordTodoFeedback(config, {
+      ts,
+      date,
+      event: 'reorder',
+      candidateId,
+      rank: index + 1,
+      source: 'console-today',
+    });
+  }
+  return { ok: true, order, text: '已调整顺序' };
 }
 
 async function todoFeedback(options: UiServerOptions, body: unknown): Promise<Record<string, unknown>> {
@@ -1216,11 +1289,15 @@ function readTodayPlan(options: UiServerOptions): Record<string, unknown> {
   // does not come back looking untouched.
   const feedback: Record<string, string> = {};
   const editedMinutes = new Map<string, number>();
+  // The user's own ordering, latest write wins. Kept separate from `feedback`
+  // because it is not a state a row can be *in* — it is where the row sits.
+  const userRank = new Map<string, number>();
   for (const entry of listTodoFeedback(config)) {
     if (entry.date !== today) continue;
     if (entry.event === 'complete' || entry.event === 'defer' || entry.event === 'update') {
       feedback[entry.candidateId] = entry.event;
     }
+    if (entry.event === 'reorder') userRank.set(entry.candidateId, entry.rank);
     // Ledger order is append order, so a `reopen` after a tick wins and the row
     // comes back untouched. Deleting rather than recording `reopen` as a state:
     // "was completed and then wasn't" is history, and this map is the present.
@@ -1236,13 +1313,16 @@ function readTodayPlan(options: UiServerOptions): Record<string, unknown> {
     // The user's edit wins over the model's guess, and is merged in here rather
     // than shipped as a second map: a client that renders `minutes` should not
     // have to know an override mechanism exists to render the right number.
-    todos: todos.map((todo) => {
-      const edited = editedMinutes.get(todo.candidateId);
-      if (edited === undefined) return todo;
-      if (edited > 0) return { ...todo, minutes: edited };
-      const { minutes: _dropped, ...withoutEstimate } = todo;
-      return withoutEstimate;
-    }),
+    todos: applyUserOrder(
+      todos.map((todo) => {
+        const edited = editedMinutes.get(todo.candidateId);
+        if (edited === undefined) return todo;
+        if (edited > 0) return { ...todo, minutes: edited };
+        const { minutes: _dropped, ...withoutEstimate } = todo;
+        return withoutEstimate;
+      }),
+      userRank,
+    ),
     feedback,
     today,
   };
