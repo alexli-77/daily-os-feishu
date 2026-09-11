@@ -17,6 +17,7 @@ import { readLatestWorkflowOutput } from '../storage/memory.js';
 import { listTodoFeedback } from '../todo/feedback.js';
 import { readArtifactsIndex } from '../storage/artifacts.js';
 import { buildDailyPlanTable, extractDailyPlanTodos, formatWorkflowSummaryForFeishu, normalizePlanMinutes, type DailyPlanTodo } from '../workflows/summary.js';
+import { bundledAsset } from '../utils/install-root.js';
 import { getLaunchAgentStatus, installLaunchAgent, uninstallLaunchAgent } from '../service/launchd.js';
 import { runCommand } from '../utils/command.js';
 import { appendUiLog, clearUiLogs, readUiLogs } from '../storage/ui-log.js';
@@ -2483,8 +2484,16 @@ function findTokenInObject(value: unknown): string {
 }
 
 function ensureLocalFiles(configPath: string, envPath: string): void {
-  copyIfMissing('.env.example', envPath);
-  copyIfMissing('config/config.example.yaml', configPath);
+  // Templates come from where the code is; the copies land where the data is.
+  // The same pair of lines in `ensureLocalSetup` was fixed when the service
+  // started shipping inside the Mac app, and this one was missed — it survived
+  // because `daily-os start` runs that function first, so by the time this ran
+  // the files already existed and `copyIfMissing` returned early. `daily-os ui`
+  // does not, and crashed outright on a working directory it had never seen:
+  // ENOENT on `.env.example`, in the cwd, where no template has lived since the
+  // code and the data stopped being the same directory.
+  copyIfMissing(bundledAsset('.env.example'), envPath);
+  copyIfMissing(bundledAsset('config', 'config.example.yaml'), configPath);
   fs.mkdirSync(path.resolve('data/memory/daily'), { recursive: true });
   fs.mkdirSync(path.resolve('data/logs'), { recursive: true });
   fs.mkdirSync(path.resolve('data/snapshots/chrome'), { recursive: true });
