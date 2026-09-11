@@ -163,6 +163,9 @@ try {
     // Dragging today's plan into your own order: the ledger overlay, and what
     // happens when the plan changes underneath a recorded order.
     'scripts/tests/plan-order.test.ts',
+    // Shipped templates and prompts found from a working directory that is not
+    // the checkout — the split the bundled Mac app introduced.
+    'scripts/tests/install-root.test.ts',
     // LEO-280 history migration: run selection, both table layouts, idempotency.
     'scripts/tests/cycle-migration.test.ts',
     // LEO-278 run -> cycle files: 要务 to the planned cycle, review to the
