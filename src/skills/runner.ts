@@ -22,6 +22,7 @@ import { resolveOkrDir } from '../okr/biweekly-progress.js';
 import { isLifeReviewOsEntry, runLifeReviewOsSkill } from './life-review-os.js';
 import { formatLocalCycleWriteback, writeLocalCyclesFromRun, type LocalCycleWritebackResult } from '../cycles/writeback.js';
 import { recentLocalRetros, renderLocalRetroBlock } from '../cycles/context.js';
+import { bundledAsset } from '../utils/install-root.js';
 
 type SkillEntry = AppConfig['skills']['registry'][number];
 type SkillProvider = SkillEntry['provider'];
@@ -563,6 +564,15 @@ export function linearIssueSnapshot(source: EvidenceSource | undefined): string 
     .join('\n');
 }
 
+/**
+ * Where the console *saves* the rules — relative to the working directory, so
+ * it lands beside the data.
+ *
+ * Deliberately not `bundledAsset`: this file is editable from the console, and
+ * resolving it to the shipped copy would point the save at a read-only app
+ * bundle whose contents are replaced wholesale on the next update. Reading
+ * falls back to the bundled copy; writing never does.
+ */
 export const BIWEEKLY_STRATEGY_FILE = path.join('prompts', 'biweekly_strategy.md');
 
 /**
@@ -584,7 +594,7 @@ const DEFAULT_BIWEEKLY_STRATEGY = [
 /** The biweekly plan rules injected into the input pack, editable from the console. */
 export function readBiweeklyStrategy(): string {
   try {
-    const text = fs.readFileSync(path.resolve(BIWEEKLY_STRATEGY_FILE), 'utf8').trim();
+    const text = fs.readFileSync(bundledAsset('prompts', 'biweekly_strategy.md'), 'utf8').trim();
     return text || DEFAULT_BIWEEKLY_STRATEGY;
   } catch {
     return DEFAULT_BIWEEKLY_STRATEGY;
