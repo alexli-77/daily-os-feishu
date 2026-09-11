@@ -5,6 +5,7 @@ import type { AppConfig, WorkflowName } from '../config/schema.js';
 import type { Evidence } from '../workflows/types.js';
 import type { MemoryBundle } from '../storage/memory.js';
 import { billingFromConfig, checkBudget, estimateCostUsd, recordUsage } from './token-meter.js';
+import { bundledAsset } from '../utils/install-root.js';
 
 export interface AgentInput {
   config: AppConfig;
@@ -92,5 +93,5 @@ function outputContract(): string {
 }
 
 function readPrompt(name: string): string {
-  return fs.readFileSync(path.resolve('prompts', name), 'utf8');
+  return fs.readFileSync(bundledAsset('prompts', name), 'utf8');
 }

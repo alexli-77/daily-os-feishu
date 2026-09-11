@@ -26,6 +26,8 @@ import {
   formatProgressCandidates,
 } from './progress/capture.js';
 import { analyzeChatContext, formatChatContextAnalysis, type ChatAnalysisMode } from './chat/context-analysis.js';
+import { bundledAsset } from './utils/install-root.js';
+import { BIWEEKLY_STRATEGY_FILE } from './skills/runner.js';
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
@@ -348,8 +350,17 @@ async function setup(): Promise<void> {
 }
 
 function ensureLocalSetup(configPath = 'config/config.yaml', envPath = '.env'): void {
-  copyIfMissing('.env.example', envPath);
-  copyIfMissing('config/config.example.yaml', configPath);
+  // Templates come from where the *code* is, the copies go where the *data*
+  // is. They were the same directory for as long as this only ever ran from a
+  // checkout; run it with the working directory somewhere else — which is what
+  // the Mac app does, because a read-only app bundle is no place to write
+  // config — and the copy failed with a bare ENOENT on `.env.example`.
+  copyIfMissing(bundledAsset('.env.example'), envPath);
+  copyIfMissing(bundledAsset('config', 'config.example.yaml'), configPath);
+  // The one prompt the console can edit, so it needs a writable home next to
+  // the data. Without this the console would show an empty editor and save to a
+  // file nothing reads, while the rules actually in force came from the bundle.
+  copyIfMissing(bundledAsset('prompts', 'biweekly_strategy.md'), BIWEEKLY_STRATEGY_FILE);
   const config = loadConfig(configPath);
   ensureMemoryFiles(config);
   ensureDecisionPolicyFiles(config);
