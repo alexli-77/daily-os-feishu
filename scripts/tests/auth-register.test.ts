@@ -14,6 +14,7 @@
  * real config, vault or user database is touched.
  */
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -169,6 +170,48 @@ async function main(): Promise<void> {
     check('and leaves no account without one', dbUsersMissingAvatarSeed().length === 0, dbUsersMissingAvatarSeed().join(','));
     auth.ensureAuthInitialized();
     check('a second start does not reroll it', auth.findUser('leon')?.avatar_seed === backfilled, 'the avatar would change on every restart');
+
+    // --- GH #192: a taken username lists the machine's usernames ---------------
+    check(
+      "a taken username also lists the machine's usernames",
+      Array.isArray(dup.body?.existingUsers) && dup.body.existingUsers.includes('leon'),
+      JSON.stringify(dup.body?.existingUsers),
+    );
+    check('the username list carries no email', !JSON.stringify(dup.body?.existingUsers || []).includes('@'), JSON.stringify(dup.body?.existingUsers));
+
+    // --- GH #192: forgot-password reset is loopback-only -----------------------
+    const reset = async (b: unknown, extra: Record<string, string> = {}): Promise<{ status: number; body: any }> => {
+      const r = await fetch(`${base}/api/reset-password`, { method: 'POST', headers: { ...headers, ...extra }, body: JSON.stringify(b) });
+      return { status: r.status, body: await r.json().catch(() => ({})) };
+    };
+    check('reset refuses a short password', (await reset({ username: 'leon', password: 'abc' })).status === 400);
+    check('reset refuses a missing username', (await reset({ username: '', password: 'newpass-123' })).status === 400);
+    // fetch (undici) forbids overriding the Host header, so forge it with the raw
+    // http client to prove a non-loopback Host is refused before any reset.
+    const nonLoopStatus = await new Promise<number>((resolve, reject) => {
+      const u = new URL(base);
+      const payload = JSON.stringify({ username: 'leon', password: 'newpass-123' });
+      const req = http.request(
+        {
+          hostname: u.hostname,
+          port: u.port,
+          path: '/api/reset-password',
+          method: 'POST',
+          headers: { 'content-type': 'application/json', origin: base, host: 'evil.example.com', 'content-length': Buffer.byteLength(payload) },
+        },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode || 0);
+        },
+      );
+      req.on('error', reject);
+      req.end(payload);
+    });
+    check('reset is refused off loopback (forged Host)', nonLoopStatus === 403, String(nonLoopStatus));
+    const okReset = await reset({ username: 'leon', password: 'newpass-123' });
+    check('reset succeeds from loopback', okReset.status === 200 && okReset.body?.ok === true, JSON.stringify(okReset.body));
+    check('the new password now signs in', (await signIn('leon', 'newpass-123')) === 200);
+    check('the reset makes the old password fail', (await signIn('leon', GOOD.password)) === 401);
   } finally {
     await controls.stop();
     process.chdir(originalCwd);

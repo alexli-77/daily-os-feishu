@@ -14,6 +14,8 @@ This repository is intentionally generic. It does not include personal tokens, p
   your own machine, and the five components with an honest note on where this is
   weak.
 - **[Five-minute demo](docs/demo-script.md)** — a walkthrough script.
+- **[Where your data lives](docs/data-storage.md)** — the SQLite tables and files,
+  why the account is a login door (not a data partition), and what to back up.
 - **[ADR 0001](docs/adr/0001-ssr-console-scope-and-ui-freeze.md)** — why the
   server-rendered console is frozen for UI polish.
 
