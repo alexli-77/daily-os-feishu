@@ -196,6 +196,9 @@ try {
     // remote is unreachable, the cheap poll, cache layout, and the two layers
     // that keep a teammate's cycle out of the local vault.
     'scripts/tests/team-sync.test.ts',
+    // daily-os-macos #3: doctor warns when the vault path exists but is the
+    // empty template (no 10_OKR/), instead of silently reporting ok.
+    'scripts/tests/doctor-vault.test.ts',
     // The prompt has a size budget now: the GitHub projection, the per-workflow
     // drops, and the degradation order that replaced a hard 180s timeout.
     'scripts/tests/evidence-budget.test.ts',

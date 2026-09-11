@@ -1,12 +1,16 @@
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { AppConfig, WorkflowName } from '../config/schema.js';
 import { writeFileAtomic } from '../utils/atomic-write.js';
 
-const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const DEFAULT_MEMORY_REPOSITORY_PATH = path.join(PROJECT_ROOT, 'memory-vault', 'default');
+// Resolve the default vault relative to the working directory, not the code
+// location. daily-os-macos #3: the packaged service lives inside the app bundle
+// but runs with its working directory set to the managed data dir, where the
+// migrated memory-vault actually lives. A code-relative default pointed at the
+// (near-empty) copy inside the bundle and silently lost OKR / cycles / decision
+// rules. This matches cyclesDir()'s cwd-relative fallback in src/cycles/file.ts.
+const DEFAULT_MEMORY_REPOSITORY_PATH = path.resolve('memory-vault', 'default');
 const MAX_REPOSITORY_FILES = 40;
 const MAX_REPOSITORY_FILE_CHARS = 12000;
 
