@@ -1358,7 +1358,7 @@ function readTodayPlan(options: UiServerOptions): Record<string, unknown> {
 
   return {
     ok: true,
-    plan: { date: latest.date ?? '', workflow: latest.workflow, stale: Boolean(latest.date && latest.date !== today) },
+    plan: { date: latest.date ?? '', workflow: latest.workflow, stale: Boolean(latest.date && latest.date !== today), generated_at: latest.generated_at ?? '' },
     // The user's edit wins over the model's guess, and is merged in here rather
     // than shipped as a second map: a client that renders `minutes` should not
     // have to know an override mechanism exists to render the right number.
