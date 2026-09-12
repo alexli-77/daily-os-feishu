@@ -202,7 +202,10 @@ try {
     // daily-os #199: a subscription CLI under launchd is refused up front with a
     // clear reminder (no doomed hang); the timeout message names provider/model/
     // prompt; doctor warns on the combo instead of reporting "not logged in".
-    'scripts/tests/cli-launchd-guard.test.ts',
+    // P0 (2026-09-11): the CLI gate must probe the configured CLI, never
+    // refuse by provider name — the first version blocked codex, which was
+    // the only provider that had ever worked on the reporting machine.
+    'scripts/tests/cli-provider-gate.test.ts',
     // The prompt has a size budget now: the GitHub projection, the per-workflow
     // drops, and the degradation order that replaced a hard 180s timeout.
     'scripts/tests/evidence-budget.test.ts',
@@ -1126,6 +1129,12 @@ async function testWorkflowRunLedgerRecordsSendFailure(): Promise<void> {
   config.output.feishu.enabled = true;
   config.output.feishu.provider = 'lark_cli';
   config.output.feishu.chat_id_env = 'MISSING_TEST_FEISHU_CHAT_ID';
+  // testConfig() inherits the operator's live config/config.yaml, so the provider
+  // is whatever this machine happens to run. This test stubs the codex binary
+  // below to get past the agent stage and reach the send failure it is actually
+  // asserting on — pin the provider to match the stub, or an operator on
+  // claude/anthropic fails here on their own provider instead of on the chat id.
+  config.llm.provider = 'codex';
 
   const fakeCodex = path.join(tmp, 'fake-codex');
   fs.writeFileSync(

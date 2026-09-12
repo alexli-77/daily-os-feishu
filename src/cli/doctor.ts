@@ -8,7 +8,7 @@ import { defaultMemoryRepositoryPath, resolveMemoryRepositoryPath } from '../sto
 import { feishuSafetyWarnings, hasAnyAccessRule, summarizeFeishuAccess } from '../interaction/access-policy.js';
 import { decisionPolicyFiles } from '../decision/policy.js';
 import { feishuSessionCatalogPath } from '../interaction/session-catalog.js';
-import { isCliProvider, isHeadlessLaunchd } from '../agent/runtime-env.js';
+import { cliUnavailableMessage, isCliProvider, isHeadlessLaunchd, probeCliProvider } from '../agent/runtime-env.js';
 
 export interface DoctorCheck {
   name: string;
@@ -33,16 +33,23 @@ export async function runDoctor(config: AppConfig, configPath = 'config/config.y
     });
   }
 
-  // daily-os #199: a subscription CLI (claude/codex) never returns under launchd,
-  // so a scheduled/background run silently times out. Surface it as its own check
-  // rather than letting the login check below get misread as "not logged in".
+  // daily-os #199: under launchd some CLI providers answer and some hang, and the
+  // login check below cannot tell the difference — `claude auth status` returns
+  // `loggedIn: true` in 5s on a machine where `claude -p` never returns at all.
+  // So report what a real one-line prompt does, rather than asserting from the
+  // provider's name. The first version of this check warned about every CLI under
+  // launchd, which was wrong about codex and would have pushed operators off the
+  // only provider that worked for them.
   if (isCliProvider(config.llm.provider) && isHeadlessLaunchd()) {
+    const bin = config.llm.provider === 'claude' ? process.env.CLAUDE_BIN || 'claude' : process.env.CODEX_BIN || 'codex';
+    const probe = await probeCliProvider(config.llm.provider, bin);
     checks.push({
-      name: `llm.provider=${config.llm.provider} under launchd`,
-      ok: false,
-      level: 'warning',
-      detail:
-        '本服务运行在 macOS 后台(launchd)里，订阅版 CLI 会因 Keychain 阻塞而永不返回（#199），定时任务不受支持。请改用 API-key provider（anthropic/openai），或设 DAILY_OS_ALLOW_CLI_UNDER_LAUNCHD=1 强行尝试（仅当 CLI 用 API key 认证时）。',
+      name: `llm.provider=${config.llm.provider} 后台可用性`,
+      ok: probe.ok,
+      level: probe.ok ? 'ok' : 'missing',
+      detail: probe.ok
+        ? `在 launchd 环境下用一句话提示实测通过（${Math.round(probe.elapsedMs / 1000)}s）`
+        : cliUnavailableMessage(config.llm.provider, bin, probe),
     });
   }
 
